@@ -930,8 +930,24 @@ function sawSentText(s) {
   check('用法说明：说明被戳会显示成「[戳一戳]（戳的是我）」', p.includes('[戳一戳]') && p.includes('戳的是我'))
   check('用法说明：发了表情包不要解释（人自己看得懂）', p.includes('不要解释') && p.includes('表情包'))
   check(
-    '用法说明：系统表情写表情名或 [表情182]，认不出的方括号留在文字里',
-    p.includes('[笑哭]') && p.includes('[表情182]') && p.includes('系统表情') && p.includes('认不出的方括号'),
+    '用法说明：系统表情写 [表情名] 或 [表情数字]，不拿具体表情当例子',
+    p.includes('[表情名]') &&
+      p.includes('[表情数字]') &&
+      p.includes('系统表情') &&
+      p.includes('认不出的方括号') &&
+      !p.includes('笑哭') &&
+      !p.includes('挥手'),
+  )
+  const sendCopy = registered.find((t) => t.name === 'qq_bridge_send')
+  const sendText = [sendCopy?.description, sendCopy?.parameters?.properties?.text?.description].join('\n')
+  check(
+    'qq_bridge_send：说明只讲 [表情名] / [表情数字]，不点名笑哭或挥手',
+    sendText.includes('[表情名]') &&
+      sendText.includes('[表情数字]') &&
+      sendText.includes('认不出的方括号') &&
+      !sendText.includes('笑哭') &&
+      !sendText.includes('挥手'),
+    sendText,
   )
   // 表情包是产品玩法：提示词必须教模型怎么用（否则工具存在但永远没人调）
   check(
@@ -966,6 +982,10 @@ function sawSentText(s) {
   const pt = buildUsagePrompt({ replyMaxChars: 1500, replyMode: 'tool' })
   const pa = buildUsagePrompt({ replyMaxChars: 1500, replyMode: 'always' })
   check('marker 提示词：教标记块 + 别拿工具当通道', pm.includes('[QQ]') && pm.includes('别拿它当回复通道'))
+  check(
+    '三种回复模式的用法说明都只讲 [表情名]，不拿笑哭或挥手当例子',
+    [pm, pt, pa].every((text) => text.includes('[表情名]') && text.includes('[表情数字]') && !text.includes('笑哭') && !text.includes('挥手')),
+  )
   check('tool 提示词：教调工具、并说明标记块不生效', pt.includes('tool 模式') && pt.includes('标记块在这个模式下不生效'))
   check('tool 提示词里不再教「只用标记块」', !pt.includes('回群**只用标记块**'))
   check('always 提示词：警告整轮都会进群', pa.includes('always 模式') && pa.includes('整轮回复都会原样发到群里'))
