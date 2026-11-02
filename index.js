@@ -1900,15 +1900,47 @@ export function apply(ctx, config) {
   }
 
   /**
+   * 读一份能调用的 compaction。
+   *
+   * 标准人设把 `dsh-compaction-basic` 放在 `isolate: { compaction: true }` 里。
+   * 这份服务只在人设那一组的 realm 里，宿主 `ctx.get('compaction')` 和 `agent.ctx.get`
+   * 都按自己的 realm 查找，读到的是空。`/compact` 能用，是因为 `dsh-command-compact`
+   * 和压缩后端在同一组里，调用的是这一份 `compactNow`。
+   * 宿主侧对应的读法是 `agentPresets.serviceFor(agent, 'compaction')`。
+   *
+   * 人设注册表没有这个方法，或这份人设没挂压缩时，再看会话作用域，最后看宿主。
+   * 宿主自己提供 compaction 的布局因此仍然可用。某一层抛错就换下一层。
+   * @returns {{ service: any, detail: string }}
+   */
+  function compactionFor(agent) {
+    let detail = ''
+    const take = (read) => {
+      try {
+        const value = read()
+        if (value && typeof value.compactNow === 'function') return value
+      } catch (error) {
+        if (!detail) detail = error?.message ?? String(error)
+      }
+      return undefined
+    }
+    const service =
+      take(() => ctx.get?.('agentPresets')?.serviceFor?.(agent, 'compaction')) ??
+      take(() => agent?.ctx?.get?.('compaction')) ??
+      take(() => (typeof ctx.get === 'function' ? ctx.get('compaction') : undefined))
+    return { service, detail }
+  }
+
+  /**
    * QQ 驱动的一轮结束后，把该会话压到 maxRecentTurns。
-   * 0 或宿主没有 compaction 时什么都不做。压缩失败只记日志，不挡出站。
+   * 0 时什么都不做。压缩失败只记日志，不挡出站。
    *
-   * compaction 不放进 inject。它是可选服务：宿主没装压缩时，桥仍要收发 QQ。
-   * `ctx.get` 不要求 inject；没有这项服务时返回 undefined。
+   * compaction 不放进 inject。它是可选服务：哪一层都没有时，桥仍要收发 QQ。
+   * 会话已经超过上限、却找不到 compactNow 时记一条 warn，避免静默不压缩。
    *
-   * 宿主 `compactNow(agent, signal, sourceCommandId?)` 会立刻 `signal.throwIfAborted()`。
-   * 官方 `/compact` 传的是这次命令的 signal 和 commandId。这里没有命令，传一个未中止的
-   * AbortSignal，不传 sourceCommandId。少传 signal 会在写入 compaction 事件之前抛错。
+   * `compactNow(agent, signal, sourceCommandId?)` 会立刻 `signal.throwIfAborted()`。
+   * 这里没有命令，传一个未中止的 AbortSignal，不传 sourceCommandId。
+   * 少传 signal 会在写入 compaction 事件之前抛错。
+   * 返回 null 表示没有可压的区间：记 warn 并停，不再空转。
    *
    * `turn/end` 写入日志时，驱动还占着 running。这时调用会在 `runMaintenance` 上失败，
    * 同样写不出 compaction 事件。先等 `whenIdle`。旧宿主没有这个方法时让出一个宏任务
@@ -1917,8 +1949,6 @@ export function apply(ctx, config) {
   async function maybeTrimSession(agent) {
     const max = readSettings().maxRecentTurns
     if (!max || max <= 0 || !agent) return
-    const compaction = ctx.get('compaction')
-    if (!compaction || typeof compaction.compactNow !== 'function') return
     try {
       if (typeof agent.whenIdle === 'function') await agent.whenIdle()
       else await new Promise((resolve) => setTimeout(resolve, 0))
@@ -1946,19 +1976,40 @@ export function apply(ctx, config) {
         return 0
       }
     }
+    const sessionId = () => agent.session?.id ?? agent.id
+    let compaction
+    let lookupDetail = ''
+    let resolved = false
+    const engine = () => {
+      if (!resolved) {
+        const found = compactionFor(agent)
+        compaction = found.service
+        lookupDetail = found.detail
+        resolved = true
+      }
+      return compaction
+    }
     let previous = Infinity
     for (let i = 0; i < 6; i++) {
       const turns = countTurns()
       if (!turns || turns <= max) return
       if (turns >= previous) {
-        logger.info(`session ${agent.session?.id ?? agent.id} compact 后轮次没有减少（${turns}），停止`)
+        logger.info(`session ${sessionId()} compact 后轮次没有减少（${turns}），停止`)
+        return
+      }
+      if (!engine()) {
+        const why = lookupDetail ? `（${lookupDetail}）` : ''
+        logger.warn(`compact trim: 会话 ${sessionId()} 约 ${turns} 轮，超过上限 ${max}，但没有可用的压缩服务${why}`)
         return
       }
       previous = turns
       try {
         const result = await compaction.compactNow(agent, new AbortController().signal)
-        if (!result) return
-        logger.info(`session ${agent.session?.id ?? agent.id} trimmed via compact (turns~${turns} > ${max})`)
+        if (result == null) {
+          logger.warn(`compact trim: 会话 ${sessionId()} 的 compactNow 返回空（当时约 ${turns} 轮，上限 ${max}）`)
+          return
+        }
+        logger.info(`session ${sessionId()} trimmed via compact (turns~${turns} > ${max})`)
       } catch (error) {
         logger.warn(`compact trim failed: ${error?.message ?? error}`)
         return
