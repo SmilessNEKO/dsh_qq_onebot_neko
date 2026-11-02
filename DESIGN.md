@@ -603,7 +603,7 @@ QQ 的“拍一拍”在 OneBot 里走的是 **notice 事件**，不是消息段
 |---|---|---|
 | `targetSessionId` | `''` | 接到哪个会话。`single` 时**空 = 不接到任何会话**。`perGroup` 时可以留空（新建会话用宿主当前默认模型）；填了则新建会话沿用该会话的模型 |
 | `sessionScope` | `single` | 会话怎么分。`single` = 所有群共用一个会话；`perGroup` = 每个群、每个私聊各记各的，映射写在状态文件的 `sessionByDest`（键为 `group:<群号>` / `private:<QQ号>`）。新建会话带工作目录和「QQ群 / QQ私聊」标题，见 [README 的功能](./README.md#功能) |
-| `maxRecentTurns` | `40` | 每个会话最多留几轮。超出后调用宿主 `compaction.compactNow` 尽量压缩。有投影时看投影轮数。压完没变短就停。`0` = 不限制 |
+| `maxRecentTurns` | `40` | 每个会话最多留几轮。超出后，等这一轮回到空闲，再调用宿主 `compaction.compactNow(agent, signal)` 尽量压缩。`signal` 是未取消的 AbortSignal，不传命令 id。有投影时看投影轮数。压完没变短就停。`0` = 不限制。compaction 不在 inject 里，宿主没有这项服务时跳过 |
 | `nicknames` | `['244','小助手']` | 听到这些名字就回应 |
 | `wakeProbability` | `0.05` | 没点名时的回应概率 |
 | `whitelist` / `groupWhitelist` | `[]` | 哪些私聊可以叫醒 / 哪些群可以叫醒（**留空 = 谁都不能叫醒**）。群白名单在卡片里按群号填；连上且查到群名时，群号旁边显示当前群名和头像，查不到或没连上只显示群号，不影响保存 |

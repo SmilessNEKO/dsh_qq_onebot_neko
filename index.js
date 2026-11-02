@@ -1902,12 +1902,30 @@ export function apply(ctx, config) {
   /**
    * QQ 驱动的一轮结束后，把该会话压到 maxRecentTurns。
    * 0 或宿主没有 compaction 时什么都不做。压缩失败只记日志，不挡出站。
+   *
+   * compaction 不放进 inject。它是可选服务：宿主没装压缩时，桥仍要收发 QQ。
+   * `ctx.get` 不要求 inject；没有这项服务时返回 undefined。
+   *
+   * 宿主 `compactNow(agent, signal, sourceCommandId?)` 会立刻 `signal.throwIfAborted()`。
+   * 官方 `/compact` 传的是这次命令的 signal 和 commandId。这里没有命令，传一个未中止的
+   * AbortSignal，不传 sourceCommandId。少传 signal 会在写入 compaction 事件之前抛错。
+   *
+   * `turn/end` 写入日志时，驱动还占着 running。这时调用会在 `runMaintenance` 上失败，
+   * 同样写不出 compaction 事件。先等 `whenIdle`。旧宿主没有这个方法时让出一个宏任务
+   * （微任务会排在驱动回到 idle 之前）。
    */
   async function maybeTrimSession(agent) {
     const max = readSettings().maxRecentTurns
     if (!max || max <= 0 || !agent) return
     const compaction = ctx.get('compaction')
     if (!compaction || typeof compaction.compactNow !== 'function') return
+    try {
+      if (typeof agent.whenIdle === 'function') await agent.whenIdle()
+      else await new Promise((resolve) => setTimeout(resolve, 0))
+    } catch (error) {
+      logger.warn(`compact trim skipped: ${error?.message ?? error}`)
+      return
+    }
     const countTurns = () => {
       // 投影里的轮次是压缩之后还留着的。历史事件里的 turn/end 压不掉，先数它会一直超限。
       try {
@@ -1938,7 +1956,7 @@ export function apply(ctx, config) {
       }
       previous = turns
       try {
-        const result = await compaction.compactNow(agent)
+        const result = await compaction.compactNow(agent, new AbortController().signal)
         if (!result) return
         logger.info(`session ${agent.session?.id ?? agent.id} trimmed via compact (turns~${turns} > ${max})`)
       } catch (error) {
