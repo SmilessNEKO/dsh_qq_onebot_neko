@@ -4504,6 +4504,236 @@ function sawSentText(s) {
   rmSync(dir, { recursive: true, force: true })
 }
 
+// 标准人设把 compaction 放在隔离域里：宿主 ctx.get 看不见，要经 agentPresets.serviceFor。
+// 人设没有时再看会话作用域，最后看宿主。超限却找不到、或 compactNow 返回空，都要留下警告。
+{
+  async function driveTrim(spec) {
+    const dir = mkdtempSync(join(tmpdir(), 'qq-bridge-trim-'))
+    const stateFile = join(dir, 'state.json')
+    const warns = []
+    const calls = []
+    const looked = []
+    let phase = 'idle'
+    let turnCount = spec.turns ?? 10
+    const idleWaiters = []
+    const releaseIdle = () => {
+      phase = 'idle'
+      for (const resolve of idleWaiters.splice(0)) resolve()
+    }
+    const makeEngine = (source) => ({
+      compactNow: async (agent, signal, sourceCommandId) => {
+        signal.throwIfAborted()
+        if (phase !== 'idle') throw new Error('manual compaction requires an idle agent with no waking queued work')
+        if (!(signal instanceof AbortSignal) || signal.aborted) throw new Error('signal must be a live AbortSignal')
+        if (sourceCommandId !== undefined) throw new Error('unexpected sourceCommandId')
+        calls.push({ source, signal, phase, id: agent?.session?.id })
+        return spec.onCompact ? spec.onCompact(calls.length) : { ok: true }
+      },
+    })
+    const presetEngine = spec.preset === 'engine' ? makeEngine('preset') : undefined
+    const agentEngine = spec.agent === 'engine' ? makeEngine('agent') : undefined
+    const hostEngine = spec.host === 'engine' ? makeEngine('host') : undefined
+    const agents = new Map()
+    const localHandlers = {}
+    const tools = []
+    const scopeSettings = {
+      targetSessionId: '',
+      sessionScope: 'perGroup',
+      maxRecentTurns: spec.max ?? 2,
+      nicknames: ['小助手'],
+      wakeProbability: 0,
+      whitelist: ['10000002'],
+      groupWhitelist: ['12345678'],
+      replyMode: 'marker',
+      delivery: 'followup',
+    }
+    const iso = {
+      logger: { info() {}, warn: (message) => warns.push(String(message)) },
+      settings: { register: () => {}, get: () => scopeSettings },
+      agents: {
+        get: (id) => agents.get(id),
+        resume: async () => {
+          throw new Error('should create')
+        },
+        create: async ({ sessionId }) => {
+          const agent = {
+            id: sessionId,
+            session: {
+              id: sessionId,
+              events: () => Array.from({ length: turnCount }, () => ({ type: 'turn/end' })),
+            },
+            status: 'idle',
+            whenIdle() {
+              if (phase === 'idle') return Promise.resolve()
+              return new Promise((resolve) => idleWaiters.push(resolve))
+            },
+            followup(message) {
+              return message
+            },
+            ctx: {
+              get: (name) => (name === 'compaction' ? agentEngine : undefined),
+              effect: () => () => {},
+            },
+          }
+          agents.set(sessionId, agent)
+          return { agent, dispose: async () => {} }
+        },
+        withInitiator: (_agent, fn) => fn(),
+      },
+      tools: { register: (def) => tools.push(def) },
+      on: (name, fn) => {
+        localHandlers[name] = fn
+        return () => {}
+      },
+      effect: () => {},
+      get: (name) => {
+        if (name === 'compaction') return hostEngine
+        if (name === 'agentPresets' && spec.preset !== 'no-registry') {
+          return {
+            serviceFor(agent, serviceName) {
+              looked.push(agent)
+              if (spec.preset === 'throw') throw new Error('preset lookup failed')
+              if (serviceName !== 'compaction') return undefined
+              return presetEngine
+            },
+          }
+        }
+        return undefined
+      },
+      inject: () => {},
+    }
+    apply(iso, {
+      statePath: stateFile,
+      debugTools: true,
+      onebotUrl: '',
+      targetSessionId: '',
+      sessionScope: 'perGroup',
+      maxRecentTurns: spec.max ?? 2,
+      nicknames: ['小助手'],
+      whitelist: [],
+      groupWhitelist: [],
+      napcatInstallDir: join(dir, 'no-napcat'),
+    })
+    const sim = tools.find((t) => t.name === 'qq_bridge_simulate')
+    const first = JSON.parse(await sim.execute({ text: '小助手在吗', userId: '10000002', groupId: '12345678', nickname: '甲' }))
+    const sessionId = first?.decision?.sessionId
+    const fire = (event) => {
+      if (event?.type === 'turn/end') phase = 'running'
+      try {
+        return localHandlers['session/event']({ id: sessionId }, event)
+      } finally {
+        if (event?.type === 'turn/end') queueMicrotask(releaseIdle)
+      }
+    }
+    const endTurn = async () => {
+      fire({ type: 'turn/start', data: { turn: 1 } })
+      fire({ type: 'turn/end', data: { reason: { kind: 'completed' } } })
+      await new Promise((resolve) => setTimeout(resolve, 20))
+    }
+    await endTurn()
+    return {
+      warns,
+      calls,
+      looked,
+      sessionId,
+      agents,
+      endTurn,
+      setTurns: (n) => {
+        turnCount = n
+      },
+      cleanup: () => rmSync(dir, { recursive: true, force: true }),
+    }
+  }
+
+  const liveSignal = (run) =>
+    run.calls.length === 1 &&
+    run.calls[0].phase === 'idle' &&
+    run.calls[0].signal instanceof AbortSignal &&
+    run.calls[0].signal.aborted === false &&
+    run.calls[0].id === run.sessionId
+
+  const presetOnly = await driveTrim({ preset: 'engine' })
+  try {
+    check('maxRecentTurns：人设隔离域里的 compactNow 会被调用', presetOnly.calls.length === 1 && presetOnly.calls[0].source === 'preset', JSON.stringify(presetOnly.calls))
+    check(
+      'maxRecentTurns：serviceFor 拿到的是这条会话的 agent',
+      presetOnly.looked.length === 1 && presetOnly.looked[0] === presetOnly.agents.get(presetOnly.sessionId),
+      JSON.stringify({ looked: presetOnly.looked.length, sessionId: presetOnly.sessionId }),
+    )
+    check('maxRecentTurns：隔离域压缩发生在回合让出之后，并带上 AbortSignal', liveSignal(presetOnly), JSON.stringify(presetOnly.calls.map((c) => c.phase)))
+  } finally {
+    presetOnly.cleanup()
+  }
+
+  const both = await driveTrim({ preset: 'engine', host: 'engine' })
+  try {
+    check(
+      'maxRecentTurns：人设和宿主都有压缩时用人设那一份',
+      both.calls.length === 1 && both.calls[0].source === 'preset' && liveSignal(both),
+      JSON.stringify(both.calls),
+    )
+  } finally {
+    both.cleanup()
+  }
+
+  const agentOnly = await driveTrim({ preset: 'none', agent: 'engine' })
+  try {
+    check(
+      'maxRecentTurns：人设没有压缩时用会话作用域',
+      agentOnly.calls.length === 1 && agentOnly.calls[0].source === 'agent' && liveSignal(agentOnly),
+      JSON.stringify(agentOnly.calls),
+    )
+  } finally {
+    agentOnly.cleanup()
+  }
+
+  const hostFallback = await driveTrim({ preset: 'throw', host: 'engine' })
+  try {
+    check(
+      'maxRecentTurns：serviceFor 抛错时仍用宿主压缩',
+      hostFallback.calls.length === 1 &&
+        hostFallback.calls[0].source === 'host' &&
+        liveSignal(hostFallback) &&
+        !hostFallback.warns.some((line) => line.includes('没有可用的压缩服务')),
+      JSON.stringify({ calls: hostFallback.calls, warns: hostFallback.warns }),
+    )
+  } finally {
+    hostFallback.cleanup()
+  }
+
+  const missing = await driveTrim({ preset: 'none', turns: 1, max: 40 })
+  try {
+    check(
+      'maxRecentTurns：未超限不因为缺少压缩而警告',
+      missing.calls.length === 0 && missing.looked.length === 0 && !missing.warns.some((line) => line.includes('没有可用的压缩服务')),
+      JSON.stringify(missing.warns),
+    )
+    missing.setTurns(50)
+    await missing.endTurn()
+    check(
+      'maxRecentTurns：三层都没有压缩时记警告',
+      missing.calls.length === 0 && missing.warns.some((line) => line.includes('没有可用的压缩服务') && line.includes('超过上限 40')),
+      JSON.stringify(missing.warns),
+    )
+  } finally {
+    missing.cleanup()
+  }
+
+  const empty = await driveTrim({ preset: 'engine', onCompact: () => null })
+  try {
+    check(
+      'maxRecentTurns：compactNow 返回空时记警告并只调用一次',
+      empty.calls.length === 1 &&
+        empty.calls[0].source === 'preset' &&
+        empty.warns.some((line) => line.includes('compactNow 返回空')) &&
+        !empty.warns.some((line) => line.includes('没有可用的压缩服务')),
+      JSON.stringify({ calls: empty.calls.length, warns: empty.warns }),
+    )
+  } finally {
+    empty.cleanup()
+  }
+}
+
 // perGroup 新建会话必须带绝对 cwd，并写上标题。
 // 没有 cwd 时面板打开报 session/not-found；标题只打日志的话列表一直是「未命名」。
 {
