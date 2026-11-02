@@ -62,6 +62,7 @@ DSH 0.2 的卡片把值写进 `$DSH_HOME/qq-bridge-settings.json`。这份文件
 |---|---|---|
 | `targetSessionId` | 空 | `single` 时接到哪个会话。留空 = 不接到任何会话 |
 | `sessionScope` | `single` | `perGroup` 时每个群、每个私聊各一条会话 |
+| `maxRecentTurns` | `40` | 每个会话最多留几轮。QQ 一轮结束后，更早的内容会尽量压缩掉。`0` = 不限制 |
 | `nicknames` | `244`、`小助手` | 听到这些名字就叫醒 |
 | `wakeProbability` | `0.05` | 没点名时的叫醒概率 |
 | `whitelist` | `[]` | 哪些私聊可以叫醒。留空 = 都不叫醒 |

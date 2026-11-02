@@ -7,7 +7,7 @@ import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import vm from 'node:vm'
-import { apply, buildUsagePrompt, extractQQReply, FACE_NAME_TO_ID, groupAvatarUrl, hasLegacySettings, injectedMessageSource, inlineImageNotes, labelForSegment, mapOneBotMessage, mapOneBotNotice, normalizeDelivery, normalizeGroupId, normalizeMaxRecentTurns, normalizeReplyMode, normalizeSessionScope, NS, parseWhitelistCommand, PLUGIN_VERSION, resolveGroupMetas, textToOneBotSegments, truncateText } from './index.js'
+import { apply, buildUsagePrompt, extractQQReply, FACE_NAME_TO_ID, groupAvatarUrl, hasLegacySettings, inject as pluginInject, injectedMessageSource, inlineImageNotes, labelForSegment, mapOneBotMessage, mapOneBotNotice, normalizeDelivery, normalizeGroupId, normalizeMaxRecentTurns, normalizeReplyMode, normalizeSessionScope, NS, parseWhitelistCommand, PLUGIN_VERSION, resolveGroupMetas, textToOneBotSegments, truncateText } from './index.js'
 import { hashOfBuffer, isCompleteMface, loadStickers, mfaceSendData, normalizeMface, saveStickers, shortHash, upsertSticker } from './stickers.js'
 
 // 状态文件必须每次从零开始：这个会话的 $env:TEMP 是固定的，
@@ -4332,6 +4332,7 @@ function sawSentText(s) {
   const st = JSON.parse(await status.execute({}))
   check('默认 sessionScope 是 single', st.settings?.sessionScope === 'single', JSON.stringify(st.settings?.sessionScope))
   check('默认 maxRecentTurns 是 40', st.settings?.maxRecentTurns === 40, JSON.stringify(st.settings?.maxRecentTurns))
+  check('compaction 不是必选 inject', Array.isArray(pluginInject) && !pluginInject.includes('compaction'), JSON.stringify(pluginInject))
   check('sessionScope 只认 perGroup，其它值回落 single', normalizeSessionScope('perGroup') === 'perGroup' && normalizeSessionScope('fixed') === 'single')
   check('maxRecentTurns：0 保留，非法回落 40，超过 500 夹断', normalizeMaxRecentTurns(0) === 0 && normalizeMaxRecentTurns('nope') === 40 && normalizeMaxRecentTurns(900) === 500)
 }
@@ -4345,6 +4346,16 @@ function sawSentText(s) {
   const localHandlers = {}
   let compacts = 0
   let outlineLen = null
+  // 模拟驱动：turn/end 回调还在栈上时阶段是 running，回调返回后的微任务才回到 idle。
+  // compactNow 在 running 上会抛，和宿主 runMaintenance 一样。
+  let phase = 'idle'
+  const idleWaiters = []
+  const signals = []
+  const releaseIdle = () => {
+    phase = 'idle'
+    const pending = idleWaiters.splice(0)
+    for (const resolve of pending) resolve()
+  }
   const scopeSettings = {
     targetSessionId: '',
     sessionScope: 'perGroup',
@@ -4372,6 +4383,10 @@ function sawSentText(s) {
             events: () => Array.from({ length: 10 }, () => ({ type: 'turn/end' })),
           },
           status: 'idle',
+          whenIdle() {
+            if (phase === 'idle') return Promise.resolve()
+            return new Promise((resolve) => idleWaiters.push(resolve))
+          },
           followup(message) {
             return message
           },
@@ -4390,7 +4405,13 @@ function sawSentText(s) {
     },
     effect: () => {},
     get: (name) => (name === 'compaction' ? {
-      compactNow: async () => {
+      compactNow: async (agent, signal, sourceCommandId) => {
+        // 与 dsh-compaction-basic 相同：缺 signal 时在选区、写日志之前就抛。
+        signal.throwIfAborted()
+        if (phase !== 'idle') throw new Error('manual compaction requires an idle agent with no waking queued work')
+        if (!(signal instanceof AbortSignal) || signal.aborted) throw new Error('signal must be a live AbortSignal')
+        if (sourceCommandId !== undefined) throw new Error('unexpected sourceCommandId')
+        signals.push(signal)
         compacts += 1
         if (outlineLen != null) outlineLen = Math.max(0, outlineLen - 4)
         return { ok: true }
@@ -4434,34 +4455,52 @@ function sawSentText(s) {
       saved.sessionByDest?.['private:10000002'] === priv.decision.sessionId,
     JSON.stringify(saved.sessionByDest),
   )
-  localHandlers['session/event'](
+  const fireScoped = (session, event) => {
+    if (event?.type === 'turn/end') phase = 'running'
+    try {
+      return localHandlers['session/event'](session, event)
+    } finally {
+      if (event?.type === 'turn/end') queueMicrotask(releaseIdle)
+    }
+  }
+  fireScoped(
     { id: first.decision.sessionId },
     { type: 'turn/start', data: { turn: 1 } },
   )
-  localHandlers['session/event'](
+  fireScoped(
     { id: first.decision.sessionId },
     { type: 'turn/end', data: { reason: { kind: 'completed' } } },
   )
   await new Promise((resolve) => setTimeout(resolve, 20))
   check('maxRecentTurns：超限时调用宿主 compactNow', compacts === 1, String(compacts))
+  check(
+    'maxRecentTurns：compactNow 收到未中止的 AbortSignal',
+    signals.length === 1 && signals[0] instanceof AbortSignal && signals[0].aborted === false,
+    String(signals.length),
+  )
   const trimmed = agents.get(first.decision.sessionId)
   outlineLen = 6
   trimmed.session.projection = {
     turnOutline: { get turns() { return Array.from({ length: outlineLen }, () => ({})) } },
   }
-  localHandlers['session/event'](
+  fireScoped(
     { id: first.decision.sessionId },
     { type: 'user/message', data: { source: { kind: 'plugin', plugin: 'qq-bridge' }, content: [{ type: 'text', text: '[QQ · 群] 甲：又来' }] } },
   )
-  localHandlers['session/event']({ id: first.decision.sessionId }, { type: 'turn/start', data: { turn: 2 } })
-  localHandlers['session/event']({ id: first.decision.sessionId }, { type: 'turn/end', data: { reason: { kind: 'completed' } } })
+  fireScoped({ id: first.decision.sessionId }, { type: 'turn/start', data: { turn: 2 } })
+  fireScoped({ id: first.decision.sessionId }, { type: 'turn/end', data: { reason: { kind: 'completed' } } })
   await new Promise((resolve) => setTimeout(resolve, 20))
   check('maxRecentTurns：投影降到上限以内就停', compacts === 2 && outlineLen === 2, JSON.stringify({ compacts, outlineLen }))
   outlineLen = 8
-  localHandlers['session/event']({ id: first.decision.sessionId }, { type: 'turn/start', data: { turn: 3 } })
-  localHandlers['session/event']({ id: first.decision.sessionId }, { type: 'turn/end', data: { reason: { kind: 'completed' } } })
+  fireScoped({ id: first.decision.sessionId }, { type: 'turn/start', data: { turn: 3 } })
+  fireScoped({ id: first.decision.sessionId }, { type: 'turn/end', data: { reason: { kind: 'completed' } } })
   await new Promise((resolve) => setTimeout(resolve, 20))
   check('maxRecentTurns：投影还超限就再压一次，降下来就停', compacts === 4 && outlineLen === 0, JSON.stringify({ compacts, outlineLen }))
+  check(
+    'maxRecentTurns：每次压缩都在回合让出之后，并带上 AbortSignal',
+    signals.length === compacts && signals.every((s) => s instanceof AbortSignal && s.aborted === false),
+    JSON.stringify({ signals: signals.length, compacts }),
+  )
   rmSync(dir, { recursive: true, force: true })
 }
 
