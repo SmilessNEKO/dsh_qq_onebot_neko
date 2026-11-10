@@ -163,9 +163,6 @@ export const Config = Schema.object({
   delivery: Schema.string().default('auto').description('忙的时候怎么插话：auto = 能插就插，不能就排队（推荐）；followup = 一律新开一轮；steer = 不管忙不忙都插。'),
   visionModel: Schema.string().default('').description('用来看图的模型，写成 provider/model。留空 = 自动找一个能看图的。'),
   describeImages: Schema.boolean().default(true).description('收到图片时先叫一个模型把图读成一句话。关掉的话正文里只留图片位置标记，图本身照样作为附件交给会话（会话模型支持看图时才建议关）。'),
-  imageDescribeSafeBytes: Schema.number().default(1572864).description('图片不超过这个字节数就直接识图（默认 1.5MB）。'),
-  imageDescribeMaxBytes: Schema.number().default(6291456).description('图片超过这个字节数就默认不识别，只留位置标记（默认 6MB）。介于两档之间的会先压缩再识图。'),
-  imageWakeTotalBytes: Schema.number().default(12582912).description('一次唤醒里所有图片的原始字节总和上限（默认 12MB），超出部分只留位置标记，避免请求体撞网关上限。'),
   heartbeatTimeoutMs: Schema.number().default(90000).description('多久没收到连接数据就判定断线并重连。'),
   // ── M5：NapCat 自助托管 ───────────────────────────────────────────────────
   // 注意：这些只是**参数**；插件加载时绝不下载或执行任何东西，
@@ -222,6 +219,9 @@ const BridgeSettings = Schema.object({
   imageDescribeSafeBytes: Schema.number().default(1572864).description('图片不超过这个字节数就直接识图（默认 1.5MB）。'),
   imageDescribeMaxBytes: Schema.number().default(6291456).description('图片超过这个字节数就默认不识别，只留位置标记（默认 6MB）。介于两档之间的会先压缩再识图。'),
   imageWakeTotalBytes: Schema.number().default(12582912).description('一次唤醒里所有图片的原始字节总和上限（默认 12MB），超出部分只留位置标记，避免请求体撞网关上限。'),
+  rotateEnabled: Schema.boolean().default(true).description('perGroup 下聊得太久或上下文快满时，自动新建一条会话接着聊（旧的留着可查，不会删）。'),
+  rotateMaxTurns: Schema.number().default(300).description('同一个群/私聊聊到这么多轮就换新会话（默认 300，填 0 = 只按上下文压力判断）。'),
+  rotatePressureRatio: Schema.number().default(0.75).description('上下文占用达到这个比例就换新会话（默认 0.75，填 0 = 只按轮数判断）。'),
   agentPreset: Schema.string().default('').description('人设预设。留空 = 沿用会话自己记着的。'),
   // M5
   napcatInstallDir: Schema.string().default('').description('NapCat 安装目录。留空 = $DSH_HOME/napcat。自己装的或 Docker 里的不在这个位置时，填实际目录。'),
@@ -239,7 +239,9 @@ const BridgeSettings = Schema.object({
 
 /** OneBot 非文本消息段 → 可读占位符。
  *  **绝不让整条消息因为“全是非文本段”而变成空字符串** —— 那样会被上层直接丢掉，
- *  用户发个表情包就等于什么都没发生。纯元数据段（reply/rps/dice）返回 undefined = 跳过。
+ *  用户发个表情包就等于什么都没发生。纯元数据段（rps/dice）返回 undefined = 跳过。
+ *  reply 段由 mapOneBotMessage 单独识别（记 id → get_msg 查原文 → 拼「（回复 …）」前缀），
+ *  不在这里产出占位符；这里仍留 undefined，是防止别处误把 reply 渲染成乱码。
  *  @type {Record<string, string | ((data: any) => string) | undefined>} */
 const SEGMENT_LABELS = {
   face: (d) => (d?.id !== undefined ? `[表情${d.id}]` : '[表情]'),
@@ -257,7 +259,7 @@ const SEGMENT_LABELS = {
   location: '[位置]',
   music: '[音乐]',
   contact: '[推荐联系人]',
-  reply: undefined,
+  reply: undefined, // 不跳过：见 mapOneBotMessage，记下 id 去查被引原文
   rps: undefined,
   dice: undefined,
 }
@@ -320,7 +322,7 @@ export function inlineImageNotes(text, images, noteById) {
     }
     const note = typeof raw === 'string' ? { text: raw } : raw
     const short = shortHash(note.hash ?? slot?.hash)
-    // 空 text = 这一张没有描述（跳过识图 / `describeImages` 关掉时就是这样）：
+    // 空 text = 这一张没有描述（`describeImages` 关掉时就是这样）：
     // 只留位置标记 `[图片#短哈希]`，不再拖一个光秃秃的冒号。
     const body = String(note.text ?? '').trim()
     if (!face) {
@@ -333,6 +335,38 @@ export function inlineImageNotes(text, images, noteById) {
   })
 }
 
+/**
+ * 这个群/私聊的会话该不该轮换到新的一条。
+ *
+ * 为什么需要：一个群聊久了，上下文会一路涨到模型的窗口上限，
+ * 之后每轮都会撞「context length exceeded」，聊天就断了。
+ * 所以按轮数/上下文压力阈值主动换一条新会话接着聊，
+ * 而不是等它自己撞墙。
+ *
+ * 任一阈值取不到或为 0 就跳过那一项判断；两项都不成立就不轮换。
+ * 纯函数，导出是为了单测。
+ *
+ * @param {{ turns?: number, pressureTokens?: number, contextWindow?: number }} facts
+ * @param {{ maxTurns?: number, pressureRatio?: number }} limits
+ * @returns {{ rotate: boolean, reason?: string }}
+ */
+export function rotateSessionVerdict(facts = {}, limits = {}) {
+  const turns = Number(facts.turns)
+  const maxTurns = Number(limits.maxTurns)
+  if (Number.isFinite(maxTurns) && maxTurns > 0 && Number.isFinite(turns) && turns >= maxTurns) {
+    return { rotate: true, reason: `已聊到 ${turns} 轮（上限 ${maxTurns}）` }
+  }
+  const pressure = Number(facts.pressureTokens)
+  const window = Number(facts.contextWindow)
+  const ratio = Number(limits.pressureRatio)
+  if (Number.isFinite(pressure) && pressure > 0 && Number.isFinite(window) && window > 0 && Number.isFinite(ratio) && ratio > 0) {
+    const used = pressure / window
+    if (used >= ratio) {
+      return { rotate: true, reason: `上下文已用 ${(used * 100).toFixed(0)}%（阈值 ${(ratio * 100).toFixed(0)}%）` }
+    }
+  }
+  return { rotate: false }
+}
 
 /**
  * 图片分级：决定这一张要不要识图、要不要先压缩。
@@ -360,7 +394,7 @@ export function classifyImageForDescribe(bytes, options = {}) {
  * 一次唤醒的图片总量分级：按顺序累计原始字节，超预算的图降级为 `skip`。
  *
  * 目的：QQ 网关对单次请求体有 50MB 硬上限，图片是主要变量。
- * 返回与入参等长的 action 数组。
+ * 返回与入参等长的 action 数组，元素是 'describe' | 'compress' | 'skip'。
  */
 export function planImageBudget(items, options = {}) {
   const list = Array.isArray(items) ? items : []
@@ -394,6 +428,8 @@ export function planImageBudget(items, options = {}) {
  * 与 `maxBytes` 真做缩放+重编码，并且结果会缓存在 request-images 下，重复的图不再压第二次。
  * 这条路比"自己找 sharp"稳：sharp 不在插件依赖里，宿主却一定带。
  * 任何一步失败都返回 null，由调用方降级成 `skip`（绝不抛错、绝不影响文本）。
+ *
+ * @returns {Promise<{data: Buffer, mediaType: string} | null>}
  */
 async function compressForDescribe(attachments, ref, targetBytes = IMAGE_DESCRIBE_TARGET_BYTES) {
   try {
@@ -405,6 +441,7 @@ async function compressForDescribe(attachments, ref, targetBytes = IMAGE_DESCRIB
     if (!out?.data) return null
     const data = Buffer.from(out.data)
     if (data.byteLength === 0) return null
+    logger.info(`图片已压缩到 ${Math.round(data.byteLength / 1024)}KB 供识图`)
     return { data, mediaType: out.mediaType ?? 'image/jpeg' }
   } catch (error) {
     logger.warn(`图片压缩失败（将跳过识图）：${error?.message ?? error}`)
@@ -486,6 +523,129 @@ function imageItemFromData(data) {
   return item
 }
 
+// ── 引用回复（reply 段）识别 ───────────────────────────────────────────────
+// 群里有人「引用」我说的话时，旧逻辑把 reply 段整段丢掉，模型看不到「这条是在回应我」。
+// 现在：mapOneBotMessage 只负责把被引用 message_id 抽到 replyId；这里用 get_msg 查原文，
+// 拼成「（回复 昵称「原文」）」前缀。查原文全部走短超时 + 静默降级 + LRU，绝不阻塞/丢弃入站。
+
+/** 被引原文缓存容量（key = 被引用 message_id）。 */
+const QUOTE_CACHE_LIMIT = 50
+/** get_msg 的单独短超时：绝不复用 call() 的 20s 默认值。 */
+const QUOTE_FETCH_TIMEOUT_MS = 2500
+/** 外层硬兜底：即便 call 的实现以后变了，引文查询也不得阻塞超过 3s。 */
+const QUOTE_HARD_TIMEOUT_MS = 3000
+/** 被引原文进上下文的字数上限，防有人引用长文把上下文撑爆。 */
+const QUOTE_TEXT_MAX = 200
+
+/** 模块级 LRU（生产用）；单测可通过 deps.cache 传独立 Map 隔离。 */
+const quoteCache = new Map()
+
+function quoteCacheGet(cache, id) {
+  if (!cache.has(id)) return undefined
+  const value = cache.get(id)
+  cache.delete(id) // 命中即移到末尾 = 最近使用
+  cache.set(id, value)
+  return value
+}
+
+function quoteCacheSet(cache, id, value, limit) {
+  if (cache.has(id)) cache.delete(id)
+  cache.set(id, value)
+  while (cache.size > limit) cache.delete(cache.keys().next().value)
+}
+
+/** 从 get_msg 的 message（array / CQ string）里抽纯文本，不递归处理 reply 段。 */
+function plainTextFromMessage(message) {
+  if (Array.isArray(message)) {
+    const out = []
+    for (const seg of message) {
+      const type = seg?.type
+      const data = seg?.data ?? {}
+      if (type === 'text') {
+        out.push(String(data.text ?? ''))
+        continue
+      }
+      if (type === 'reply' || type === 'rps' || type === 'dice') continue
+      const label = labelForSegment(type, data)
+      if (label !== '') out.push(label)
+    }
+    return out.join('').trim()
+  }
+  const raw = String(message ?? '')
+  let cursor = 0
+  let out = ''
+  const re = /\[CQ:([a-z_]+)(?:,([^\]]*))?\]/g
+  for (let m = re.exec(raw); m; m = re.exec(raw)) {
+    out += raw.slice(cursor, m.index)
+    cursor = m.index + m[0].length
+    const key = m[1]
+    if (key === 'reply' || key === 'rps' || key === 'dice') continue
+    const label = labelForSegment(key, null)
+    if (label !== '') out += label
+  }
+  out += raw.slice(cursor)
+  return out.trim()
+}
+
+/** 把 get_msg 回包规整成 { name, text }；无效回包返回 null（不缓存，留机会重试）。 */
+function quoteFromGetMsg(res) {
+  if (!res || typeof res !== 'object') return null
+  const row = res.data ?? res
+  if (!row || typeof row !== 'object') return null
+  if (row.message === undefined && row.raw_message === undefined && row.sender === undefined) return null
+  const s = row.sender ?? {}
+  const name = String(s.card || s.nickname || '').trim()
+  const text = truncateText(plainTextFromMessage(row.message ?? row.raw_message), QUOTE_TEXT_MAX)
+  return { name, text }
+}
+
+/**
+ * 查被引用消息原文。所有外部依赖通过 deps 注入，纯函数层单测可直接塞 stub。
+ * 失败 / 超时 / 协议端不支持一律返回 null（由 formatQuotePrefix 静默降级），绝不抛错。
+ * @returns {Promise<{name: string, text: string} | null>}
+ */
+export async function fetchQuotedText(replyId, deps = {}) {
+  const id = String(replyId ?? '').trim()
+  if (id === '') return null
+  const cache = deps.cache instanceof Map ? deps.cache : quoteCache
+  const cached = quoteCacheGet(cache, id)
+  if (cached !== undefined) return cached
+  const call = deps.call
+  if (typeof call !== 'function') return null
+
+  const timeoutMs = Number.isFinite(deps.timeoutMs) ? deps.timeoutMs : QUOTE_FETCH_TIMEOUT_MS
+  const hardMs = Number.isFinite(deps.hardTimeoutMs) ? deps.hardTimeoutMs : QUOTE_HARD_TIMEOUT_MS
+  let timer
+  const hardTimeout = new Promise((resolve) => { timer = setTimeout(() => resolve(null), hardMs) })
+  const fetchOnce = (async () => {
+    try {
+      const res = await call('get_msg', { message_id: id }, timeoutMs)
+      const quote = quoteFromGetMsg(res)
+      // 只缓存成功查到的结果（含「查到但没正文」）；网络失败/超时留机会下次重试。
+      if (quote) quoteCacheSet(cache, id, quote, QUOTE_CACHE_LIMIT)
+      return quote
+    } catch {
+      return null
+    }
+  })()
+  try {
+    return await Promise.race([fetchOnce, hardTimeout])
+  } catch {
+    return null
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
+/** 把 fetchQuotedText 结果格式化成入站正文前缀。纯函数，查不到就静默降级。 */
+export function formatQuotePrefix(quote) {
+  if (!quote) return '（回复某条消息）'
+  const name = String(quote.name ?? '').trim()
+  const text = String(quote.text ?? '').trim()
+  if (text === '') return name ? `（回复 ${name} 的消息）` : '（回复某条消息）'
+  return name ? `（回复 ${name}「${text}」）` : `（回复「${text}」）`
+}
+
 /**
  * OneBot 消息事件 → handleInbound 的 msg。
  * 兼容 message 为 **array**（NapCat 常见）与 string 两种形态。导出是为了可测试。
@@ -493,14 +653,22 @@ function imageItemFromData(data) {
  * 商城表情在 NapCat 里经常以 **image** 段上报，段上仍带着 emoji_id 等字段；
  * 也有人直接给 **mface** 段。有可下载地址时收成图片槽（占位符仍先写 `[图片]`，
  * 描述填回时若槽上有 mface 会改写成 `[表情包#短哈希]`）。没有地址的 mface 只留文字占位符。
+ *
+ * 引用回复：reply 段（array 的 {type:'reply',data:{id}} / CQ 的 [CQ:reply,id=xxx]）
+ * 只记下被引用 message_id，交给 fetchQuotedText 用 get_msg 查原文，拼成
+ *「（回复 昵称「原文」）」放进正文最前面。查原文短超时 + 静默降级 + LRU，
+ * 任何失败都只退化成「（回复某条消息）」，绝不让整条入站被判失败/丢弃。
+ * deps 供单测注入（fetchQuote 直接替换查原文，或 call/cache/timeoutMs 透传给 fetchQuotedText）。
  */
-export function mapOneBotMessage(event, selfId) {
+export async function mapOneBotMessage(event, selfId, deps = {}) {
   const message = event?.message
   const isGroup = event?.message_type === 'group'
   const userId = event?.user_id === undefined || event?.user_id === null ? null : String(event.user_id)
   const me = selfId === undefined || selfId === null ? '' : String(selfId)
   let text = ''
   let atSelf = false
+  /** 本条引用的消息 id（reply 段）；空串 = 没有引用。 */
+  let replyId = ''
   /** 收集到的图片（带 url，以及可选的 mface）。唤醒时下载成附件。 */
   const images = []
 
@@ -516,6 +684,12 @@ export function mapOneBotMessage(event, selfId) {
       if (type === 'at') {
         if (me !== '' && String(data.qq) === me) atSelf = true
         else if (data.qq) parts.push(`@${data.qq} `)
+        continue
+      }
+      // 引用段：不产出可见占位符，只把 id 记下来，稍后查原文拼前缀。
+      if (type === 'reply') {
+        const rid = String(data.id ?? data.message_id ?? '').trim()
+        if (rid !== '') replyId = rid
         continue
       }
       // 带地址的 mface 跟图片一样落盘，元数据挂在槽上。没地址就只留占位符，不占图片槽。
@@ -555,6 +729,12 @@ export function mapOneBotMessage(event, selfId) {
         if (qq !== '') out += `@${qq} `
         continue
       }
+      // CQ 引用段：[CQ:reply,id=xxx]，同样只记 id。
+      if (key === 'reply') {
+        const rid = String(data.id ?? '').trim()
+        if (rid !== '') replyId = rid
+        continue
+      }
       if (key === 'image') {
         images.push(imageItemFromData(data))
         out += '[图片]'
@@ -576,6 +756,19 @@ export function mapOneBotMessage(event, selfId) {
     }
     out += raw.slice(cursor)
     text = out.trim()
+  }
+
+  // 引用前缀：查原文失败/超时/不支持一律静默降级，绝不影响这条入站继续走唤醒。
+  if (replyId !== '') {
+    let quote = null
+    try {
+      quote = typeof deps.fetchQuote === 'function'
+        ? await deps.fetchQuote(replyId)
+        : await fetchQuotedText(replyId, deps)
+    } catch {
+      quote = null
+    }
+    text = `${formatQuotePrefix(quote)}${text}`
   }
 
   return {
@@ -944,6 +1137,9 @@ export function apply(ctx, config) {
       imageDescribeSafeBytes: Math.max(1, Number(s.imageDescribeSafeBytes ?? config.imageDescribeSafeBytes ?? IMAGE_DESCRIBE_SAFE_BYTES)),
       imageDescribeMaxBytes: Math.max(1, Number(s.imageDescribeMaxBytes ?? config.imageDescribeMaxBytes ?? IMAGE_DESCRIBE_MAX_BYTES)),
       imageWakeTotalBytes: Math.max(1, Number(s.imageWakeTotalBytes ?? config.imageWakeTotalBytes ?? IMAGE_WAKE_TOTAL_BYTES)),
+      rotateEnabled: (s.rotateEnabled ?? config.rotateEnabled) !== false,
+      rotateMaxTurns: Math.max(0, Number(s.rotateMaxTurns ?? config.rotateMaxTurns ?? 300)),
+      rotatePressureRatio: Math.min(1, Math.max(0, Number(s.rotatePressureRatio ?? config.rotatePressureRatio ?? 0.75))),
       agentPreset: String(s.agentPreset ?? config.agentPreset ?? '').trim(),
       heartbeatTimeoutMs: Math.max(10000, Number(config.heartbeatTimeoutMs ?? 90000)),
       napcatInstallDir: String(s.napcatInstallDir ?? config.napcatInstallDir ?? '').trim(),
@@ -1875,6 +2071,65 @@ export function apply(ctx, config) {
   }
 
   /**
+   * 插件内的轮换判断入口（转发到模块顶层的纯函数）。
+   * 逻辑在 rotateSessionVerdict 里，这里只保持调用点就近可读。
+   */
+  function shouldRotateSession(facts = {}, limits = {}) {
+    return rotateSessionVerdict(facts, limits)
+  }
+
+  /**
+   * 读一条会话的「聊了多少轮 / 上下文压力」，供轮换判断用。
+   *
+   * 走 `sessionQuery.observeSession`（插件已在用的那条路，见 resolveResumeAgentOptions）：
+   * `sessions` 服务不在插件 inject 里，读不到才会一直不轮换。
+   * 任何一步取不到都返回空对象（= 不轮换），绝不因为读不到状态就把会话换掉。
+   */
+  async function sessionFacts(sessionId) {
+    try {
+      const q = ctx.get('sessionQuery')
+      if (!q || typeof q.observeSession !== 'function') return {}
+      const obs = await q.observeSession(sessionId, { projectionMode: 'all' })
+      const proj = obs?.projections
+      const pick = (key) =>
+        proj?.[key] ?? (typeof proj?.get === 'function' ? proj.get(key) : undefined)
+      const stats = pick('sessionStats')
+      const pressure = pick('contextPressure')
+      return {
+        turns: Number(stats?.lastTurn ?? stats?.turns),
+        pressureTokens: Number(pressure?.pressureTokens ?? pressure?.surfaceTokens),
+        contextWindow: Number(pressure?.contextWindow),
+      }
+    } catch (error) {
+      logger.warn(`读取会话状态失败（本轮不轮换）：${error?.message ?? error}`)
+      return {}
+    }
+  }
+
+  /**
+   * 把一条会话挂进「QQ 桥接」工作区。
+   *
+   * DSH 面板按 workspace（工作区＝目录）给会话分组，同一个目录下的会话归在一起。
+   * 所有 QQ 会话都用同一个 cwd，所以把它们都挂到该 cwd 对应的工作区，
+   * 面板里就是一组「QQ 桥接」，而不是散在最近的会话里。
+   *
+   * `workspace.attachSession` 会校验 `header.cwd` 与工作区 path 一致；
+   * cwd 不一致（比如宿主换过默认目录）时只打日志，不影响会话本身。
+   */
+  async function attachToQQWorkspace(sessionId) {
+    try {
+      const workspace = ctx.get('workspace')
+      if (!workspace || typeof workspace.create !== 'function') return
+      const dir = destSessionCwd()
+      const entity = await workspace.create(dir, 'QQ 桥接')
+      if (typeof entity?.attachSession === 'function') await entity.attachSession(sessionId)
+      logger.info(`会话 ${sessionId} 已挂到工作区「${entity?.title ?? 'QQ 桥接'}」`)
+    } catch (error) {
+      logger.warn(`挂到 QQ 工作区失败（会话本身照常）：${error?.message ?? error}`)
+    }
+  }
+
+  /**
    * perGroup 新建会话用的绝对工作目录。
    *
    * 不带 cwd 时宿主把会话写到 `sessions/_no-cwd/`，`header.cwd` 是空的。
@@ -1960,6 +2215,9 @@ export function apply(ctx, config) {
     rememberHandle(sessionId, handle)
     mountUsagePrompt(handle.agent)
     nameDestSession(handle.agent, label)
+    // 挂到「QQ 桥接」工作区，面板里按组显示，而不是散落在最近会话里。
+    // 失败不挡会话：attachToQQWorkspace 内部已吞错并只打日志。
+    await attachToQQWorkspace(sessionId)
     logger.info(`created per-dest session ${sessionId} for ${key} (${label})`)
     return handle.agent
   }
@@ -1972,6 +2230,22 @@ export function apply(ctx, config) {
       if (!key) throw new Error('perGroup 模式下缺少 groupId 或 userId')
       id = state.sessionByDest[key]
       if (!id) return await createDestSession(msg, s)
+
+      // 会话轮换：聊太久 / 上下文快满时换一条新会话接着聊，
+      // 而不是等它撞上模型的窗口上限、之后每轮都失败。
+      if (s.rotateEnabled !== false) {
+        const verdict = shouldRotateSession(await sessionFacts(id), {
+          maxTurns: s.rotateMaxTurns,
+          pressureRatio: s.rotatePressureRatio,
+        })
+        if (verdict.rotate) {
+          logger.info(`会话 ${id} 该轮换了：${verdict.reason}`)
+          // 旧会话留在面板里可查，只是这个目的地改投新会话。
+          delete state.sessionByDest[key]
+          saveState()
+          return await createDestSession(msg, s)
+        }
+      }
     } else {
       id = s.targetSessionId
       if (!id) throw new Error('未配置 targetSessionId')
@@ -2329,8 +2603,8 @@ export function apply(ctx, config) {
     try {
       // 两种入参：缓存对象（读 path），或已压好的内存数据（`data`，压缩识图用）。
       let bytes = null
-      const mediaType = cached?.mediaType
-      const name = cached?.name
+      let mediaType = cached?.mediaType
+      let name = cached?.name
       if (cached?.data) {
         bytes = Buffer.isBuffer(cached.data) ? cached.data : Buffer.from(cached.data)
       } else {
@@ -2808,15 +3082,18 @@ export function apply(ctx, config) {
     // —— 所以先用多模态模型把图读成一句描述，然后**就地填回 [图片] 占位符**。
     // （描述另起一段附在末尾是错的：模型会读成“这张图没解析出来、后面又来了一张”。）
     // 占位符里同时带上短哈希，模型才能指着一张具体的图去 save / send 表情包。
+    //
+    // `describeImages` 关掉时**一次模型调用都不花**：noteById 里只留空 text，
+    // 占位符退化成纯位置标记 `[图片#短哈希]`，图本身仍然作为附件交给会话
+    // （loadImageBlocks 在上一步已经把 blocks 组好了）。
+    // 商城表情的 summary 是元数据、不花钱，关掉描述也照样保留。
+    //
     // 分级（用户 2026-11-10 定的方案，见 classifyImageForDescribe / planImageBudget）：
     //   小图 → 直接识图；中等图 → 压到 IMAGE_DESCRIBE_TARGET_BYTES 再识图；
     //   特别大的图 → 默认不识别，只留位置标记。一次唤醒还有总量预算，
     //   免得历史越攒越多把请求体顶到网关的 50MB 上限。
-    // `describeImages` 关掉时一次模型调用都不花。
     const noteById = new Map()
-    if (!s.describeImages) {
-      for (const img of allImages) noteById.set(img, { text: '', hash: img.hash })
-    } else {
+    if (s.describeImages !== false) {
       const plan = planImageBudget(
         allImages.map((img) => ({ bytes: img?.bytes })),
         {
@@ -2845,19 +3122,22 @@ export function apply(ctx, config) {
             name: img.name || undefined,
           }).catch(() => null)
           const shrunk = await compressForDescribe(attachments, ref)
-          if (!shrunk) {
+          if (shrunk) {
+            r = await describeImage({ ...img, path: null, data: shrunk.data, mediaType: shrunk.mediaType })
+          } else {
             // 压不动就不硬塞，宁可只留占位。
             noteById.set(img, { text: '', hash: img.hash })
             logger.info('图片压缩失败，跳过识图')
             continue
           }
-          r = await describeImage({ hash: img.hash, data: shrunk.data, mediaType: shrunk.mediaType })
         } else {
           r = await describeImage(img)
         }
         described += 1
         noteById.set(img, { text: r.ok ? r.text : `（描述失败：${r.reason}）`, hash: img.hash })
       }
+    } else {
+      for (const img of allImages) noteById.set(img, { text: '', hash: img.hash })
     }
 
     let text =
@@ -3040,7 +3320,11 @@ export function apply(ctx, config) {
     const userId = event.user_id === undefined ? null : String(event.user_id)
     if (selfId !== '' && userId === selfId) return
 
-    const inbound = mapOneBotMessage(event, selfId)
+    // 引用回复：mapOneBotMessage 现在是 async（内部要 get_msg 查被引原文）。
+    // 注入短超时的 transport.call；查不到/超时在函数内部静默降级，不拖垮这条入站。
+    const inbound = await mapOneBotMessage(event, selfId, {
+      call: (action, params, timeoutMs) => transport.call(action, params, timeoutMs),
+    })
     if (!inbound) return
     // ⚠️ **绝不能因为“文本为空”就丢掉整条消息。**
     // 只 @ 一下（不带文字）是最自然的“叫你一声”，纯表情包/纯图片同理 ——
@@ -3701,9 +3985,13 @@ export function apply(ctx, config) {
 
     ctx.tools.register(defineTool({
       name: 'qq_bridge_simulate',
-      description: '模拟一条 QQ 入站消息，走完整唤醒策略（不改白名单的话默认会被丢弃）。用于验证昵称唤醒 / 概率唤醒 / 只记录三条分支。不会执行「白名单」命令，也不会改群白名单。',
+      description: '模拟一条 QQ 入站消息，走完整唤醒策略（不改白名单的话默认会被丢弃）。用于验证昵称唤醒 / 概率唤醒 / 只记录三条分支。不会执行「白名单」命令，也不会改群白名单。给 message（OneBot CQ 码字符串）时走真实入站映射 mapOneBotMessage，可配合 quotedText/quotedNickname 注入被引原文（get_msg 走 stub，不真调 OneBot），用于验证 reply 段识别。',
       parameters: {
-        text: { type: 'string', required: true, description: 'QQ 消息文本。' },
+        text: { type: 'string', description: 'QQ 消息文本（不给 message 时用）。' },
+        message: { type: 'string', description: '模拟 OneBot message（CQ 码字符串，如 "[CQ:reply,id=123]好看死了"）。给了就走 mapOneBotMessage 真实映射。' },
+        quotedText: { type: 'string', description: '模拟 get_msg 查到的被引原文（stub 注入，不真调接口）。' },
+        quotedNickname: { type: 'string', description: '被引者昵称。' },
+        selfId: { type: 'string', description: '机器人 QQ 号（用来识别 @ 我）。' },
         userId: { type: 'string', description: '私聊发送者 id（需在白名单内）。' },
         groupId: { type: 'string', description: '群 id（需在群白名单内）。' },
         nickname: { type: 'string', description: '发送者昵称（仅用于渲染与记录）。' },
@@ -3715,19 +4003,45 @@ export function apply(ctx, config) {
       output: { schema: { type: 'string' }, render: (_a, v) => [{ type: 'text', text: v }] },
       async execute(args) {
         const s = readSettings()
-        const msg = {
-          text: args.text,
-          userId: args.userId ?? null,
-          groupId: args.groupId ?? null,
-          nickname: args.nickname ?? null,
-          groupName: args.groupName ?? null,
-          atSelf: args.atSelf === true,
-          messageId: args.messageId ?? null,
+        let msg
+        if (args.message !== undefined) {
+          // 走真实入站映射：能同时验 array/CQ 解析、reply 段 id 提取、引文前缀拼装。
+          const fakeEvent = {
+            message: args.message,
+            raw_message: args.message,
+            message_type: args.groupId ? 'group' : 'private',
+            user_id: args.userId,
+            group_id: args.groupId,
+            message_id: args.messageId,
+            sender: { nickname: args.nickname ?? '', card: args.nickname ?? '' },
+          }
+          msg = await mapOneBotMessage(fakeEvent, args.selfId ?? '', {
+            fetchQuote: async () => {
+              if (args.quotedText === undefined && args.quotedNickname === undefined) return null
+              return { name: args.quotedNickname ?? '', text: args.quotedText ?? '' }
+            },
+          })
+          msg.groupName = args.groupName ?? null
+          if (args.atSelf === true) msg.atSelf = true
+        } else {
+          msg = {
+            text: args.text ?? '',
+            userId: args.userId ?? null,
+            groupId: args.groupId ?? null,
+            nickname: args.nickname ?? null,
+            groupName: args.groupName ?? null,
+            atSelf: args.atSelf === true,
+            messageId: args.messageId ?? null,
+          }
+          // 没给 message 但给了引文：也能验证前缀拼装（含查不到时的降级）。
+          if (args.quotedText !== undefined || args.quotedNickname !== undefined) {
+            msg.text = `${formatQuotePrefix({ name: args.quotedNickname ?? '', text: args.quotedText ?? '' })}${msg.text}`
+          }
         }
         const preview = decide(msg, s)
-        if (args.dryRun) return JSON.stringify({ preview, allowed: isAllowed(msg, s) }, null, 2)
+        if (args.dryRun) return JSON.stringify({ preview, allowed: isAllowed(msg, s), text: msg.text }, null, 2)
         const result = await handleInbound(msg)
-        return JSON.stringify({ decision: result, preview }, null, 2)
+        return JSON.stringify({ decision: result, preview, text: msg.text }, null, 2)
       },
     }))
   }
@@ -4958,3 +5272,6 @@ export function truncateText(text, max) {
   if (!Number.isFinite(max) || max <= 0) return ''
   return s.length <= max ? s : `${s.slice(0, max)}…（已截断）`
 }
+
+// 引用回复相关的纯函数（fetchQuotedText / formatQuotePrefix / mapOneBotMessage）
+// 均在上方 export，供 node 直测注入 stub；生产入口由 apply() 里的 transport.call 注入。
