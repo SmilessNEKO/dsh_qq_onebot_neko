@@ -123,6 +123,19 @@ const MAX_BUFFER_IMAGES_TOTAL = 10
 /** 图片本地缓存：容量上限，超出就淘汰最旧的（用户提议的方案）。 */
 const MAX_IMAGE_CACHE_BYTES = 64 * 1024 * 1024
 const MAX_IMAGE_CACHE_FILES = 300
+/**
+ * 图片分级阈值（用户 2026-11-10 定的方案）：
+ * - `<= IMAGE_DESCRIBE_SAFE_BYTES`：正常送识图；
+ * - 更大但在 `<= IMAGE_DESCRIBE_MAX_BYTES`：先压到安全尺寸再识图（"一定需要识别的图"）；
+ * - 再大：默认不识别，只留位置标记。
+ * 一次唤醒的图片总量也封顶，避免把请求体撑到网关 50MB 上限。
+ */
+const IMAGE_DESCRIBE_SAFE_BYTES = 1.5 * 1024 * 1024
+const IMAGE_DESCRIBE_MAX_BYTES = 6 * 1024 * 1024
+/** 压到多大的目标字节（识图够看，又省 token）。 */
+const IMAGE_DESCRIBE_TARGET_BYTES = 700 * 1024
+/** 一次唤醒所有图片的原始字节总和上限；超了就只保前面几张。 */
+const IMAGE_WAKE_TOTAL_BYTES = 12 * 1024 * 1024
 /** 单次下载的上限。缓存目录的 64MB 管的是落盘总量，不管这一张读进来多大。 */
 const MAX_IMAGE_DOWNLOAD_BYTES = 8 * 1024 * 1024
 /** 摘要默认取最近几条（`recentChatLimit` 的默认值）。 */
@@ -149,6 +162,10 @@ export const Config = Schema.object({
   replyMode: Schema.string().default('marker').description('群里发出去的是哪一段：marker = 只发「发给群」里的那段；tool = 用发消息工具；always = 整段回答都进群（慎用）。'),
   delivery: Schema.string().default('auto').description('忙的时候怎么插话：auto = 能插就插，不能就排队（推荐）；followup = 一律新开一轮；steer = 不管忙不忙都插。'),
   visionModel: Schema.string().default('').description('用来看图的模型，写成 provider/model。留空 = 自动找一个能看图的。'),
+  describeImages: Schema.boolean().default(true).description('收到图片时先叫一个模型把图读成一句话。关掉的话正文里只留图片位置标记，图本身照样作为附件交给会话（会话模型支持看图时才建议关）。'),
+  imageDescribeSafeBytes: Schema.number().default(1572864).description('图片不超过这个字节数就直接识图（默认 1.5MB）。'),
+  imageDescribeMaxBytes: Schema.number().default(6291456).description('图片超过这个字节数就默认不识别，只留位置标记（默认 6MB）。介于两档之间的会先压缩再识图。'),
+  imageWakeTotalBytes: Schema.number().default(12582912).description('一次唤醒里所有图片的原始字节总和上限（默认 12MB），超出部分只留位置标记，避免请求体撞网关上限。'),
   heartbeatTimeoutMs: Schema.number().default(90000).description('多久没收到连接数据就判定断线并重连。'),
   // ── M5：NapCat 自助托管 ───────────────────────────────────────────────────
   // 注意：这些只是**参数**；插件加载时绝不下载或执行任何东西，
@@ -201,6 +218,10 @@ const BridgeSettings = Schema.object({
   replyMode: Schema.string().default('marker').description('群里发出去的是哪一段：marker = 只发「发给群」里的那段；tool = 用发消息工具；always = 整段回答都进群（慎用）。'),
   delivery: Schema.string().default('auto').description('忙的时候怎么插话：auto = 能插就插，不能就排队（推荐）；followup = 一律新开一轮；steer = 不管忙不忙都插。'),
   visionModel: Schema.string().default('').description('用来看图的模型，写成 provider/model。留空 = 自动找一个能看图的。'),
+  describeImages: Schema.boolean().default(true).description('收到图片时先叫一个模型把图读成一句话。关掉的话正文里只留图片位置标记，图本身照样作为附件交给会话（会话模型支持看图时才建议关）。'),
+  imageDescribeSafeBytes: Schema.number().default(1572864).description('图片不超过这个字节数就直接识图（默认 1.5MB）。'),
+  imageDescribeMaxBytes: Schema.number().default(6291456).description('图片超过这个字节数就默认不识别，只留位置标记（默认 6MB）。介于两档之间的会先压缩再识图。'),
+  imageWakeTotalBytes: Schema.number().default(12582912).description('一次唤醒里所有图片的原始字节总和上限（默认 12MB），超出部分只留位置标记，避免请求体撞网关上限。'),
   agentPreset: Schema.string().default('').description('人设预设。留空 = 沿用会话自己记着的。'),
   // M5
   napcatInstallDir: Schema.string().default('').description('NapCat 安装目录。留空 = $DSH_HOME/napcat。自己装的或 Docker 里的不在这个位置时，填实际目录。'),
@@ -299,10 +320,96 @@ export function inlineImageNotes(text, images, noteById) {
     }
     const note = typeof raw === 'string' ? { text: raw } : raw
     const short = shortHash(note.hash ?? slot?.hash)
-    if (!face) return `${short === '' ? '[图片]' : `[图片#${short}]`}：${note.text ?? ''}`
+    // 空 text = 这一张没有描述（跳过识图 / `describeImages` 关掉时就是这样）：
+    // 只留位置标记 `[图片#短哈希]`，不再拖一个光秃秃的冒号。
+    const body = String(note.text ?? '').trim()
+    if (!face) {
+      const tag = short === '' ? '[图片]' : `[图片#${short}]`
+      return body === '' ? tag : `${tag}：${body}`
+    }
     const head = short === '' ? '[表情包]' : `[表情包#${short}]`
-    return `${head}：${stickerNoteText(face.summary, note.text)}`
+    const stickerBody = stickerNoteText(face.summary, note.text)
+    return String(stickerBody).trim() === '' ? head : `${head}：${stickerBody}`
   })
+}
+
+
+/**
+ * 图片分级：决定这一张要不要识图、要不要先压缩。
+ *
+ * 纯函数，导出是为了单测。`bytes` 取缓存文件的实际字节数。
+ * 返回 `{ action, reason }`：
+ * - `describe`：正常识图；
+ * - `compress`：先压到 `IMAGE_DESCRIBE_TARGET_BYTES` 再识图；
+ * - `skip`：不识别，正文只留位置标记。
+ *
+ * 上限可用设置覆盖（`imageDescribeMaxBytes` / `imageDescribeSafeBytes`），
+ * 这样"特别大的图"的阈值随时可调，不用改代码。
+ */
+export function classifyImageForDescribe(bytes, options = {}) {
+  const size = Number(bytes)
+  const safe = Number(options.safeBytes) > 0 ? Number(options.safeBytes) : IMAGE_DESCRIBE_SAFE_BYTES
+  const max = Number(options.maxBytes) > 0 ? Number(options.maxBytes) : IMAGE_DESCRIBE_MAX_BYTES
+  if (!Number.isFinite(size) || size <= 0) return { action: 'skip', reason: '取不到图片大小' }
+  if (size <= safe) return { action: 'describe', reason: `未超过 ${Math.round(safe / 1024)}KB` }
+  if (size <= max) return { action: 'compress', reason: `超过 ${Math.round(safe / 1024)}KB，压到 ${Math.round(IMAGE_DESCRIBE_TARGET_BYTES / 1024)}KB 再识图` }
+  return { action: 'skip', reason: `超过 ${Math.round(max / 1024)}KB，默认不识别` }
+}
+
+/**
+ * 一次唤醒的图片总量分级：按顺序累计原始字节，超预算的图降级为 `skip`。
+ *
+ * 目的：QQ 网关对单次请求体有 50MB 硬上限，图片是主要变量。
+ * 返回与入参等长的 action 数组。
+ */
+export function planImageBudget(items, options = {}) {
+  const list = Array.isArray(items) ? items : []
+  const total = Number(options.totalBytes) > 0 ? Number(options.totalBytes) : IMAGE_WAKE_TOTAL_BYTES
+  const out = []
+  let used = 0
+  for (const item of list) {
+    const single = classifyImageForDescribe(item?.bytes, options)
+    const bytes = Number(item?.bytes) || 0
+    // 单张就超标 → 按单张结论走，不占总额度（它本来就不会被读）。
+    if (single.action === 'skip') {
+      out.push({ action: 'skip', reason: single.reason })
+      continue
+    }
+    // 压缩后的估计体积：不会超过目标字节。
+    const estimated = single.action === 'compress' ? IMAGE_DESCRIBE_TARGET_BYTES : bytes
+    if (used + estimated > total) {
+      out.push({ action: 'skip', reason: `本轮图片总量已超过 ${Math.round(total / 1048576)}MB 预算` })
+      continue
+    }
+    used += estimated
+    out.push(single)
+  }
+  return out
+}
+
+/**
+ * 把一张图压到目标字节以内，供识图用。
+ *
+ * 走宿主的 `attachments.readImageRequest(ref, target)` —— 它会按 target 的长边像素
+ * 与 `maxBytes` 真做缩放+重编码，并且结果会缓存在 request-images 下，重复的图不再压第二次。
+ * 这条路比"自己找 sharp"稳：sharp 不在插件依赖里，宿主却一定带。
+ * 任何一步失败都返回 null，由调用方降级成 `skip`（绝不抛错、绝不影响文本）。
+ */
+async function compressForDescribe(attachments, ref, targetBytes = IMAGE_DESCRIBE_TARGET_BYTES) {
+  try {
+    if (!attachments || !ref) return null
+    if (typeof attachments.readImageRequest !== 'function') return null
+    // 长边 1024 对识图足够（文字仍可辨认），配合 maxBytes 一起压。
+    const target = { width: 1024, height: 1024, maxBytes: targetBytes }
+    const out = await attachments.readImageRequest(ref, target)
+    if (!out?.data) return null
+    const data = Buffer.from(out.data)
+    if (data.byteLength === 0) return null
+    return { data, mediaType: out.mediaType ?? 'image/jpeg' }
+  } catch (error) {
+    logger.warn(`图片压缩失败（将跳过识图）：${error?.message ?? error}`)
+    return null
+  }
 }
 
 /**
@@ -833,6 +940,10 @@ export function apply(ctx, config) {
       replyMode: normalizeReplyMode(s.replyMode ?? config.replyMode),
       delivery: normalizeDelivery(s.delivery ?? config.delivery),
       visionModel: String(s.visionModel ?? config.visionModel ?? '').trim(),
+      describeImages: (s.describeImages ?? config.describeImages) !== false,
+      imageDescribeSafeBytes: Math.max(1, Number(s.imageDescribeSafeBytes ?? config.imageDescribeSafeBytes ?? IMAGE_DESCRIBE_SAFE_BYTES)),
+      imageDescribeMaxBytes: Math.max(1, Number(s.imageDescribeMaxBytes ?? config.imageDescribeMaxBytes ?? IMAGE_DESCRIBE_MAX_BYTES)),
+      imageWakeTotalBytes: Math.max(1, Number(s.imageWakeTotalBytes ?? config.imageWakeTotalBytes ?? IMAGE_WAKE_TOTAL_BYTES)),
       agentPreset: String(s.agentPreset ?? config.agentPreset ?? '').trim(),
       heartbeatTimeoutMs: Math.max(10000, Number(config.heartbeatTimeoutMs ?? 90000)),
       napcatInstallDir: String(s.napcatInstallDir ?? config.napcatInstallDir ?? '').trim(),
@@ -2216,13 +2327,23 @@ export function apply(ctx, config) {
     const attachments = ctx.get('attachments')
     if (!llm || !attachments) return { ok: false, reason: '没有 llm / attachments 服务' }
     try {
-      if (!cached?.path || !existsSync(cached.path)) return { ok: false, reason: '缓存文件不存在' }
+      // 两种入参：缓存对象（读 path），或已压好的内存数据（`data`，压缩识图用）。
+      let bytes = null
+      const mediaType = cached?.mediaType
+      const name = cached?.name
+      if (cached?.data) {
+        bytes = Buffer.isBuffer(cached.data) ? cached.data : Buffer.from(cached.data)
+      } else {
+        if (!cached?.path || !existsSync(cached.path)) return { ok: false, reason: '缓存文件不存在' }
+        bytes = readFileSync(cached.path)
+      }
+      if (!bytes || bytes.byteLength === 0) return { ok: false, reason: '图片数据为空' }
       const conf = await findVisionModel()
       if (!conf) return { ok: false, reason: '没找到支持图片输入的模型' }
       const ref = await attachments.saveImage({
-        data: readFileSync(cached.path),
-        mediaType: cached.mediaType,
-        name: cached.name || undefined,
+        data: bytes,
+        mediaType,
+        name: name || undefined,
       })
       const message = createUserMessage({
         content: [
@@ -2687,10 +2808,56 @@ export function apply(ctx, config) {
     // —— 所以先用多模态模型把图读成一句描述，然后**就地填回 [图片] 占位符**。
     // （描述另起一段附在末尾是错的：模型会读成“这张图没解析出来、后面又来了一张”。）
     // 占位符里同时带上短哈希，模型才能指着一张具体的图去 save / send 表情包。
+    // 分级（用户 2026-11-10 定的方案，见 classifyImageForDescribe / planImageBudget）：
+    //   小图 → 直接识图；中等图 → 压到 IMAGE_DESCRIBE_TARGET_BYTES 再识图；
+    //   特别大的图 → 默认不识别，只留位置标记。一次唤醒还有总量预算，
+    //   免得历史越攒越多把请求体顶到网关的 50MB 上限。
+    // `describeImages` 关掉时一次模型调用都不花。
     const noteById = new Map()
-    for (const img of allImages.slice(0, MAX_DESCRIBE_PER_WAKE)) {
-      const r = await describeImage(img)
-      noteById.set(img, { text: r.ok ? r.text : `（描述失败：${r.reason}）`, hash: img.hash })
+    if (!s.describeImages) {
+      for (const img of allImages) noteById.set(img, { text: '', hash: img.hash })
+    } else {
+      const plan = planImageBudget(
+        allImages.map((img) => ({ bytes: img?.bytes })),
+        {
+          safeBytes: s.imageDescribeSafeBytes,
+          maxBytes: s.imageDescribeMaxBytes,
+          totalBytes: s.imageWakeTotalBytes,
+        },
+      )
+      // 只有前 MAX_DESCRIBE_PER_WAKE 张会真的去调模型，其余留空占位（省调用）。
+      let described = 0
+      for (const [i, img] of allImages.entries()) {
+        const step = plan[i] ?? { action: 'skip', reason: '超出本轮预算' }
+        const allowed = described < MAX_DESCRIBE_PER_WAKE
+        if (step.action === 'skip' || !allowed) {
+          noteById.set(img, { text: '', hash: img.hash })
+          if (step.action === 'skip') logger.info(`图片跳过识图：${step.reason}`)
+          continue
+        }
+        let r
+        if (step.action === 'compress') {
+          const attachments = ctx.get('attachments')
+          // 压缩需要附件的 ref：先把原图登记一次，再按目标尺寸重编码。
+          const ref = await attachments?.saveImage?.({
+            data: readFileSync(img.path),
+            mediaType: img.mediaType,
+            name: img.name || undefined,
+          }).catch(() => null)
+          const shrunk = await compressForDescribe(attachments, ref)
+          if (!shrunk) {
+            // 压不动就不硬塞，宁可只留占位。
+            noteById.set(img, { text: '', hash: img.hash })
+            logger.info('图片压缩失败，跳过识图')
+            continue
+          }
+          r = await describeImage({ hash: img.hash, data: shrunk.data, mediaType: shrunk.mediaType })
+        } else {
+          r = await describeImage(img)
+        }
+        described += 1
+        noteById.set(img, { text: r.ok ? r.text : `（描述失败：${r.reason}）`, hash: img.hash })
+      }
     }
 
     let text =
