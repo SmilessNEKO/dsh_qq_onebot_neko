@@ -1526,6 +1526,10 @@ export function apply(ctx, config) {
     // 出站**丢弃台账**：与 outbox 分开。outbox 的语义是“真的发到 QQ 了”，
     // 把被拒的出站写进 outbox 就是假账。
     dropped: [],
+    // sid → { dest, messageId, at }：这个会话有一轮 QQ 待回。插件中途重载会重建内存闸门
+    // （currentTurnFromQQ 丢失），turn/end 就认不出这一轮来自 QQ、整轮标记块被静默丢弃。
+    // 落盘保存后重载也能把目的地认回来。
+    pendingReplies: {},
     lastDestination: null,
     lastMessageId: null,
     /** destKey → { until, setAt }。每个目的地一个跟随窗口，互不覆盖。 */
@@ -1558,6 +1562,7 @@ export function apply(ctx, config) {
       if (Array.isArray(raw?.log)) state.log = raw.log.slice(-MAX_LOG)
       if (Array.isArray(raw?.outbox)) state.outbox = raw.outbox.slice(-MAX_OUTBOX)
       if (Array.isArray(raw?.dropped)) state.dropped = raw.dropped.slice(-MAX_DROPPED)
+      if (raw?.pendingReplies && typeof raw.pendingReplies === 'object') state.pendingReplies = raw.pendingReplies
       if (raw?.lastDestination && typeof raw.lastDestination === 'object') state.lastDestination = raw.lastDestination
       if (raw?.lastMessageId !== undefined) state.lastMessageId = raw.lastMessageId
       if (raw?.listeningByDest && typeof raw.listeningByDest === 'object') {
@@ -3140,6 +3145,12 @@ export function apply(ctx, config) {
     g.pendingFromQQ = true
     g.pendingDestination = wakeDest
     g.pendingMessageId = wakeMessageId
+    // 同时落一份到 state：插件中途重载会重建内存闸门，这一轮就判不出「来自 QQ」。
+    // state 是落盘的，重载后 turn/end 还能靠它把「该发给谁」认回来。
+    if (wakeSessionId && wakeDest) {
+      state.pendingReplies[wakeSessionId] = { dest: wakeDest, messageId: wakeMessageId ?? null, at: Date.now() }
+      saveState()
+    }
     // 没有正在跑的轮就顺手认领这一轮（会观察到 turn/start）；有正在跑的轮则不能改它。
     // 认领只写这一路会话的闸门。旁边另一个群的轮还在跑，也不该挡住这里。
     // 插话插进的是正在跑的那一轮，目的地也改成这条唤醒的群，避免回错群。
@@ -3655,12 +3666,24 @@ export function apply(ctx, config) {
       // 消费：这一轮结束，当前轮判定清空，等下一次 turn/start 重新快照。
       // 目的地先摘下来再清。sendToQQ 是异步的，不能等它去读可能已被别的群改掉的 lastDestination。
       // nextClaimedFromQQ 留给还没开始的下一轮，这里不清。
-      const fromQQ = g.currentTurnFromQQ
       const sid = session?.id ?? null
+      // 重载兜底：内存闸门被重建时 currentTurnFromQQ 会丢（插件在 QQ 轮次进行中重载的经典事故），
+      // 这时整轮标记块会被静默丢弃。用落盘的 pendingReplies 把「这一轮来自 QQ + 该发给谁」认回来。
+      // 10 分钟有效期，避免陈旧记录把 DSH 侧的轮次误判成 QQ 轮。
+      const pendingReply = sid ? state.pendingReplies?.[sid] ?? null : null
+      const freshPending =
+        pendingReply && Date.now() - (pendingReply.at ?? 0) < 10 * 60 * 1000 ? pendingReply : null
+      const fromQQ = g.currentTurnFromQQ || Boolean(freshPending)
+      if (sid && pendingReply) {
+        delete state.pendingReplies[sid]
+        saveState()
+      }
       const pin = sid ? sessionPins.get(sid) : null
       const ownedPin = pin?.owned ? pin : null
-      const turnDest = ownedPin?.dest || g.currentTurnDestination
-      const turnMsgId = ownedPin ? ownedPin.messageId : g.currentTurnMessageId
+      const turnDest = ownedPin?.dest || g.currentTurnDestination || freshPending?.dest || null
+      const turnMsgId = ownedPin
+        ? ownedPin.messageId
+        : g.currentTurnMessageId ?? freshPending?.messageId ?? null
       if (ownedPin && sid) {
         sessionPins.delete(sid)
         const next = sessionPinQueued.get(sid)
