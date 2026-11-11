@@ -26,9 +26,9 @@ function check(label, cond, extra = '') {
   if (!cond) failed++
 }
 
-const dir = mkdtempSync(join(tmpdir(), 'qq-bridge-stickers-'))
-const jsonPath = join(dir, 'qq-bridge-stickers.json')
-const destDir = join(dir, 'qq-bridge-stickers')
+const dir = mkdtempSync(join(tmpdir(), 'qq-bridge-neko-stickers-'))
+const jsonPath = join(dir, 'qq-bridge-neko-stickers.json')
+const destDir = join(dir, 'qq-bridge-neko-stickers')
 
 const PNG = Buffer.from('89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c489', 'hex')
 const PNG2 = Buffer.from('89504e470d0a1a0a0000000d4948445200000002000000020806000000', 'hex')
@@ -110,7 +110,7 @@ const H2 = hashOfBuffer(PNG2)
   check('importSticker 用一张干净的登记表起步', Object.keys(store.stickers).length === 0)
   const entry = importSticker({ store, srcPath: src1, destDir, mood: '无语', description: '一只无语的猫', source: 'group:12345678' })
   check('importSticker：返回条目（hash / ext / file / source）', entry?.hash === H1 && entry.ext === 'png' && entry.mood === '无语' && entry.source === 'group:12345678', JSON.stringify(entry))
-  check('importSticker：file 是相对路径 qq-bridge-stickers/<hash>.png', entry.file === `qq-bridge-stickers/${H1}.png`, String(entry.file))
+  check('importSticker：file 是相对路径 qq-bridge-neko-stickers/<hash>.png', entry.file === `qq-bridge-neko-stickers/${H1}.png`, String(entry.file))
   check('importSticker：图片本体已复制进 destDir', existsSync(join(destDir, `${H1}.png`)) && readFileSync(join(destDir, `${H1}.png`)).equals(PNG))
   check('importSticker：新条目带 addedAt / sentCount / lastSentAt', typeof entry.addedAt === 'number' && entry.addedAt > 0 && entry.sentCount === 0 && entry.lastSentAt === null)
   check('importSticker：登记进 store（就地）', findSticker(store, { hash: H1.slice(0, 6) })?.description === '一只无语的猫')
@@ -170,7 +170,7 @@ const H2 = hashOfBuffer(PNG2)
     const src2 = join(dir, 'noext')
     writeFileSync(src2, PNG2)
     const e2 = importSticker({ store, srcPath: src2, destDir, mood: '开心', description: '无扩展名' })
-    return e2.ext === 'png' && e2.file === `qq-bridge-stickers/${H2}.png`
+    return e2.ext === 'png' && e2.file === `qq-bridge-neko-stickers/${H2}.png`
   })())
 }
 

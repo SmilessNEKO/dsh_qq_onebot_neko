@@ -1,12 +1,12 @@
 // stickers.js — 表情包登记表：纯函数 + 文件读写，导出以便测试。
 //
 // 登记表把“群里出现过的一张图”变成可复用的资产：
-//   * 图片本体复制到 `qq-bridge-stickers/<hash>.<ext>`；
-//   * 元数据（mood / description / 来源 / 发送次数）写在 `qq-bridge-stickers.json`。
+//   * 图片本体复制到 `qq-bridge-neko-stickers/<hash>.<ext>`；
+//   * 元数据（mood / description / 来源 / 发送次数）写在 `qq-bridge-neko-stickers.json`。
 //   * 商城表情另外带一份 mface（emoji_id / emoji_package_id / key / summary）。
 //     四字段齐全时出站发 OneBot mface；缺了就仍发图片。
 //
-// hash 取图片字节 sha256 的**前 16 位十六进制**（小写）—— 与 `qq-bridge-images/` 的文件名同构，
+// hash 取图片字节 sha256 的**前 16 位十六进制**（小写）—— 与 `qq-bridge-neko-images/` 的文件名同构，
 // 因此登记的图能直接命中宿主的图片描述缓存（省一次多模态调用）。
 //
 // 本文件不依赖 index.js，也不碰任何宿主服务：读不到、坏了都返回空表，绝不抛。
@@ -16,9 +16,9 @@ import { copyFileSync, existsSync, mkdirSync, readFileSync, renameSync, writeFil
 import { basename, dirname, extname, join } from 'node:path'
 
 /** 登记表的文件名（放在 statePath 同一个目录）。 */
-export const STICKERS_FILE = 'qq-bridge-stickers.json'
+export const STICKERS_FILE = 'qq-bridge-neko-stickers.json'
 /** 图片本体目录名（同样放在 statePath 同一个目录）。 */
-export const STICKERS_DIR = 'qq-bridge-stickers'
+export const STICKERS_DIR = 'qq-bridge-neko-stickers'
 /** hash 位数（sha256 十六进制的前 16 位）。 */
 export const HASH_LEN = 16
 /** 短哈希位数（正文占位符与工具里显示的是它）。 */

@@ -1,5 +1,6 @@
-// dsh-qq-bot — 把 DSH 会话接到 QQ（OneBot / NapCat）。
-// Fork of sj244/dsh-qq-bridge. Cordis 插件 id 仍是 qq-bridge。
+// dsh-qq-bridge-neko — 把 DSH 会话接到 QQ（OneBot / NapCat）的独立插件。
+// 由 sj244/dsh-qq-bridge 衍生（MIT，见 LICENSE）；本版用独立包名 / Cordis id / 命名空间 /
+// API / 工具名 / state 文件名，可与旧的 qq-bridge 插件并存。Cordis 插件 id = qq-bridge-neko。
 //
 // 设计见同目录 DESIGN.md。核心两点：
 //   1) 唤醒策略：白名单(fail-closed) → 命中昵称/@ 必唤醒 → 否则按概率(默认 5%)唤醒
@@ -67,12 +68,12 @@ import {
 
 export { FACE_NAME_TO_ID, textToOneBotSegments }
 
-export const name = 'qq-bridge'
+export const name = 'qq-bridge-neko'
 
 export const inject = ['agents', 'tools', 'settings']
 
 // 导出是为了让测试能断言“浏览器半的卡片 key”与它一致 —— 不一致的话界面上会静默什么都不出现。
-export const NS = 'qq-bridge'
+export const NS = 'qq-bridge-neko'
 
 /**
  * 这个宿主的 `settings` 服务是不是“老模型”（有 register/get）。导出以便测试。
@@ -84,9 +85,9 @@ export const NS = 'qq-bridge'
 export function hasLegacySettings(service) {
   return typeof service?.register === 'function' && typeof service?.get === 'function'
 }
-const PLUGIN_TAG = 'qq-bridge'
+const PLUGIN_TAG = 'qq-bridge-neko'
 /** 包名（v4 消息格式里 producer 归属用）。 */
-const PACKAGE = 'dsh-qq-bot'
+const PACKAGE = 'dsh-qq-bridge-neko'
 /** 上游包名。已注入的旧消息仍按这个 kind 认，避免升级后哑火。 */
 const PACKAGE_LEGACY = 'dsh-qq-bridge'
 
@@ -103,7 +104,7 @@ export function injectedMessageSource(legacy) {
   return legacy ? { kind: 'plugin', plugin: PLUGIN_TAG } : { kind: `plugin:${PACKAGE}` }
 }
 /** npm 包名：与 `client/client.js` 里 `__ModuleLoader__.load({id})` 的值必须一致。 */
-const PACKAGE_NAME = '@fengye_nobug/dsh-qq-bot'
+const PACKAGE_NAME = '@fengye_nobug/dsh-qq-bridge-neko'
 const MAX_BUFFER = 200
 const MAX_LOG = 200
 const MAX_OUTBOX = 50
@@ -140,7 +141,7 @@ const IMAGE_WAKE_TOTAL_BYTES = 12 * 1024 * 1024
 const MAX_IMAGE_DOWNLOAD_BYTES = 8 * 1024 * 1024
 /** 摘要默认取最近几条（`recentChatLimit` 的默认值）。 */
 const DEFAULT_RECENT_CHAT_LIMIT = 8
-/** `qq_bridge_sticker` 的 `list` 最多列几条。 */
+/** `qq_bridge_neko_sticker` 的 `list` 最多列几条。 */
 const MAX_STICKER_LIST = 50
 /** 同时握着的会话句柄上限。超出就放开最久没用的，映射还留着，下次消息再恢复。 */
 const MAX_SESSION_HANDLES = 48
@@ -179,7 +180,7 @@ const DestinationProfile = Schema.object({
 export const Config = Schema.object({
   targetSessionId: Schema.string().default('').description('接到哪个会话。single 时留空 = 不接到任何会话。perGroup 时可以留空，新建会话用宿主当前的默认模型。'),
   agentPreset: Schema.string().default('').description('人设预设。留空 = 沿用会话自己记着的。'),
-  statePath: Schema.string().default('').description('状态文件放哪。留空 = $DSH_HOME/qq-bridge-state.json。'),
+  statePath: Schema.string().default('').description('状态文件放哪。留空 = $DSH_HOME/qq-bridge-neko-state.json。'),
   debugTools: Schema.boolean().default(true).description('要不要注册调试工具。'),
   // ── M2：OneBot 传输 ────────────────────────────────────────────────────────
   onebotUrl: Schema.string().default('').description('OneBot 连接地址，例如 ws://127.0.0.1:3001。留空 = 先不连接。'),
@@ -194,7 +195,7 @@ export const Config = Schema.object({
   heartbeatTimeoutMs: Schema.number().default(90000).description('多久没收到连接数据就判定断线并重连。'),
   // ── M5：NapCat 自助托管 ───────────────────────────────────────────────────
   // 注意：下载 / 安装 / 写配置这些动作默认绝不自动做，一切都要靠显式调用
-  // qq_bridge_napcat 工具。唯一的例外是下面这个 autoStartNapcat 开关：打开后
+  // qq_bridge_neko_napcat 工具。唯一的例外是下面这个 autoStartNapcat 开关：打开后
   // 只在 DSH 启动后延迟「启动已经装好的 NapCat」，仍然不下载、不安装。
   autoStartNapcat: Schema.boolean().default(false).description('DSH 启动后自动拉起 NapCat。需要 NapCat 已经装好、配置好并登录过一次；插件只负责启动，绝不自动下载或安装。默认关。'),
   autoStartNapcatDelayMs: Schema.number().default(DEFAULT_AUTO_START_NAPCAT_DELAY_MS).description('自动启动 NapCat 前的等待毫秒数，给 DSH 和 QQ 一点先起来的时间。默认 20000（20 秒）。'),
@@ -363,7 +364,7 @@ export function labelForSegment(type, data) {
  *
  * 为什么占位符里带短哈希：描述“可能不准”，而模型需要**指着一张具体的图**说话
  *（“把刚才那张存下来”）。短哈希是那张图在插件里唯一的稳定标识，模型能把它原样交给
- * `qq_bridge_sticker` 的 `save` / `send`。哈希取不到时退回不带 # 的 `[图片]`。
+ * `qq_bridge_neko_sticker` 的 `save` / `send`。哈希取不到时退回不带 # 的 `[图片]`。
  *
  * `noteById` 的值形如 `{ text, hash }`（也接受裸字符串 = 只有 text）。
  *
@@ -1047,8 +1048,8 @@ export function parseWhitelistCommand(text) {
 
 export function apply(ctx, config) {
   const logger = {
-    info: (m) => ctx.logger?.info?.(`qq-bridge: ${m}`),
-    warn: (m) => ctx.logger?.warn?.(`qq-bridge: ${m}`),
+    info: (m) => ctx.logger?.info?.(`qq-bridge-neko: ${m}`),
+    warn: (m) => ctx.logger?.warn?.(`qq-bridge-neko: ${m}`),
   }
 
   /** 任何回调入口都包一层：插件 bug 绝不能冒泡成宿主崩溃。 */
@@ -1097,7 +1098,7 @@ export function apply(ctx, config) {
    * 值写在自己的文件里。优先级：本文件 > composition config（见 readSettings）。
    * 放在 statePath 同一个目录，测试里天然落在临时目录。
    */
-  const settingsPath = join(dirname(config.statePath || join(home, 'qq-bridge-state.json')), 'qq-bridge-settings.json')
+  const settingsPath = join(dirname(config.statePath || join(home, 'qq-bridge-neko-state.json')), 'qq-bridge-neko-settings.json')
   if (!legacySettings) {
     logger.warn(
       '这个宿主没有 settings.register（0.2.0 起设置表单从插件 Config 派生）：' +
@@ -1106,7 +1107,7 @@ export function apply(ctx, config) {
     // 新模型的入口：让这个 entry 自动生成设置页。
     // ⚠️ 签名是 configure(presentation, owner = this.ctx.fiber) —— 不传 owner 会注册到
     // settings 服务**自己的** fiber 上，等于没给我们的 entry 注册页面策略，describe() 里
-    // 就不会有 qq-bridge（真机上四种 key 全 unavailable 就是这么来的，2026-10-01）。
+    // 就不会有 qq-bridge-neko（真机上四种 key 全 unavailable 就是这么来的，2026-10-01）。
     // TODO(0.2.0): 平台修好第三方插件的设置桥后这里可以简化；若届时客户端仍拿不到可写域，
     // 再考虑自建 client↔host 设置通道（见 docs/dsh-0.2.0-migration.md 的 TODO 节）。
     try {
@@ -1261,7 +1262,7 @@ export function apply(ctx, config) {
   /**
    * 把若干设置写成和设置卡片同一条存储，并让下一次 readSettings() 读到新值。
    *
-   * 0.2：写入 qq-bridge-settings.json（比 cordis 里的安装配置优先，重启还在）。
+   * 0.2：写入 qq-bridge-neko-settings.json（比 cordis 里的安装配置优先，重启还在）。
    * 更早的宿主：改 settings.get 返回的那份用户层，并在服务提供 update / set 时写回去。
    * 不改 apply() 拿到的 composition config，这样「撤销覆盖」仍回到原来的安装配置。
    */
@@ -1547,7 +1548,7 @@ export function apply(ctx, config) {
   }
 
   /**
-   * `/api/qq-bridge/settings` —— 设置卡片在 0.2.0 上的数据源。
+   * `/api/qq-bridge-neko/settings` —— 设置卡片在 0.2.0 上的数据源。
    *
    * - `GET`  → `{ ok, values（生效值，含 config 回落）, overridden（用户显式设过的键） }`
    * - `POST` → `{ set?: {...}, unset?: [...] }`：先过 schema 校验，再写文件，
@@ -1616,7 +1617,7 @@ export function apply(ctx, config) {
 
   // ── state (最近聊天缓冲 / 唤醒日志 / 出站采集 / 出站目的地) ──────────────────
 
-  const statePath = config.statePath || join(home, 'qq-bridge-state.json')
+  const statePath = config.statePath || join(home, 'qq-bridge-neko-state.json')
   const state = {
     /** destKey → 未唤醒消息。每个群、每个私聊各一份，唤醒时只带自己的。 */
     buffers: {},
@@ -1847,7 +1848,7 @@ export function apply(ctx, config) {
 
   // ── 表情包登记表（与 settingsPath 同一取法：落在 statePath 所在目录）─────────
   //
-  // 登记表 = 图片本体目录（qq-bridge-stickers/）+ 元数据文件（qq-bridge-stickers.json）。
+  // 登记表 = 图片本体目录（qq-bridge-neko-stickers/）+ 元数据文件（qq-bridge-neko-stickers.json）。
   // 内存里只留一份，改完立即落盘（saveStickers 是原子写）。
   const stickersPath = join(dirname(statePath), STICKERS_FILE)
   const stickersDir = join(dirname(statePath), STICKERS_DIR)
@@ -1893,7 +1894,7 @@ export function apply(ctx, config) {
    *
    * 动机：真人聊天不会每句都 @。第一次 @ 之后如果话题还在继续，模型可以开一个窗口，
    * 让同一目的地接下来的普通消息也唤醒它 —— 也就是“线性聊天不用反复 @”。
-   * 窗口**由模型决定**（`qq_bridge_listen` 工具），到期自动失效。
+   * 窗口**由模型决定**（`qq_bridge_neko_listen` 工具），到期自动失效。
    */
   function destinationKeyOf(msg) {
     if (msg?.groupId) return `group:${msg.groupId}`
@@ -2176,7 +2177,7 @@ export function apply(ctx, config) {
     try {
       const dispose = scopedCtx.effect(() =>
         sp.context({
-          name: 'qq-bridge',
+          name: 'qq-bridge-neko',
           order: 500,
           text,
         }),
@@ -2784,7 +2785,7 @@ export function apply(ctx, config) {
     const base = `[QQ · ${where}] ${who}：${truncateText(msg.text, MAX_INBOUND_CHARS)}`
     // 每一轮都只在该轮的入站上写“怎么回”——这是**逐轮**的信号，不靠常驻提示。
     if (s?.replyMode === 'always') return base
-    if (s?.replyMode === 'tool') return `${base}\n（回 QQ：用 qq_bridge_send 工具）`
+    if (s?.replyMode === 'tool') return `${base}\n（回 QQ：用 qq_bridge_neko_send 工具）`
     return `${base}\n（回 QQ 用 [QQ]…[/QQ]）`
   }
 
@@ -3059,7 +3060,7 @@ export function apply(ctx, config) {
 
   // 图片本地缓存目录：**收到图片就落盘**（纯 I/O，不调用模型），唤醒时直接读文件。
   // 这样既保住了缓冲“零模型调用”的性质，又不怕 QQ 的图片 URL 过期。
-  const imageCacheDir = join(home, 'qq-bridge-images')
+  const imageCacheDir = join(home, 'qq-bridge-neko-images')
 
   function listImageCache() {
     try {
@@ -3841,8 +3842,8 @@ export function apply(ctx, config) {
     if (s.replyWithQuote && quoteId) {
       segments.push({ type: 'reply', data: { id: String(quoteId) } })
     }
-    // 去完 Markdown 再拆表情。标记块和 qq_bridge_send 都进 sendToQQ。
-    // qq_bridge_sticker 自己组 image 或 mface 段，不经过这里。
+    // 去完 Markdown 再拆表情。标记块和 qq_bridge_neko_send 都进 sendToQQ。
+    // qq_bridge_neko_sticker 自己组 image 或 mface 段，不经过这里。
     segments.push(...textToOneBotSegments(body))
 
     try {
@@ -3913,7 +3914,7 @@ export function apply(ctx, config) {
     try {
       const dispose = server.register({
         kind: 'exact',
-        path: '/api/qq-bridge/settings',
+        path: '/api/qq-bridge-neko/settings',
         handler: handleSettingsRequest,
       })
       scoped.effect(() => () => {
@@ -3923,7 +3924,7 @@ export function apply(ctx, config) {
           // 卸载时路由可能已经不在了，忽略
         }
       })
-      logger.info('设置接口已挂载：/api/qq-bridge/settings（本机，或已登录的 DSH 面板）')
+      logger.info('设置接口已挂载：/api/qq-bridge-neko/settings（本机，或已登录的 DSH 面板）')
     } catch (error) {
       logger.warn(`设置接口挂载失败（可能同路径已被占用）：${error?.message ?? error}`)
     }
@@ -3955,7 +3956,7 @@ export function apply(ctx, config) {
     }
   }
   /**
-   * 判断一条 user/message 是不是我们自己（qq-bridge）灌进去的 QQ 入站消息。
+   * 判断一条 user/message 是不是我们自己（qq-bridge-neko）灌进去的 QQ 入站消息。
    * 注入 id 记在该会话的闸门上，两路同时注入时不会拿错。
    *
    * ⚠️ 为什么不能只看 `source.kind`：真机上出现过哑火 —— 用户明明是用 QQ @ 的，
@@ -4143,10 +4144,10 @@ export function apply(ctx, config) {
         return
       }
 
-      // 第二道 = 出站**开关**：replyMode='tool' 时这一整条路关掉，改由 qq_bridge_send 工具发。
+      // 第二道 = 出站**开关**：replyMode='tool' 时这一整条路关掉，改由 qq_bridge_neko_send 工具发。
       const s = readSettings()
       if (s.replyMode === 'tool') {
-        logger.info('replyMode=tool：标记块不参与出站（这一轮要发就调 qq_bridge_send 工具）')
+        logger.info('replyMode=tool：标记块不参与出站（这一轮要发就调 qq_bridge_neko_send 工具）')
         return
       }
 
@@ -4219,7 +4220,7 @@ export function apply(ctx, config) {
   /**
    * 记一条“真的发到 QQ 了”的台账。
    *
-   * 为什么要记：出站有 2 条路 —— ① 每轮结束时的标记块闸门，② `qq_bridge_send` 工具（刻意绕过闸门）。
+   * 为什么要记：出站有 2 条路 —— ① 每轮结束时的标记块闸门，② `qq_bridge_neko_send` 工具（刻意绕过闸门）。
    * 只记第 1 条的话，“群里冒出消息了，是漏了还是有人故意发的？”就答不上来。
    * 所以 2 条路都落进同一个 outbox，并用 `via` 标出来源（marker / always / tool）。
    *
@@ -4237,7 +4238,7 @@ export function apply(ctx, config) {
    *
    * 为什么要有一条独立台账：被拒的出站**不进 `outbox`** —— 那份台账的语义是“真的发到 QQ 了”，
    * 把被拒的写进去就是假账。但被拒这件事本身要能事后查到，所以单独记一份。
-   * 两条出站路径都记这里：标记块（`marker` / `always`）与 `qq_bridge_send` 工具（`tool`）。
+   * 两条出站路径都记这里：标记块（`marker` / `always`）与 `qq_bridge_neko_send` 工具（`tool`）。
    * 工具路径只是多给模型一份回执，台账口径与标记块一致。
    * 字段：`at` / `via`（marker ｜ always ｜ tool）/ `reason` / `limit` / `length` / 目的地 / `sessionId`。
    *
@@ -4346,8 +4347,8 @@ export function apply(ctx, config) {
 
   if (config.debugTools) {
     ctx.tools.register(defineTool({
-      name: 'qq_bridge_status',
-      description: '查看 qq-bridge 状态：设置、目标会话是否已加载、OneBot 连接状态、最近唤醒日志、待发文本与出站丢弃台账。',
+      name: 'qq_bridge_neko_status',
+      description: '查看 qq-bridge-neko 状态：设置、目标会话是否已加载、OneBot 连接状态、最近唤醒日志、待发文本与出站丢弃台账。',
       parameters: {},
       output: { schema: { type: 'string' }, render: (_a, v) => [{ type: 'text', text: v }] },
       async execute() {
@@ -4398,11 +4399,11 @@ export function apply(ctx, config) {
       },
     }))
 
-    // qq_bridge_send 是**正式出站通道**（replyMode='tool' 时唯一的那条），
+    // qq_bridge_neko_send 是**正式出站通道**（replyMode='tool' 时唯一的那条），
     // 所以不放在 debugTools 里 —— 见下面那段注册。
 
     ctx.tools.register(defineTool({
-      name: 'qq_bridge_transport',
+      name: 'qq_bridge_neko_transport',
       description: '查看或操作 OneBot 连接：action=status 看状态，reconnect 强制重连。',
       parameters: {
         action: { type: 'string', description: 'status（默认）或 reconnect。' },
@@ -4425,7 +4426,7 @@ export function apply(ctx, config) {
     }))
 
     ctx.tools.register(defineTool({
-      name: 'qq_bridge_simulate',
+      name: 'qq_bridge_neko_simulate',
       description: '模拟一条 QQ 入站消息，走完整唤醒策略（不改白名单的话默认会被丢弃）。用于验证昵称唤醒 / 概率唤醒 / 只记录三条分支。不会执行「白名单」命令，也不会改群白名单。给 message（OneBot CQ 码字符串）时走真实入站映射 mapOneBotMessage，可配合 quotedText/quotedNickname 注入被引原文（get_msg 走 stub，不真调 OneBot），用于验证 reply 段识别。',
       parameters: {
         text: { type: 'string', description: 'QQ 消息文本（不给 message 时用）。' },
@@ -4495,7 +4496,7 @@ export function apply(ctx, config) {
   //      拒绝，并把原因回给模型 —— 这正是标记块模式缺的那个反馈回路（用户报的“分不清在哪”）；
   //   ② 每次成功发送都落 outbox（via: 'tool'），事后能从 status 查到。
   //      没发出去的（被闸门拒绝、超长）不落台账。
-  // `qq_bridge_send` 与 `qq_bridge_sticker` 共用这一道闸门：
+  // `qq_bridge_neko_send` 与 `qq_bridge_neko_sticker` 共用这一道闸门：
   //   ① 被 QQ 唤醒的那一轮 → 放行（返回 null）；
   //   ② 不是 QQ 唤醒的那一轮 → 第一次调用只回一句“确认要发吗”（**一个字都不发**），
   //      同一轮里再调一次才真的发。`nonQQConfirmPending` 按轮清零，不跨轮泄漏。
@@ -4572,7 +4573,7 @@ export function apply(ctx, config) {
   }
 
   ctx.tools.register(defineTool({
-    name: 'qq_bridge_send',
+    name: 'qq_bridge_neko_send',
     description:
       '把一条消息发到 QQ（默认发给这一轮钉住的群或私聊；没钉住就用最后一次入站）。' +
       '**只有被 QQ 唤醒的那一轮才直接发得出去**：在 DSH 界面里直接对话时，第一次调用只会回一句' +
@@ -4601,11 +4602,11 @@ export function apply(ctx, config) {
           destination: args.groupId
             ? { kind: 'group', groupId: String(args.groupId) }
             : { kind: 'private', userId: String(args.userId) },
-          sessionId: 'tool:qq_bridge_send',
+          sessionId: 'tool:qq_bridge_neko_send',
         })
         return JSON.stringify(denied, null, 2)
       }
-      const blocked = outboundGate('qq_bridge_send', sessionIdOf(exec?.agent))
+      const blocked = outboundGate('qq_bridge_neko_send', sessionIdOf(exec?.agent))
       if (blocked !== null) return blocked
       const resolved = resolveOutboundDest(args, exec)
       const dest = resolved.dest
@@ -4614,7 +4615,7 @@ export function apply(ctx, config) {
         // 只记真的发出去的：被拒绝的不落 outbox。
         if (result?.sent > 0) {
           recordOutbox({
-            sessionId: 'tool:qq_bridge_send',
+            sessionId: 'tool:qq_bridge_neko_send',
             via: 'tool',
             // 非 QQ 轮的“确认后发送”要在台账里留痕，事后一眼看出这不是 QQ 唤醒的那一轮发的。
             nonQQTurn: !gateOf(sessionIdOf(exec?.agent)).currentTurnFromQQ,
@@ -4630,7 +4631,7 @@ export function apply(ctx, config) {
             limit: result.limit ?? null,
             length: result.length ?? null,
             destination: dest ?? state.lastDestination,
-            sessionId: 'tool:qq_bridge_send',
+            sessionId: 'tool:qq_bridge_neko_send',
           })
         }
         return JSON.stringify(result, null, 2)
@@ -4643,7 +4644,7 @@ export function apply(ctx, config) {
   // ── 表情包：登记 / 列表 / 发送 ──────────────────────────────────────────────
   //
   // 不受 debugTools 限制 —— 这是产品的玩法（收藏群友发的图、按情绪发表情包），不是调试工具。
-  // 发送走与 `qq_bridge_send` **同一道**来源闸门。
+  // 发送走与 `qq_bridge_neko_send` **同一道**来源闸门。
   // 登记项四字段齐全（emoji_id / emoji_package_id / key / summary）时发 OneBot mface；
   // 否则图片本体用 **base64** 送，不送本地路径（NapCat 的 `enableLocalFile2Url` 是 false）。
 
@@ -4717,7 +4718,7 @@ export function apply(ctx, config) {
   }
 
   ctx.tools.register(defineTool({
-    name: 'qq_bridge_sticker',
+    name: 'qq_bridge_neko_sticker',
     description:
       '表情包：收藏群友发的图或商城表情，按情绪或哈希发出去。' +
       'action:"list" 看已登记的有哪些（可按 mood 过滤；kind 为 mface 的是 QQ 原生表情包，image 的是普通图片）；' +
@@ -4725,7 +4726,7 @@ export function apply(ctx, config) {
       '入站若带了商城表情字段，save 会一并记下；' +
       'action:"send" 发一张（给 hash 精确发，或只给 mood 在该情绪里随机挑一张）。' +
       '四字段齐全（emoji_id、emoji_package_id、key、summary）时发 QQ 原生表情包（mface）；缺了就按图片 base64 发，图还是图。' +
-      '发送与 qq_bridge_send 共用同一道来源闸门：不是 QQ 唤醒的那一轮，第一次调用只会回一句确认。' +
+      '发送与 qq_bridge_neko_send 共用同一道来源闸门：不是 QQ 唤醒的那一轮，第一次调用只会回一句确认。' +
       '显式 groupId / userId 还必须在对应白名单里，否则不会发出去。',
     parameters: {
       action: { type: 'string', required: true, description: 'list / save / send。' },
@@ -4814,7 +4815,7 @@ export function apply(ctx, config) {
         }
 
         if (action === 'send') {
-          // 显式目的地先过白名单，再走与 qq_bridge_send 同一道来源闸门。
+          // 显式目的地先过白名单，再走与 qq_bridge_neko_send 同一道来源闸门。
           const denied = explicitOutboundBlock(args)
           if (denied) {
             recordDropped({
@@ -4823,12 +4824,12 @@ export function apply(ctx, config) {
               destination: args.groupId
                 ? { kind: 'group', groupId: String(args.groupId) }
                 : { kind: 'private', userId: String(args.userId) },
-              sessionId: 'tool:qq_bridge_sticker',
+              sessionId: 'tool:qq_bridge_neko_sticker',
             })
             return JSON.stringify(denied, null, 2)
           }
           // 非 QQ 轮第一次调用只回确认、一个字都不发。
-          const blocked = outboundGate('qq_bridge_sticker', sessionIdOf(exec?.agent))
+          const blocked = outboundGate('qq_bridge_neko_sticker', sessionIdOf(exec?.agent))
           if (blocked !== null) return blocked
 
           let entry = null
@@ -4885,7 +4886,7 @@ export function apply(ctx, config) {
           saveStickerStore()
           const short = shortHash(entry.hash)
           recordOutbox({
-            sessionId: 'tool:qq_bridge_sticker',
+            sessionId: 'tool:qq_bridge_neko_sticker',
             via: 'tool',
             action: 'sticker',
             nonQQTurn: !gateOf(sessionIdOf(exec?.agent)).currentTurnFromQQ,
@@ -5289,7 +5290,7 @@ export function apply(ctx, config) {
    * GET 只报当前版本，不去 GitHub。
    * POST 不带 action（或 action 为 check）只问 Releases，不下载、不安装。
    * POST `{ action: 'apply', version }` 才安装这次检查允许的更新版本，并安排重启面板。
-   * 安装先走 npm（`dsh plugin add @fengye_nobug/dsh-qq-bot@版本`）。registry 里没有这一版时才改从 GitHub 下载。
+   * 安装先走 npm（`dsh plugin add @fengye_nobug/dsh-qq-bridge-neko@版本`）。registry 里没有这一版时才改从 GitHub 下载。
    * 启动时检查不会走到 apply。两代宿主都挂：按钮跟“设置存在哪”无关。
    */
   async function handleUpdateRequest(req, res) {
@@ -5357,7 +5358,7 @@ export function apply(ctx, config) {
   }
 
   /**
-   * GET `/api/qq-bridge/groups?ids=群号,群号` —— 设置卡片给群白名单配群名和头像。
+   * GET `/api/qq-bridge-neko/groups?ids=群号,群号` —— 设置卡片给群白名单配群名和头像。
    * 只读。保存白名单仍走设置接口。桥没连上或查不到时仍返回 200，对应项只有群号。
    */
   async function handleGroupMetaRequest(req, res) {
@@ -5393,7 +5394,7 @@ export function apply(ctx, config) {
   }
 
   /**
-   * GET `/api/qq-bridge/catalog` —— 设置卡片要的「可选项」清单。
+   * GET `/api/qq-bridge-neko/catalog` —— 设置卡片要的「可选项」清单。
    *
    * 用户明确要求：识图服务商、模型优先级链、新会话默认模型都应该是**下拉选择**，
    * 而不是让人手写 `provider/model`。清单来自宿主自己的 llm 服务（已配置的提供商 / 模型）
@@ -5472,7 +5473,7 @@ export function apply(ctx, config) {
   }
 
   /**
-   * GET `/api/qq-bridge/profiles` —— 已知的 QQ 目的地清单，给「每个群/私聊单独设置」用。
+   * GET `/api/qq-bridge-neko/profiles` —— 已知的 QQ 目的地清单，给「每个群/私聊单独设置」用。
    *
    * 来源是插件自己的状态：群名缓存、最近入站目的地、perGroup 的会话映射。
    * 只读：值仍然通过设置接口保存。
@@ -5524,7 +5525,7 @@ export function apply(ctx, config) {
     try {
       const routes = [
         [
-          '/api/qq-bridge/napcat',
+          '/api/qq-bridge-neko/napcat',
           napcatRoute('GET', () => {
             const info = readNapcatWebui()
             // running / startedByPlugin 让卡片按钮显示真实状态，含外部启动的 NapCat。
@@ -5532,7 +5533,7 @@ export function apply(ctx, config) {
           }),
         ],
         [
-          '/api/qq-bridge/napcat/launch',
+          '/api/qq-bridge-neko/napcat/launch',
           napcatRoute('POST', () => {
             // 已在运行时不重复启动：外部启动的 NapCat 也走这条判据。
             if (napcatRunning().running) return { ok: false, error: 'NapCat 已在运行，未重复启动' }
@@ -5541,16 +5542,16 @@ export function apply(ctx, config) {
           }),
         ],
         [
-          '/api/qq-bridge/napcat/reveal',
+          '/api/qq-bridge-neko/napcat/reveal',
           napcatRoute('POST', () => {
             revealNapcatDir()
             return { ok: true }
           }),
         ],
-        ['/api/qq-bridge/update', handleUpdateRequest],
-        ['/api/qq-bridge/groups', handleGroupMetaRequest],
-        ['/api/qq-bridge/catalog', handleCatalogRequest],
-        ['/api/qq-bridge/profiles', handleProfilesRequest],
+        ['/api/qq-bridge-neko/update', handleUpdateRequest],
+        ['/api/qq-bridge-neko/groups', handleGroupMetaRequest],
+        ['/api/qq-bridge-neko/catalog', handleCatalogRequest],
+        ['/api/qq-bridge-neko/profiles', handleProfilesRequest],
       ]
       for (const [path, handler] of routes) disposes.push(server.register({ kind: 'exact', path, handler }))
       scoped.effect(() => () => {
@@ -5562,7 +5563,7 @@ export function apply(ctx, config) {
           }
         }
       })
-      logger.info('NapCat 操作接口已挂载：/api/qq-bridge/napcat{,/launch,/reveal}；群资料：/api/qq-bridge/groups；检查更新：/api/qq-bridge/update（本机，或已登录的 DSH 面板）')
+      logger.info('NapCat 操作接口已挂载：/api/qq-bridge-neko/napcat{,/launch,/reveal}；群资料：/api/qq-bridge-neko/groups；检查更新：/api/qq-bridge-neko/update（本机，或已登录的 DSH 面板）')
     } catch (error) {
       for (const dispose of disposes) {
         try {
@@ -5577,7 +5578,7 @@ export function apply(ctx, config) {
 
   // 这个工具**不受 debugTools 开关限制**：它是本插件的“一键”入口，不是调试工具。
   ctx.tools.register(defineTool({
-    name: 'qq_bridge_napcat',
+    name: 'qq_bridge_neko_napcat',
     description:
       '自助管理 NapCat（OneBot 实现）：查看状态、下载最新发行包并校验 sha256、解包、写 OneBot 配置、启动/停止。下载/配置等动作都由本调用显式触发。唯一的自动行为是设置项 autoStartNapcat：打开后 DSH 启动延迟若干秒只启动已装好的 NapCat，不下载、不安装。典型顺序：status → download →（你手动跑一次安装器）→ configure → launch。',
     parameters: {
@@ -5619,7 +5620,7 @@ export function apply(ctx, config) {
   const MAX_LISTEN_MINUTES = 60
 
   ctx.tools.register(defineTool({
-    name: 'qq_bridge_listen',
+    name: 'qq_bridge_neko_listen',
     description:
       '开/关「会话跟随」。开启后，在指定分钟数内，**同一个 QQ 目的地（群或私聊）里的普通消息也会唤醒你**，不必每条都 @ 或被叫名字 —— 用于一段连续的对话。觉得话头还会继续就开，想收尾就关。默认 5 分钟，上限 60。',
     parameters: {
@@ -5895,7 +5896,7 @@ export function buildUsagePrompt(s = {}) {
   const maxChars = usagePromptMaxChars(s)
   const mode = normalizeReplyMode(s?.replyMode)
   return [
-    '你正通过 dsh-qq-bot 连着 QQ（可能是群聊，也可能是私聊）。',
+    '你正通过 dsh-qq-bridge-neko 连着 QQ（可能是群聊，也可能是私聊）。',
     '',
     '**下面这些规矩只对「被 QQ 唤醒的那一轮」生效** —— 判据是那一轮的用户消息带 `[QQ · …]` 前缀。',
     '会话发起人也可能在 **DSH 界面里直接跟你说话**：那种消息**不带**前缀，按平常方式回答就行，',
@@ -5906,7 +5907,7 @@ export function buildUsagePrompt(s = {}) {
     '- 你没被唤醒期间的聊天会攒成一段「[QQ 未唤醒期间聊天记录] … [记录结束]」摘要，附在消息前面。',
     '- 图片由多模态模型先转成文字，**就地**贴在原来的位置上。普通图片形如「[图片#a1b2c3]：<描述>」。',
     '  QQ 商城表情（带表情 id 的）形如「[表情包#a1b2c3]：<表情名> <描述>」。描述可能不准，别当成绝对事实。',
-    '  方括号里的 6 位短哈希就是编号：交给 `qq_bridge_sticker` 的 save / send。',
+    '  方括号里的 6 位短哈希就是编号：交给 `qq_bridge_neko_sticker` 的 save / send。',
     '- 被「戳一戳」会显示成「[戳一戳]（戳的是我）」—— 那和被人 @ 一样，是有人在叫你。',
     '- 系统表情显示成「[表情数字]」这种带编号的占位符。',
     '',
@@ -5915,7 +5916,7 @@ export function buildUsagePrompt(s = {}) {
     // 根本不生效的做法（用户 2026-09-30 要求“新增还是替换由用户选”）。
     ...(mode === 'tool'
       ? [
-          '当前是 **tool 模式**：回群要调 `qq_bridge_send` 工具，把要说的话当参数发出去。',
+          '当前是 **tool 模式**：回群要调 `qq_bridge_neko_send` 工具，把要说的话当参数发出去。',
           '**标记块在这个模式下不生效**（写了也不会发出去），不要用。',
           '不调工具就一个字都不会发。给自己看的分析、命令、路径、结论写在正文里就行（正文不出口）。',
           '⚠️ **不是 QQ 唤醒的那一轮**（消息来自 DSH 界面）时，工具第一次调用**只会回你一句确认**、不会发出去；',
@@ -5929,13 +5930,13 @@ export function buildUsagePrompt(s = {}) {
         : [
             '只有放在 [QQ] 与 [/QQ] 之间的内容才会发出去（开标记必须**独占行首**）；一轮可以写多个块。',
             '没有块就一个字都不会发。给自己看的分析、命令、路径、结论，全部写在块外面。',
-            '回群**只用标记块**。`qq_bridge_send` 是旁路工具（测连通性、或明确要求直接发），',
+            '回群**只用标记块**。`qq_bridge_neko_send` 是旁路工具（测连通性、或明确要求直接发），',
             '  别拿它当回复通道 —— 它发出去的东西同样会进群，而且会被记进 outbox 台账。',
           ]),
     '- 发到群里的字 = 群里每个人都会看到的话。QQ 是聊天，不是工作台。',
     '',
     '【表情包】',
-    '- 想发表情包就调 `qq_bridge_sticker`：用 `list` 看已登记的有哪些，用 `send` 按情绪（mood）或哈希发一张。',
+    '- 想发表情包就调 `qq_bridge_neko_sticker`：用 `list` 看已登记的有哪些，用 `send` 按情绪（mood）或哈希发一张。',
     '  `kind` 为 mface 的会发成 QQ 原生表情包；`kind` 为 image 的普通图片发出去仍是图片。',
     '- 想收藏群友发的图或商城表情，把正文里 `[图片#…]` 或 `[表情包#…]` 的短哈希交给 `save`，再给它 mood 与 description。',
     '  存过之后这张图直接命中登记表，识图不再花多模态调用。',
@@ -5973,10 +5974,10 @@ export function buildUsagePrompt(s = {}) {
     '',
     '【会话跟随（监听模式）】',
     '- 默认只有「被 @」「被叫昵称」「抽中概率」的消息才唤醒你，其余只记录不唤醒（省 token）。',
-    '- 一段对话明显还会继续时（你刚回完、对方还在追问、群里正聊你），调 `qq_bridge_listen` 开一个窗口：',
+    '- 一段对话明显还会继续时（你刚回完、对方还在追问、群里正聊你），调 `qq_bridge_neko_listen` 开一个窗口：',
     '  默认 5 分钟、上限 60 分钟；这段时间里**同一个目的地**的普通消息也会唤醒你，不必让对方反复 @。',
     '- 窗口开着时每条普通消息都会唤醒，是实打实的花费。话题结束、对方走开、或你答完了，',
-    '  就调 `qq_bridge_listen` 带 `off: true` 关掉；**别无脑常开**。',
+    '  就调 `qq_bridge_neko_listen` 带 `off: true` 关掉；**别无脑常开**。',
   ].join('\n')
 }
 

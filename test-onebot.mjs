@@ -226,7 +226,7 @@ const mock = createMockOneBot()
 const port = await mock.listen()
 
 const { ctx, state } = createFakeCtx()
-const statePath = join(tmpdir(), 'qq-bridge-m2-test.json')
+const statePath = join(tmpdir(), 'qq-bridge-neko-m2-test.json')
 if (existsSync(statePath)) rmSync(statePath)
 
 apply(ctx, {
@@ -248,10 +248,10 @@ apply(ctx, {
 })
 
 const tool = (n) => state.registered.find((t) => t.name === n)
-const transportTool = tool('qq_bridge_transport')
-const statusTool = tool('qq_bridge_status')
+const transportTool = tool('qq_bridge_neko_transport')
+const statusTool = tool('qq_bridge_neko_status')
 
-check('M2 工具已注册（send / transport）', !!tool('qq_bridge_send') && !!transportTool)
+check('M2 工具已注册（send / transport）', !!tool('qq_bridge_neko_send') && !!transportTool)
 
 // 1) 建连：token 走查询串，建连后自动 get_login_info
 const connected = await waitFor(async () => JSON.parse(await transportTool.execute({})).transport.state === 'open')
@@ -389,7 +389,7 @@ check('session/event 监听已注册', typeof onSessionEvent === 'function')
 const asQQTurn = () => {
   onSessionEvent(
     { id: 'session-target' },
-    { type: 'user/message', seq: 0, time: Date.now(), data: { source: { kind: 'plugin', plugin: 'qq-bridge' } } },
+    { type: 'user/message', seq: 0, time: Date.now(), data: { source: { kind: 'plugin', plugin: 'qq-bridge-neko' } } },
   )
   onSessionEvent({ id: 'session-target' }, { type: 'turn/start', seq: 0, time: Date.now(), data: { turn: 0 } })
 }
@@ -636,7 +636,7 @@ await mock.close()
     }
   }
   const { ctx: earlyCtx, state: early } = createFakeCtx()
-  const earlyPath = join(tmpdir(), 'qq-bridge-selfid-early.json')
+  const earlyPath = join(tmpdir(), 'qq-bridge-neko-selfid-early.json')
   if (existsSync(earlyPath)) rmSync(earlyPath)
   try {
     apply(earlyCtx, {
@@ -649,9 +649,9 @@ await mock.close()
       nicknames: ['244'],
       whitelist: [],
       groupWhitelist: ['42'],
-      napcatInstallDir: join(tmpdir(), 'qq-bridge-no-napcat'),
+      napcatInstallDir: join(tmpdir(), 'qq-bridge-neko-no-napcat'),
     })
-    const earlyTransport = early.registered.find((t) => t.name === 'qq_bridge_transport')
+    const earlyTransport = early.registered.find((t) => t.name === 'qq_bridge_neko_transport')
     await earlyTransport.execute({ action: 'reconnect' })
     const opened = await waitFor(() => sockets.some((s) => s.readyState === 1 && s.sent.some((m) => m.action === 'get_login_info')))
     check('self_id 空窗：连接已打开且登录信息还没回来', opened)

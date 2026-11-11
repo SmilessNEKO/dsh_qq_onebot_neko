@@ -356,7 +356,7 @@ export function createOneBotTransport(options) {
   function call(action, params = {}, timeoutMs = echoTimeoutMs) {
     if (!isOpen()) return Promise.reject(new Error('OneBot transport is not connected'))
     echoSeq += 1
-    const echo = `qq-bridge-${echoSeq}`
+    const echo = `qq-bridge-neko-${echoSeq}`
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         pending.delete(echo)

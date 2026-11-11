@@ -89,10 +89,10 @@ check(
     !newer.message.includes('升级命令') &&
     !newer.message.includes('三分钟') &&
     newer.command === installCommand('0.2.4') &&
-    newer.install === 'github:yunfengnobug/dsh-qq-bot#v0.2.4',
+    newer.install === 'github:SmilessNEKO/dsh_qq_onebot_neko#v0.2.4',
   newer.message,
 )
-check('发布页只认本仓库', newer.url.startsWith('https://github.com/yunfengnobug/dsh-qq-bot/'))
+check('发布页只认本仓库', newer.url.startsWith('https://github.com/SmilessNEKO/dsh_qq_onebot_neko/'))
 
 const same = assessUpdate({ current: 'v0.2.4', releases: [release('v0.2.4')] })
 check('版本相同：不用更新', same.updateAvailable === false && same.kind === 'current' && same.message.includes('已经是最新正式版 0.2.4'))
@@ -107,7 +107,7 @@ const badUrl = assessUpdate({
   current: '0.2.3',
   releases: [release('v0.2.4', { html_url: 'https://evil.example/releases/v0.2.4', body: '说明' })],
 })
-check('别人的 html_url 换成仓库自己的发布页', badUrl.url === 'https://github.com/yunfengnobug/dsh-qq-bot/releases/tag/v0.2.4' && !badUrl.message.includes('evil.example'), badUrl.url)
+check('别人的 html_url 换成仓库自己的发布页', badUrl.url === 'https://github.com/SmilessNEKO/dsh_qq_onebot_neko/releases/tag/v0.2.4' && !badUrl.message.includes('evil.example'), badUrl.url)
 
 const badCurrent = assessUpdate({ current: 'not-a-version', releases: [release('v0.2.4')] })
 check('当前版本读不出来', badCurrent.ok === false && badCurrent.message.includes('读不出来'))
@@ -159,12 +159,12 @@ check('没有 fetch：不抛、白话失败', notAFunction.ok === false && /连�
 
 check(
   '给人看的安装命令仍是 github 标签',
-  installCommand('v0.2.5') === 'dsh plugin --profile web add github:yunfengnobug/dsh-qq-bot#v0.2.5',
+  installCommand('v0.2.5') === 'dsh plugin --profile web add github:SmilessNEKO/dsh_qq_onebot_neko#v0.2.5',
 )
 check(
   '先下载 GitHub 官方源码包，codeload 只是同一标签的备用地址',
-  githubArchiveUrl('v0.2.5') === 'https://github.com/yunfengnobug/dsh-qq-bot/archive/refs/tags/v0.2.5.tar.gz' &&
-    codeloadTarballUrl('v0.2.5') === 'https://codeload.github.com/yunfengnobug/dsh-qq-bot/tar.gz/refs/tags/v0.2.5' &&
+  githubArchiveUrl('v0.2.5') === 'https://github.com/SmilessNEKO/dsh_qq_onebot_neko/archive/refs/tags/v0.2.5.tar.gz' &&
+    codeloadTarballUrl('v0.2.5') === 'https://codeload.github.com/SmilessNEKO/dsh_qq_onebot_neko/tar.gz/refs/tags/v0.2.5' &&
     !githubArchiveUrl('v0.2.5').includes('codeload') &&
     !/ghproxy|fastgit|gitclone|kgithub/i.test(`${githubArchiveUrl('0.2.5')} ${codeloadTarballUrl('0.2.5')}`),
 )
@@ -176,14 +176,14 @@ const unflaggedRc = assessUpdate({
 })
 check('标签里带预发布、即使没标 prerelease，也不当正式版', unflaggedRc.kind === 'no-release' && unflaggedRc.updateAvailable === false)
 
-function packageJson(version, name = '@fengye_nobug/dsh-qq-bot') {
+function packageJson(version, name = '@fengye_nobug/dsh-qq-bridge-neko') {
   return JSON.stringify({ name, version })
 }
 
 const packed = repackReleaseTarball(
   fixtureTarball([
     { name: 'package.json', data: packageJson('9.9.9') },
-    { name: 'index.js', data: 'export const name = "qq-bridge"\n' },
+    { name: 'index.js', data: 'export const name = "qq-bridge-neko"\n' },
     { name: `nested/${'long-'.repeat(30)}file.js`, data: 'x' },
   ]),
   { version: '9.9.9' },
@@ -202,14 +202,14 @@ try {
 }
 let legacyName = false
 try {
-  repackReleaseTarball(fixtureTarball([{ name: 'package.json', data: packageJson('9.9.9', 'dsh-qq-bot') }]), { version: '9.9.9' })
+  repackReleaseTarball(fixtureTarball([{ name: 'package.json', data: packageJson('9.9.9', 'dsh-qq-bridge-neko') }]), { version: '9.9.9' })
   legacyName = true
 } catch {
   legacyName = false
 }
 let rejectedOtherScope = false
 try {
-  repackReleaseTarball(fixtureTarball([{ name: 'package.json', data: packageJson('9.9.9', '@other/dsh-qq-bot') }]), { version: '9.9.9' })
+  repackReleaseTarball(fixtureTarball([{ name: 'package.json', data: packageJson('9.9.9', '@other/dsh-qq-bridge-neko') }]), { version: '9.9.9' })
 } catch (error) {
   rejectedOtherScope = error?.code === 'wrong-name'
 }
@@ -237,13 +237,13 @@ try {
 }
 check('压缩包里的路径跳出目录就拒绝', rejectedPath)
 
-const linuxAdd = dshPluginAddSpec({ tarballPath: '/tmp/dsh-qq-bot-9.9.9.tgz', platform: 'linux' })
+const linuxAdd = dshPluginAddSpec({ tarballPath: '/tmp/dsh-qq-bridge-neko-9.9.9.tgz', platform: 'linux' })
 check(
   'Linux 上就是 dsh plugin add 这个压缩包',
-  linuxAdd.command === 'dsh' && linuxAdd.shell === false && linuxAdd.args.join(' ') === 'plugin --profile web add /tmp/dsh-qq-bot-9.9.9.tgz',
+  linuxAdd.command === 'dsh' && linuxAdd.shell === false && linuxAdd.args.join(' ') === 'plugin --profile web add /tmp/dsh-qq-bridge-neko-9.9.9.tgz',
 )
 const windowsAdd = dshPluginAddSpec({
-  tarballPath: 'C:\\Temp\\dsh qq bot\\dsh-qq-bot-9.9.9.tgz',
+  tarballPath: 'C:\\Temp\\dsh qq bot\\dsh-qq-bridge-neko-9.9.9.tgz',
   platform: 'win32',
   comSpec: 'cmd.exe',
 })
@@ -251,7 +251,7 @@ check(
   'Windows 用 dsh.cmd，路径里的空格被引号包住',
   windowsAdd.command === 'cmd.exe' &&
     windowsAdd.args[0] === '/d' &&
-    windowsAdd.args[3].includes('dsh.cmd plugin --profile web add "C:\\Temp\\dsh qq bot\\dsh-qq-bot-9.9.9.tgz"'),
+    windowsAdd.args[3].includes('dsh.cmd plugin --profile web add "C:\\Temp\\dsh qq bot\\dsh-qq-bridge-neko-9.9.9.tgz"'),
   windowsAdd.args[3],
 )
 let rejectedMeta = false
@@ -350,7 +350,7 @@ check(
   '重启脚本只杀给定进程并按原命令拉起，不提 NapCat 或设置文件',
   RESTART_HELPER.includes('SIGTERM') &&
     RESTART_HELPER.includes('DSH_QQ_BOT_RESTART') &&
-    !/napcat|qq-bridge-settings|shell\s*:/i.test(RESTART_HELPER),
+    !/napcat|qq-bridge-neko-settings|shell\s*:/i.test(RESTART_HELPER),
 )
 
 function laterClose(code) {
@@ -480,7 +480,7 @@ function releasesOf(...tags) {
 }
 
 function tarballFor(version) {
-  return fixtureTarball([{ name: 'package.json', data: packageJson(version) }, { name: 'index.js', data: 'ok' }], `dsh-qq-bot-${version}`)
+  return fixtureTarball([{ name: 'package.json', data: packageJson(version) }, { name: 'index.js', data: 'ok' }], `dsh-qq-bridge-neko-${version}`)
 }
 
 function fakeFetch(handler) {
@@ -557,7 +557,7 @@ check(
     installed.result.applied === true &&
     installed.result.restarting === true &&
     installed.result.tag === 'v9.9.9' &&
-    installed.result.install === 'github:yunfengnobug/dsh-qq-bot#v9.9.9' &&
+    installed.result.install === 'github:SmilessNEKO/dsh_qq_onebot_neko#v9.9.9' &&
     installed.result.command === installCommand('9.9.9') &&
     installed.result.message.startsWith('已经从 GitHub 装上 v9.9.9，面板即将重启。') &&
     !/登录口令|不改 NapCat|三分钟|优先从 npm/.test(installed.result.message) &&
@@ -572,8 +572,8 @@ check(
   '安装参数只有 web profile 和压缩包，不碰设置或 NapCat',
   installed.seen.length === 1 &&
     installed.seen[0].profile === 'web' &&
-    String(installed.seen[0].tarballPath).endsWith('dsh-qq-bot-9.9.9.tgz') &&
-    !JSON.stringify(installed.seen[0]).includes('qq-bridge-settings') &&
+    String(installed.seen[0].tarballPath).endsWith('dsh-qq-bridge-neko-9.9.9.tgz') &&
+    !JSON.stringify(installed.seen[0]).includes('qq-bridge-neko-settings') &&
     !JSON.stringify(installed.seen[0]).includes('napcat') &&
     !existsSync(installed.seen[0].tarballPath),
 )
@@ -790,7 +790,7 @@ const mirrored = await applyWith({
     return {
       ok: false,
       status: 302,
-      headers: { get: (name) => (String(name).toLowerCase() === 'location' ? 'https://ghproxy.example/github.com/yunfengnobug/dsh-qq-bot/archive/refs/tags/v9.9.9.tar.gz' : '') },
+      headers: { get: (name) => (String(name).toLowerCase() === 'location' ? 'https://ghproxy.example/github.com/SmilessNEKO/dsh_qq_onebot_neko/archive/refs/tags/v9.9.9.tar.gz' : '') },
     }
   },
 })
@@ -812,7 +812,7 @@ const thrownInstall = await applyWith({
   },
   runCommand: async (spec) => {
     leakedPath = spec.tarballPath
-    throw new Error(`EPERM ${spec.tarballPath} qq-bridge-settings.json`)
+    throw new Error(`EPERM ${spec.tarballPath} qq-bridge-neko-settings.json`)
   },
   scheduleRestart: async () => {
     throw new Error('should not restart')
@@ -824,7 +824,7 @@ check(
     /安装没有成功/.test(thrownInstall.result.error) &&
     thrownInstall.result.command === installCommand('9.9.9') &&
     !thrownInstall.result.error.includes(leakedPath) &&
-    !/qq-bridge-settings|EPERM/.test(thrownInstall.result.error) &&
+    !/qq-bridge-neko-settings|EPERM/.test(thrownInstall.result.error) &&
     leakedPath !== '' &&
     !existsSync(leakedPath),
   String(thrownInstall.result.error),
@@ -838,7 +838,7 @@ const missingDsh = await applyWith({
   },
   runCommand: async () => ({ ok: false, code: 'ENOENT' }),
 })
-check('找不到 dsh：告诉人自己执行 github 那条命令', missingDsh.result.stage === 'install' && /没找到 dsh/.test(missingDsh.result.error) && missingDsh.result.error.includes('github:yunfengnobug/dsh-qq-bot#v9.9.9'))
+check('找不到 dsh：告诉人自己执行 github 那条命令', missingDsh.result.stage === 'install' && /没找到 dsh/.test(missingDsh.result.error) && missingDsh.result.error.includes('github:SmilessNEKO/dsh_qq_onebot_neko#v9.9.9'))
 
 const restartFailed = await applyWith({
   current: '0.2.3',
@@ -883,21 +883,21 @@ check(
 )
 check(
   'npm 安装命令是包名加版本',
-  npmInstallSpec('v9.9.9') === '@fengye_nobug/dsh-qq-bot@9.9.9' &&
-    npmInstallCommand('9.9.9') === 'dsh plugin --profile web add @fengye_nobug/dsh-qq-bot@9.9.9' &&
+  npmInstallSpec('v9.9.9') === '@fengye_nobug/dsh-qq-bridge-neko@9.9.9' &&
+    npmInstallCommand('9.9.9') === 'dsh plugin --profile web add @fengye_nobug/dsh-qq-bridge-neko@9.9.9' &&
     npmInstallSpec('9.9.9-rc.1') === '' &&
     npmInstallSpec('9.9.9;rm') === '' &&
-    npmInstallSpec('9.9.9', 'dsh-qq-bot') === '' &&
-    npmPackageUrl() === 'https://registry.npmjs.org/@fengye_nobug%2Fdsh-qq-bot',
+    npmInstallSpec('9.9.9', 'dsh-qq-bridge-neko') === '' &&
+    npmPackageUrl() === 'https://registry.npmjs.org/@fengye_nobug%2Fdsh-qq-bridge-neko',
 )
-const npmAdd = dshPluginAddSpec({ packageSpec: '@fengye_nobug/dsh-qq-bot@9.9.9', platform: 'linux' })
+const npmAdd = dshPluginAddSpec({ packageSpec: '@fengye_nobug/dsh-qq-bridge-neko@9.9.9', platform: 'linux' })
 check(
   'Linux 上优先 dsh plugin add 这个 npm 包',
-  npmAdd.command === 'dsh' && npmAdd.shell === false && npmAdd.args.join(' ') === 'plugin --profile web add @fengye_nobug/dsh-qq-bot@9.9.9',
+  npmAdd.command === 'dsh' && npmAdd.shell === false && npmAdd.args.join(' ') === 'plugin --profile web add @fengye_nobug/dsh-qq-bridge-neko@9.9.9',
 )
 let badSpec = false
 try {
-  dshPluginAddSpec({ packageSpec: 'dsh-qq-bot@9.9.9', platform: 'linux' })
+  dshPluginAddSpec({ packageSpec: 'dsh-qq-bridge-neko@9.9.9', platform: 'linux' })
 } catch (error) {
   badSpec = error?.code === 'bad-package'
 }
@@ -919,7 +919,7 @@ check(
   npmChecked.ok === true &&
     npmChecked.updateAvailable === true &&
     npmChecked.latest === '9.9.9' &&
-    npmChecked.install === '@fengye_nobug/dsh-qq-bot@9.9.9' &&
+    npmChecked.install === '@fengye_nobug/dsh-qq-bridge-neko@9.9.9' &&
     npmChecked.command === npmInstallCommand('9.9.9') &&
     npmChecked.message === '有新版本 9.9.9（现在是 0.2.3），在 npm 上。这里只检查，还没安装。' &&
     !npmChecked.message.includes('github:') &&
@@ -936,17 +936,17 @@ const viaNpm = await applyWith({
     }
     throw new Error(`不该访问 ${url}`)
   },
-  runCommand: async (spec) => ({ ok: spec.packageSpec === '@fengye_nobug/dsh-qq-bot@9.9.9' && spec.tarballPath == null, code: 0 }),
+  runCommand: async (spec) => ({ ok: spec.packageSpec === '@fengye_nobug/dsh-qq-bridge-neko@9.9.9' && spec.tarballPath == null, code: 0 }),
 })
 check(
   '有新版：先装 npm 上的包，不下载 GitHub',
   viaNpm.result.ok === true &&
     viaNpm.result.channel === 'npm' &&
-    viaNpm.result.install === '@fengye_nobug/dsh-qq-bot@9.9.9' &&
+    viaNpm.result.install === '@fengye_nobug/dsh-qq-bridge-neko@9.9.9' &&
     viaNpm.result.command === npmInstallCommand('9.9.9') &&
     viaNpm.result.message === '已经从 npm 装上 v9.9.9，面板即将重启。' &&
     viaNpm.seen.length === 1 &&
-    viaNpm.seen[0].packageSpec === '@fengye_nobug/dsh-qq-bot@9.9.9' &&
+    viaNpm.seen[0].packageSpec === '@fengye_nobug/dsh-qq-bridge-neko@9.9.9' &&
     viaNpm.seen[0].profile === 'web' &&
     !viaNpm.calls.some((call) => /github\.com|codeload|ghproxy|npmmirror/.test(call.url)),
   JSON.stringify({ message: viaNpm.result.message, urls: viaNpm.calls.map((call) => call.url) }),
@@ -972,11 +972,11 @@ check(
   'registry 里临时没有这个版本时改从 GitHub 官方源码包装',
   npmMissThenGithub.result.ok === true &&
     npmMissThenGithub.result.channel === 'github' &&
-    npmMissThenGithub.result.install === 'github:yunfengnobug/dsh-qq-bot#v9.9.9' &&
+    npmMissThenGithub.result.install === 'github:SmilessNEKO/dsh_qq_onebot_neko#v9.9.9' &&
     /从 GitHub 装上/.test(npmMissThenGithub.result.message) &&
     npmMissThenGithub.seen.length === 2 &&
-    npmMissThenGithub.seen[0].packageSpec === '@fengye_nobug/dsh-qq-bot@9.9.9' &&
-    String(npmMissThenGithub.seen[1].tarballPath).endsWith('dsh-qq-bot-9.9.9.tgz') &&
+    npmMissThenGithub.seen[0].packageSpec === '@fengye_nobug/dsh-qq-bridge-neko@9.9.9' &&
+    String(npmMissThenGithub.seen[1].tarballPath).endsWith('dsh-qq-bridge-neko-9.9.9.tgz') &&
     npmMissThenGithub.calls.some((call) => call.url === githubArchiveUrl('9.9.9')) &&
     !npmMissThenGithub.calls.some((call) => /ghproxy|npmmirror|codeload/.test(call.url)),
 )
@@ -989,59 +989,59 @@ check('npm 404 表示包还没发布', unpublished.ok === false && unpublished.c
 const redirectedRegistry = await queryNpmVersions({
   fetchImpl: async (url) => {
     if (String(url).includes('ghproxy.example')) throw new Error('跟着跳走了')
-    return { ok: false, status: 302, headers: { get: () => 'https://ghproxy.example/dsh-qq-bot' } }
+    return { ok: false, status: 302, headers: { get: () => 'https://ghproxy.example/dsh-qq-bridge-neko' } }
   },
 })
 check('registry 跳到别的网站就不跟', redirectedRegistry.ok === false && redirectedRegistry.code === 'network')
 
 const profileSample = [
   '# 用户覆盖',
-  '- id: qq-bridge',
-  '  name: dsh-qq-bot  # 旧包名',
+  '- id: qq-bridge-neko',
+  '  name: dsh-qq-bridge-neko  # 旧包名',
   '  config:',
   "    onebotUrl: 'ws://127.0.0.1:3001'",
   "    nicknames: ['244', '小助手']",
   '- id: other-plugin',
-  '  name: dsh-qq-bot',
+  '  name: dsh-qq-bridge-neko',
   '  config:',
   '    keep: true',
 ].join('\n') + '\n'
-const rewritten = rewriteCordisPackageName(profileSample, '@fengye_nobug/dsh-qq-bot')
+const rewritten = rewriteCordisPackageName(profileSample, '@fengye_nobug/dsh-qq-bridge-neko')
 check(
-  '只改 qq-bridge 的旧包名，config 和别的插件不动',
+  '只改 qq-bridge-neko 的旧包名，config 和别的插件不动',
   rewritten.changed === true &&
-    rewritten.text.includes("name: '@fengye_nobug/dsh-qq-bot' # 旧包名") &&
+    rewritten.text.includes("name: '@fengye_nobug/dsh-qq-bridge-neko' # 旧包名") &&
     rewritten.text.includes("onebotUrl: 'ws://127.0.0.1:3001'") &&
     rewritten.text.includes("nicknames: ['244', '小助手']") &&
-    rewritten.text.includes('- id: other-plugin\n  name: dsh-qq-bot'),
+    rewritten.text.includes('- id: other-plugin\n  name: dsh-qq-bridge-neko'),
   rewritten.text,
 )
-const keptDev = rewriteCordisPackageName('- id: qq-bridge\n  name: ./local-dev\n  config:\n    keep: 1\n', '@fengye_nobug/dsh-qq-bot')
-check('qq-bridge 上不是我们的包名时不改', keptDev.changed === false && keptDev.text.includes('name: ./local-dev'))
-const alreadyScoped = "- id: qq-bridge\n  name: '@fengye_nobug/dsh-qq-bot'\n"
-check('已经是作用域包名时原样返回', rewriteCordisPackageName(alreadyScoped, '@fengye_nobug/dsh-qq-bot').changed === false)
+const keptDev = rewriteCordisPackageName('- id: qq-bridge-neko\n  name: ./local-dev\n  config:\n    keep: 1\n', '@fengye_nobug/dsh-qq-bridge-neko')
+check('qq-bridge-neko 上不是我们的包名时不改', keptDev.changed === false && keptDev.text.includes('name: ./local-dev'))
+const alreadyScoped = "- id: qq-bridge-neko\n  name: '@fengye_nobug/dsh-qq-bridge-neko'\n"
+check('已经是作用域包名时原样返回', rewriteCordisPackageName(alreadyScoped, '@fengye_nobug/dsh-qq-bridge-neko').changed === false)
 check('不把别的字符串写进 name', rewriteCordisPackageName(profileSample, 'not a package').changed === false)
 check(
   'profile 目录只拼合法的 profile 名',
-  profileDirectory('/dsh', 'web').endsWith('/profiles/web') && profileDirectory('/dsh', '../web') === '' && profileDirectory('', 'web') === '',
+  profileDirectory('/dsh', 'web') === join('/dsh', 'profiles', 'web') && profileDirectory('/dsh', '../web') === '' && profileDirectory('', 'web') === '',
 )
 
-const alignRoot = mkdtempSync(join(tmpdir(), 'dsh-qq-bot-align-'))
+const alignRoot = mkdtempSync(join(tmpdir(), 'dsh-qq-bridge-neko-align-'))
 const alignProfile = profileDirectory(alignRoot, 'web')
-const alignPkg = join(alignProfile, 'node_modules', '@fengye_nobug', 'dsh-qq-bot')
+const alignPkg = join(alignProfile, 'node_modules', '@fengye_nobug', 'dsh-qq-bridge-neko')
 mkdirSync(alignPkg, { recursive: true })
 writeFileSync(
   join(alignPkg, 'package.json'),
   JSON.stringify({
-    name: '@fengye_nobug/dsh-qq-bot',
+    name: '@fengye_nobug/dsh-qq-bridge-neko',
     version: '9.9.9',
     dsh: { bundle: { patch: './cordis.patch.yml' } },
   }),
 )
-const pluginPatch = "- insert:\n    - id: qq-bridge\n      name: dsh-qq-bridge\n      config:\n        targetSessionId: ''\n"
+const pluginPatch = "- insert:\n    - id: qq-bridge-neko\n      name: dsh-qq-bridge\n      config:\n        targetSessionId: ''\n"
 writeFileSync(join(alignPkg, 'cordis.patch.yml'), pluginPatch)
 writeFileSync(join(alignProfile, 'cordis.patch.yml'), profileSample)
-writeFileSync(join(alignRoot, 'cordis.patch.yml'), '- id: qq-bridge\n  name: "dsh-qq-bot"\n  config:\n    statePath: \'\'\n')
+writeFileSync(join(alignRoot, 'cordis.patch.yml'), '- id: qq-bridge-neko\n  name: "dsh-qq-bridge-neko"\n  config:\n    statePath: \'\'\n')
 const aligned = alignCordisNames({ profileDir: alignProfile, home: alignRoot })
 const pluginAfter = readFileSync(join(alignPkg, 'cordis.patch.yml'), 'utf8')
 const profileAfter = readFileSync(join(alignProfile, 'cordis.patch.yml'), 'utf8')
@@ -1049,38 +1049,38 @@ const homeAfter = readFileSync(join(alignRoot, 'cordis.patch.yml'), 'utf8')
 check(
   '安装目录、profile 和 home 三处都改成实际包名',
   aligned.ok === true &&
-    aligned.name === '@fengye_nobug/dsh-qq-bot' &&
+    aligned.name === '@fengye_nobug/dsh-qq-bridge-neko' &&
     aligned.changed.length === 3 &&
-    pluginAfter.includes("name: '@fengye_nobug/dsh-qq-bot'") &&
+    pluginAfter.includes("name: '@fengye_nobug/dsh-qq-bridge-neko'") &&
     pluginAfter.includes("targetSessionId: ''") &&
-    profileAfter.includes("name: '@fengye_nobug/dsh-qq-bot' # 旧包名") &&
-    profileAfter.includes('name: dsh-qq-bot', profileAfter.indexOf('other-plugin')) &&
-    homeAfter.includes("name: '@fengye_nobug/dsh-qq-bot'"),
+    profileAfter.includes("name: '@fengye_nobug/dsh-qq-bridge-neko' # 旧包名") &&
+    profileAfter.includes('name: dsh-qq-bridge-neko', profileAfter.indexOf('other-plugin')) &&
+    homeAfter.includes("name: '@fengye_nobug/dsh-qq-bridge-neko'"),
   JSON.stringify({ changed: aligned.changed.length, pluginAfter, homeAfter }),
 )
 const untouched = alignCordisNames({ profileDir: alignProfile, home: alignRoot })
 check('包名已经对齐时不再改文件', untouched.changed.length === 0 && readFileSync(join(alignPkg, 'cordis.patch.yml'), 'utf8') === pluginAfter)
 
-const legacyRoot = mkdtempSync(join(tmpdir(), 'dsh-qq-bot-legacy-'))
+const legacyRoot = mkdtempSync(join(tmpdir(), 'dsh-qq-bridge-neko-legacy-'))
 const legacyProfile = profileDirectory(legacyRoot, 'web')
-const legacyPkg = join(legacyProfile, 'node_modules', 'dsh-qq-bot')
+const legacyPkg = join(legacyProfile, 'node_modules', 'dsh-qq-bridge-neko')
 mkdirSync(legacyPkg, { recursive: true })
-writeFileSync(join(legacyPkg, 'package.json'), JSON.stringify({ name: 'dsh-qq-bot', version: '0.2.3' }))
-writeFileSync(join(legacyPkg, 'cordis.patch.yml'), "- insert:\n    - id: qq-bridge\n      name: '@fengye_nobug/dsh-qq-bot'\n")
-writeFileSync(join(legacyProfile, 'cordis.patch.yml'), '- id: qq-bridge\n  name: \'@fengye_nobug/dsh-qq-bot\'\n')
+writeFileSync(join(legacyPkg, 'package.json'), JSON.stringify({ name: 'dsh-qq-bridge-neko', version: '0.2.3' }))
+writeFileSync(join(legacyPkg, 'cordis.patch.yml'), "- insert:\n    - id: qq-bridge-neko\n      name: '@fengye_nobug/dsh-qq-bridge-neko'\n")
+writeFileSync(join(legacyProfile, 'cordis.patch.yml'), '- id: qq-bridge-neko\n  name: \'@fengye_nobug/dsh-qq-bridge-neko\'\n')
 const legacyAligned = alignCordisNames({ profileDir: legacyProfile, expectedVersion: '0.2.3' })
 check(
   '磁盘上仍是无作用域包时，name 改回那个包名',
-  legacyAligned.name === 'dsh-qq-bot' &&
-    readFileSync(join(legacyPkg, 'cordis.patch.yml'), 'utf8').includes("name: 'dsh-qq-bot'") &&
-    readFileSync(join(legacyProfile, 'cordis.patch.yml'), 'utf8').includes("name: 'dsh-qq-bot'"),
+  legacyAligned.name === 'dsh-qq-bridge-neko' &&
+    readFileSync(join(legacyPkg, 'cordis.patch.yml'), 'utf8').includes("name: 'dsh-qq-bridge-neko'") &&
+    readFileSync(join(legacyProfile, 'cordis.patch.yml'), 'utf8').includes("name: 'dsh-qq-bridge-neko'"),
 )
 const versionMiss = alignCordisNames({ profileDir: legacyProfile, expectedVersion: '9.9.9' })
 check('版本对不上就不改包名', versionMiss.reason === 'version' && versionMiss.changed.length === 0)
 
 writeFileSync(join(alignPkg, 'cordis.patch.yml'), pluginPatch)
 writeFileSync(join(alignProfile, 'cordis.patch.yml'), profileSample)
-writeFileSync(join(alignRoot, 'cordis.patch.yml'), '- id: qq-bridge\n  name: "dsh-qq-bot"\n  config:\n    statePath: \'\'\n')
+writeFileSync(join(alignRoot, 'cordis.patch.yml'), '- id: qq-bridge-neko\n  name: "dsh-qq-bridge-neko"\n  config:\n    statePath: \'\'\n')
 const appliedAlign = await applyWith({
   current: '0.2.3',
   onFetch: (url) => {
@@ -1090,7 +1090,7 @@ const appliedAlign = await applyWith({
     throw new Error(`不该访问 ${url}`)
   },
   runCommand: async (spec) => {
-    if (spec.packageSpec !== '@fengye_nobug/dsh-qq-bot@9.9.9') return { ok: false, code: 'error' }
+    if (spec.packageSpec !== '@fengye_nobug/dsh-qq-bridge-neko@9.9.9') return { ok: false, code: 'error' }
     return { ok: true, code: 0 }
   },
 })
@@ -1113,9 +1113,9 @@ check(
   appliedWithHome.ok === true &&
     appliedWithHome.channel === 'npm' &&
     appliedWithHome.message.startsWith('已经从 npm 装上 v9.9.9，面板即将重启。') &&
-    /Cordis 里 qq-bridge 的包名已经改成实际安装的 @fengye_nobug\/dsh-qq-bot/.test(appliedWithHome.message) &&
+    /Cordis 里 qq-bridge-neko 的包名已经改成实际安装的 @fengye_nobug\/dsh-qq-bridge-neko/.test(appliedWithHome.message) &&
     appliedAlign.result.ok === true &&
-    !/Cordis 里 qq-bridge/.test(appliedAlign.result.message),
+    !/Cordis 里 qq-bridge-neko/.test(appliedAlign.result.message),
   appliedWithHome.message,
 )
 rmSync(alignRoot, { recursive: true, force: true })
@@ -1136,16 +1136,16 @@ function npmReady(version = '9.9.9') {
 
 function plantScoped(root, version) {
   const profile = profileDirectory(root, 'web')
-  const pkgDir = join(profile, 'node_modules', '@fengye_nobug', 'dsh-qq-bot')
+  const pkgDir = join(profile, 'node_modules', '@fengye_nobug', 'dsh-qq-bridge-neko')
   mkdirSync(pkgDir, { recursive: true })
   writeFileSync(
     join(pkgDir, 'package.json'),
-    JSON.stringify({ name: '@fengye_nobug/dsh-qq-bot', version, dsh: { bundle: { patch: './cordis.patch.yml' } } }),
+    JSON.stringify({ name: '@fengye_nobug/dsh-qq-bridge-neko', version, dsh: { bundle: { patch: './cordis.patch.yml' } } }),
   )
-  const patch = "- insert:\n    - id: qq-bridge\n      name: dsh-qq-bot\n      config:\n        targetSessionId: ''\n"
+  const patch = "- insert:\n    - id: qq-bridge-neko\n      name: dsh-qq-bridge-neko\n      config:\n        targetSessionId: ''\n"
   writeFileSync(join(pkgDir, 'cordis.patch.yml'), patch)
-  writeFileSync(join(profile, 'cordis.patch.yml'), "- id: qq-bridge\n  name: dsh-qq-bot\n  config:\n    keep: 1\n")
-  writeFileSync(join(root, 'cordis.patch.yml'), '- id: qq-bridge\n  name: "dsh-qq-bot"\n  config:\n    statePath: \'\'\n')
+  writeFileSync(join(profile, 'cordis.patch.yml'), "- id: qq-bridge-neko\n  name: dsh-qq-bridge-neko\n  config:\n    keep: 1\n")
+  writeFileSync(join(root, 'cordis.patch.yml'), '- id: qq-bridge-neko\n  name: "dsh-qq-bridge-neko"\n  config:\n    statePath: \'\'\n')
   return profile
 }
 
@@ -1180,7 +1180,7 @@ function hangSpawn(pid, sink = {}) {
 
 check('安装记录只认整数 pid 和 grouped', parseRunRecord('{"pid":4242,"grouped":false}\n')?.pid === 4242 && parseRunRecord('{"pid":1,"grouped":true}') === null && parseRunRecord('{') === null)
 
-const recordRoot = mkdtempSync(join(tmpdir(), 'dsh-qq-bot-run-'))
+const recordRoot = mkdtempSync(join(tmpdir(), 'dsh-qq-bridge-neko-run-'))
 const recordProfile = profileDirectory(recordRoot, 'web')
 mkdirSync(join(recordProfile, '.plugin-manager'), { recursive: true })
 writeFileSync(runRecordPath(recordProfile), '{not-json')
@@ -1196,7 +1196,7 @@ check(
 writeRunRecord(recordProfile, 4242, true)
 let seenAtSpawn = null
 const deadAdded = await runPluginAdd({
-  packageSpec: '@fengye_nobug/dsh-qq-bot@9.9.9',
+  packageSpec: '@fengye_nobug/dsh-qq-bridge-neko@9.9.9',
   platform: 'linux',
   profile: 'web',
   profileDir: recordProfile,
@@ -1287,7 +1287,7 @@ check(
   JSON.stringify(winSignals),
 )
 
-const hungRoot = mkdtempSync(join(tmpdir(), 'dsh-qq-bot-hang-'))
+const hungRoot = mkdtempSync(join(tmpdir(), 'dsh-qq-bridge-neko-hang-'))
 const hungProfile = plantScoped(hungRoot, '9.9.9')
 const hungSignals = []
 const hungSink = {}
@@ -1311,7 +1311,7 @@ const hung = await applyPluginUpdate({
   },
 })
 const hungPatch = readFileSync(join(hungProfile, 'cordis.patch.yml'), 'utf8')
-const hungPlugin = readFileSync(join(hungProfile, 'node_modules', '@fengye_nobug', 'dsh-qq-bot', 'cordis.patch.yml'), 'utf8')
+const hungPlugin = readFileSync(join(hungProfile, 'node_modules', '@fengye_nobug', 'dsh-qq-bridge-neko', 'cordis.patch.yml'), 'utf8')
 check(
   '安装超时但目标版本已经在磁盘上时改包名，并安排重启',
   hung.ok === true &&
@@ -1323,9 +1323,9 @@ check(
     hungSignals.some(([target, signal]) => target === 4242 && signal === 'SIGTERM') &&
     hungSignals.some(([target, signal]) => target === -4242 && signal === 'SIGKILL') &&
     hung.message.startsWith('已经从 npm 装上 v9.9.9，面板即将重启。') &&
-    /包名已经改成实际安装的 @fengye_nobug\/dsh-qq-bot/.test(hung.message) &&
+    /包名已经改成实际安装的 @fengye_nobug\/dsh-qq-bridge-neko/.test(hung.message) &&
     !/请自己重启|请重启 dsh-web/.test(hung.message) &&
-    hungPatch.includes("name: '@fengye_nobug/dsh-qq-bot'") &&
+    hungPatch.includes("name: '@fengye_nobug/dsh-qq-bridge-neko'") &&
     hungPatch.includes('keep: 1') &&
     hungPlugin.includes("targetSessionId: ''") &&
     !hung.message.includes(hungRoot) &&
@@ -1333,14 +1333,14 @@ check(
   `${hung.message} ${JSON.stringify(hungSignals)}`,
 )
 
-const alignedRoot = mkdtempSync(join(tmpdir(), 'dsh-qq-bot-aligned-'))
+const alignedRoot = mkdtempSync(join(tmpdir(), 'dsh-qq-bridge-neko-aligned-'))
 const alignedProfile = plantScoped(alignedRoot, '9.9.9')
 for (const file of [
   join(alignedProfile, 'cordis.patch.yml'),
-  join(alignedProfile, 'node_modules', '@fengye_nobug', 'dsh-qq-bot', 'cordis.patch.yml'),
+  join(alignedProfile, 'node_modules', '@fengye_nobug', 'dsh-qq-bridge-neko', 'cordis.patch.yml'),
   join(alignedRoot, 'cordis.patch.yml'),
 ]) {
-  writeFileSync(file, readFileSync(file, 'utf8').replaceAll('dsh-qq-bot', '@fengye_nobug/dsh-qq-bot'))
+  writeFileSync(file, readFileSync(file, 'utf8').replaceAll('dsh-qq-bridge-neko', '@fengye_nobug/dsh-qq-bridge-neko'))
 }
 let alignedRestarted = false
 const alignedHung = await applyPluginUpdate({
@@ -1370,7 +1370,7 @@ check(
   alignedHung.message,
 )
 
-const giveUpRoot = mkdtempSync(join(tmpdir(), 'dsh-qq-bot-giveup-'))
+const giveUpRoot = mkdtempSync(join(tmpdir(), 'dsh-qq-bridge-neko-giveup-'))
 plantScoped(giveUpRoot, '9.9.9')
 let giveUpRestarted = false
 const giveUpHung = await applyPluginUpdate({
@@ -1402,7 +1402,7 @@ check(
   giveUpHung.message,
 )
 
-const ghHungRoot = mkdtempSync(join(tmpdir(), 'dsh-qq-bot-gh-hang-'))
+const ghHungRoot = mkdtempSync(join(tmpdir(), 'dsh-qq-bridge-neko-gh-hang-'))
 plantScoped(ghHungRoot, '9.9.9')
 let ghHungRestarted = false
 const ghHung = await applyPluginUpdate({
@@ -1435,7 +1435,7 @@ check(
   ghHung.message,
 )
 
-const missRoot = mkdtempSync(join(tmpdir(), 'dsh-qq-bot-miss-'))
+const missRoot = mkdtempSync(join(tmpdir(), 'dsh-qq-bridge-neko-miss-'))
 const missProfile = plantScoped(missRoot, '0.2.3')
 const missed = await applyPluginUpdate({
   current: '0.2.3',
@@ -1457,13 +1457,13 @@ check(
     missed.restarting !== true &&
     /没有确认装上/.test(missed.message) &&
     /清掉这次留下的安装记录/.test(missed.message) &&
-    missedPatch.includes('name: dsh-qq-bot') &&
+    missedPatch.includes('name: dsh-qq-bridge-neko') &&
     !/包名也改成了/.test(missed.message) &&
     !missed.message.includes(missRoot),
   missed.message,
 )
 
-const leftRoot = mkdtempSync(join(tmpdir(), 'dsh-qq-bot-left-'))
+const leftRoot = mkdtempSync(join(tmpdir(), 'dsh-qq-bridge-neko-left-'))
 const leftProfile = plantScoped(leftRoot, '9.9.9')
 const leftBehind = await applyPluginUpdate({
   current: '0.2.3',
@@ -1487,17 +1487,17 @@ check(
     /还没停干净/.test(leftBehind.message) &&
     /请先停掉 dsh 和 pnpm/.test(leftBehind.message) &&
     existsSync(runRecordPath(leftProfile)) &&
-    readFileSync(join(leftProfile, 'cordis.patch.yml'), 'utf8').includes('name: dsh-qq-bot') &&
+    readFileSync(join(leftProfile, 'cordis.patch.yml'), 'utf8').includes('name: dsh-qq-bridge-neko') &&
     !leftBehind.message.includes(leftRoot),
   leftBehind.message,
 )
 
-const otherRoot = mkdtempSync(join(tmpdir(), 'dsh-qq-bot-other-'))
+const otherRoot = mkdtempSync(join(tmpdir(), 'dsh-qq-bridge-neko-other-'))
 const otherProfile = profileDirectory(otherRoot, 'web')
 mkdirSync(otherProfile, { recursive: true })
 const otherSignals = []
 const otherAdded = await runPluginAdd({
-  packageSpec: '@fengye_nobug/dsh-qq-bot@9.9.9',
+  packageSpec: '@fengye_nobug/dsh-qq-bridge-neko@9.9.9',
   platform: 'linux',
   profile: 'web',
   profileDir: otherProfile,

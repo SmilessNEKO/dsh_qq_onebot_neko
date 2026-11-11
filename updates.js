@@ -2,12 +2,12 @@
 //
 // checkPluginUpdate 只比较版本、拼白话说明，不下载、不安装、不改配置。
 // 启动时检查必须走这一条，不能调用 applyPluginUpdate。
-// 有新版本时，applyPluginUpdate 先执行 `dsh plugin --profile web add @fengye_nobug/dsh-qq-bot@x.y.z`，
+// 有新版本时，applyPluginUpdate 先执行 `dsh plugin --profile web add @fengye_nobug/dsh-qq-bridge-neko@x.y.z`，
 // 走这台机器 npm / pnpm 已经配好的 registry（可以是官方，也可以是用户自己的镜像）。
 // 插件不写死第三方镜像。包还没发到 npm，或 registry 里没有这个版本时，才改从 GitHub 下载：
 // 先要 github.com 上的官方源码包，连不上再试同一标签的 codeload。只跟随仍指向同一标签的
 // github.com、api.github.com 或 codeload.github.com。不用 git 协议。
-// 安装成功后，若 profile、home 或插件自己的 cordis.patch.yml 里 qq-bridge 的 name
+// 安装成功后，若 profile、home 或插件自己的 cordis.patch.yml 里 qq-bridge-neko 的 name
 // 仍是旧的无作用域名，会改成磁盘上 package.json 里的包名。不改 config，不改设置，不改 NapCat。
 // 安装超过三分钟还没结束时，停掉这次拉起的进程组，并清掉已经退出的安装记录。
 // 超时后若磁盘上已是目标版本，仍改包名，并安排重启。
@@ -22,11 +22,11 @@ import { tmpdir } from 'node:os'
 import { isAbsolute, join } from 'node:path'
 import { gunzipSync, gzipSync } from 'node:zlib'
 
-export const UPDATE_REPO = 'yunfengnobug/dsh-qq-bot'
-/** npm 上的包名。无作用域的 dsh-qq-bot 发不出去（和已有的 dsh-qqbot 太像）。本地压缩包文件名仍不带作用域，避免路径里出现斜杠。 */
-export const PACKAGE_NAME = '@fengye_nobug/dsh-qq-bot'
+export const UPDATE_REPO = 'SmilessNEKO/dsh_qq_onebot_neko'
+/** npm 上的包名。无作用域的 dsh-qq-bridge-neko 发不出去（和已有的 dsh-qqbot 太像）。本地压缩包文件名仍不带作用域，避免路径里出现斜杠。 */
+export const PACKAGE_NAME = '@fengye_nobug/dsh-qq-bridge-neko'
 /** GitHub 上 v0.2.3 及更早标签的 package.json 仍是这个无作用域名。下载校验认它，不认别的作用域。 */
-const LEGACY_UNSCOPED_NAME = 'dsh-qq-bot'
+const LEGACY_UNSCOPED_NAME = 'dsh-qq-bridge-neko'
 /** 没读到用户自己的 registry 时用官方源。不把第三方镜像写进默认值。 */
 export const NPM_REGISTRY = 'https://registry.npmjs.org/'
 /** 下载下来的压缩包上限。本仓库是源码包，远小于这个数。 */
@@ -329,7 +329,7 @@ export async function queryGithubReleases(fetchImpl, options = {}) {
     response = await fetchFn(releasesApiUrl(repo), {
       headers: {
         accept: 'application/vnd.github+json',
-        'user-agent': 'dsh-qq-bot',
+        'user-agent': 'dsh-qq-bridge-neko',
       },
       signal: AbortSignal.timeout(timeoutMs),
     })
@@ -406,7 +406,7 @@ export async function queryNpmVersions(input = {}) {
     try {
       response = await fetchFn(current, {
         redirect: 'manual',
-        headers: { accept: 'application/json', 'user-agent': 'dsh-qq-bot' },
+        headers: { accept: 'application/json', 'user-agent': 'dsh-qq-bridge-neko' },
         signal: AbortSignal.timeout(timeoutMs),
       })
     } catch {
@@ -715,7 +715,7 @@ async function downloadReleaseOnce(input) {
     try {
       response = await fetchFn(current, {
         redirect: 'manual',
-        headers: { accept: 'application/octet-stream', 'user-agent': 'dsh-qq-bot' },
+        headers: { accept: 'application/octet-stream', 'user-agent': 'dsh-qq-bridge-neko' },
         signal: AbortSignal.timeout(timeoutMs),
       })
     } catch {
@@ -849,7 +849,7 @@ async function downloadReleaseViaCurl(input, proxy) {
       '--retry',
       '0',
       '-A',
-      'dsh-qq-bot',
+      'dsh-qq-bridge-neko',
       '-x',
       proxy,
       '-w',
@@ -1115,7 +1115,7 @@ export function repackReleaseTarball(bytes, expected) {
 }
 
 /** 给测试造一个和 GitHub 标签包一样、根目录套了一层的 tar.gz。 */
-export function fixtureTarball(files, root = 'dsh-qq-bot-9.9.9') {
+export function fixtureTarball(files, root = 'dsh-qq-bridge-neko-9.9.9') {
   const chunks = []
   for (const file of files) {
     const data = Buffer.isBuffer(file.data) ? file.data : Buffer.from(String(file.data))
@@ -1646,7 +1646,7 @@ export async function schedulePanelRestart(input = {}) {
   return spawnReexec(plan, { ...input, spawnImpl })
 }
 
-const CORDIS_ID = 'qq-bridge'
+const CORDIS_ID = 'qq-bridge-neko'
 
 function isWritablePackageName(name) {
   return name === PACKAGE_NAME || name === LEGACY_UNSCOPED_NAME || name === 'dsh-qq-bridge'
@@ -1691,7 +1691,7 @@ function readInstalledManifest(dir) {
 }
 
 /**
- * 只改 `qq-bridge` 这一行的 `name`。config 和别的插件保持原样，包括注释和空行。
+ * 只改 `qq-bridge-neko` 这一行的 `name`。config 和别的插件保持原样，包括注释和空行。
  * 只认我们自己的三个包名；别人写的路径或别的包不动。
  * @param {string} text
  * @param {string} packageName
@@ -1754,15 +1754,15 @@ function writeTextAtomic(file, text) {
 
 /**
  * 把 profile、home（有这份文件才改）和已安装插件自己的补丁里，
- * `qq-bridge` 的 `name` 改成磁盘上 package.json 的包名。
+ * `qq-bridge-neko` 的 `name` 改成磁盘上 package.json 的包名。
  * 传入 expectedVersion 时，只有版本对得上才改，避免把半截安装写成错误的包名。
  * @param {{ profileDir?: string, home?: string, expectedVersion?: string }} input
  */
 export function alignCordisNames(input = {}) {
   const profileDir = String(input.profileDir ?? '')
   if (profileDir === '') return { ok: false, reason: 'no-profile', changed: [], name: '' }
-  const scoped = readInstalledManifest(join(profileDir, 'node_modules', '@fengye_nobug', 'dsh-qq-bot'))
-  const legacy = readInstalledManifest(join(profileDir, 'node_modules', 'dsh-qq-bot'))
+  const scoped = readInstalledManifest(join(profileDir, 'node_modules', '@fengye_nobug', 'dsh-qq-bridge-neko'))
+  const legacy = readInstalledManifest(join(profileDir, 'node_modules', 'dsh-qq-bridge-neko'))
   const candidates = [scoped, legacy].filter(Boolean)
   let installed = null
   if (input.expectedVersion) {
@@ -1813,11 +1813,11 @@ function alignNote(input, expectedVersion) {
       home: typeof input?.home === 'string' ? input.home : '',
       expectedVersion,
     })
-    if (result.failed) return '没能改 Cordis 的包名。若重启后设置页打不开，把 qq-bridge 的 name 改成实际安装的包名再重启。'
-    if (result.changed.length > 0) return `Cordis 里 qq-bridge 的包名已经改成实际安装的 ${result.name}。`
+    if (result.failed) return '没能改 Cordis 的包名。若重启后设置页打不开，把 qq-bridge-neko 的 name 改成实际安装的包名再重启。'
+    if (result.changed.length > 0) return `Cordis 里 qq-bridge-neko 的包名已经改成实际安装的 ${result.name}。`
     return ''
   } catch {
-    return '没能改 Cordis 的包名。若重启后设置页打不开，把 qq-bridge 的 name 改成实际安装的包名再重启。'
+    return '没能改 Cordis 的包名。若重启后设置页打不开，把 qq-bridge-neko 的 name 改成实际安装的包名再重启。'
   }
 }
 
@@ -1851,8 +1851,8 @@ function installRunSpec(input, extra) {
 function installedMatches(input, version) {
   const profileDir = profileDirOf(input)
   if (profileDir === '' || !version) return false
-  const scoped = readInstalledManifest(join(profileDir, 'node_modules', '@fengye_nobug', 'dsh-qq-bot'))
-  const legacy = readInstalledManifest(join(profileDir, 'node_modules', 'dsh-qq-bot'))
+  const scoped = readInstalledManifest(join(profileDir, 'node_modules', '@fengye_nobug', 'dsh-qq-bridge-neko'))
+  const legacy = readInstalledManifest(join(profileDir, 'node_modules', 'dsh-qq-bridge-neko'))
   return [scoped, legacy].some((item) => item && compareSemver(item.version, version) === 0)
 }
 
@@ -1888,7 +1888,7 @@ async function failInstall(input, decision, ran, command, install, channel) {
 /**
  * 下载并安装一次检查允许的版本，然后安排重启。
  * 调用方要自己做登录校验。这里不读设置文件，也不碰 NapCat。
- * 先 `dsh plugin add @fengye_nobug/dsh-qq-bot@版本`。registry 里没有这个版本时，才下载 GitHub 上的同一标签。
+ * 先 `dsh plugin add @fengye_nobug/dsh-qq-bridge-neko@版本`。registry 里没有这个版本时，才下载 GitHub 上的同一标签。
  * @param {{ current: unknown, version?: unknown, force?: boolean, repo?: string, fetchImpl?: typeof fetch, registry?: string, proxy?: string, platform?: string, profile?: string, runCommand?: (spec: object) => Promise<{ ok: boolean, code?: string | number }>, scheduleRestart?: (spec: object) => Promise<{ ok: boolean, error?: string }>, spawnImpl?: typeof spawn, timeoutMs?: number, downloadTimeoutMs?: number, maxBytes?: number }} input
  */
 export async function applyPluginUpdate(input = {}) {
@@ -1963,8 +1963,8 @@ export async function applyPluginUpdate(input = {}) {
     const message = installError(error?.code, shown.command)
     return { ok: false, stage: 'install', current: decision.current, error: message, message, tag: decision.tag, command: shown.command, install: shown.install }
   }
-  const dir = mkdtempSync(join(tmpdir(), 'dsh-qq-bot-update-'))
-  const tarballPath = join(dir, `dsh-qq-bot-${decision.version}.tgz`)
+  const dir = mkdtempSync(join(tmpdir(), 'dsh-qq-bridge-neko-update-'))
+  const tarballPath = join(dir, `dsh-qq-bridge-neko-${decision.version}.tgz`)
   let ran
   try {
     writeFileSync(tarballPath, packed)

@@ -81,7 +81,7 @@ function makeZip(entries) {
   return Buffer.concat([...locals, cd, eocd])
 }
 
-const work = mkdtempSync(join(tmpdir(), 'qq-bridge-napcat-'))
+const work = mkdtempSync(join(tmpdir(), 'qq-bridge-neko-napcat-'))
 const writeZip = (name, entries) => {
   const p = join(work, name)
   writeFileSync(p, makeZip(entries))

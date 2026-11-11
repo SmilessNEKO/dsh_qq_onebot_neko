@@ -1,4 +1,4 @@
-# 推到 main 时：npm 上还没有 package.json 里的 version 才发布。
+# 手动触发（workflow_dispatch）时才跑；本仓库日常在本地打包发版，不走自动 npm publish。
 # 同一版本已经在 registry 里则跳过，任务仍然成功。版本号没变的推送不会重复发布。
 # 新版本发布成功后，补上 tag vX.Y.Z（还没有的话）和 GitHub Release。
 # 令牌只用仓库 Secret NPM_TOKEN，不要把令牌写进这个文件。
@@ -7,9 +7,6 @@
 name: 发布到 npm
 
 on:
-  push:
-    branches:
-      - main
   workflow_dispatch:
 
 permissions:
@@ -23,7 +20,7 @@ jobs:
   publish:
     name: 按版本号发布
     # 只在本仓库的 main 上跑。workflow_dispatch 选了别的分支时不发布。
-    if: github.repository == 'yunfengnobug/dsh-qq-bot' && github.ref == 'refs/heads/main'
+    if: github.repository == 'SmilessNEKO/dsh_qq_onebot_neko' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -48,7 +45,7 @@ jobs:
           node --input-type=module <<'CHECK'
           import { appendFileSync, readFileSync } from 'node:fs'
 
-          const expectedName = '@fengye_nobug/dsh-qq-bot'
+          const expectedName = '@fengye_nobug/dsh-qq-bridge-neko'
           const pkg = JSON.parse(readFileSync('package.json', 'utf8'))
           const { name, version } = pkg
 

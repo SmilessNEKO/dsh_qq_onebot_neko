@@ -255,7 +255,7 @@ export function createFetcher({ subprocess, logger, proxy = '' }) {
       return JSON.parse(res.stdout)
     }
     const response = await fetch(url, {
-      headers: { accept: 'application/vnd.github+json', 'user-agent': 'dsh-qq-bot' },
+      headers: { accept: 'application/vnd.github+json', 'user-agent': 'dsh-qq-bridge-neko' },
       signal: AbortSignal.timeout(timeoutMs),
     })
     if (!response.ok) throw new Error(`GitHub API ${response.status} ${response.statusText}`)
@@ -323,7 +323,7 @@ export async function downloadVerified({
  * 生成 NapCat 的 onebot11 默认配置（v4.5.3+ 支持 ./config/onebot11.json 作为默认配置）。
  * 插件用它在**用户点 WebUI 之前**就把正向 WS 服务端配好——这是“一键”的关键。
  */
-export function oneBotConfig({ port = 3001, token = '', host = '127.0.0.1', name = 'dsh-qq-bot' } = {}) {
+export function oneBotConfig({ port = 3001, token = '', host = '127.0.0.1', name = 'dsh-qq-bridge-neko' } = {}) {
   return {
     network: {
       httpServers: [],

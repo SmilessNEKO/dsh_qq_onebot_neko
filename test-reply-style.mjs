@@ -33,7 +33,7 @@ check(
   stripEmojiEncouragement(packaged.replace(rule3, oldRule3)) === packaged,
 )
 
-const home = mkdtempSync(join(tmpdir(), 'qq-bridge-reply-style-'))
+const home = mkdtempSync(join(tmpdir(), 'qq-bridge-neko-reply-style-'))
 const target = installedReplyStylePath(home)
 const upstream = packaged.replace(rule3, oldRule3)
 

@@ -1,24 +1,30 @@
 # 更新日志
 
+## v1.0.0 — 2026-11-12
+
+- **独立发行版**：把原 fork 从 `@fengye_nobug/dsh-qq-bot` / Cordis id `qq-bridge` 整体改成独立身份：npm 包名 `@fengye_nobug/dsh-qq-bridge-neko`、Cordis id 与 settings 命名空间 `qq-bridge-neko`、接口 `/api/qq-bridge-neko/...`、工具 `qq_bridge_neko_*`、状态文件 `qq-bridge-neko-*.json`，设置页显示名改为「QQ 桥接 Neko」。可与旧插件并存在同一 profile，宿主不再按 id 去重把新代码盖掉。
+- **发版方式**：改成本地 `npm pack` + 上传到本仓库（`SmilessNEKO/dsh_qq_onebot_neko`）GitHub Release，不通过上游 main、不依赖 npm registry。更新检查仓库、安装命令、Cordis 对齐、npm 包名全部指向新身份；npm 自动发布工作流改为仅手动触发。
+- **其它**：`.gitignore` 补 4 个新状态文件名并忽略 `*.tgz`；修好冒烟测试里一个 Windows 路径分隔符断言。上游 sj244/dsh-qq-bridge 的 MIT 版权与许可声明保留在 `LICENSE`。
+
 ## v0.2.14 — 2026-11-12
 
 - **DSH 启动后延迟自动拉起 NapCat**：新增 `autoStartNapcat`（默认 `false`）与 `autoStartNapcatDelayMs`（默认 `20000`，即 20 秒，范围 0–600000）。开关打开后，插件在 `apply()` 结束时排一个 `setTimeout`（`unref()`，不拖住进程退出），到点再读一次设置：开关仍开、NapCat 没在跑、且安装目录里已有官方 launcher / 引导器时，走与手动 `launch` 完全相同的 `napcatLaunch()` 启动**已经装好的** NapCat；等待期间用户关了开关、插件被卸载（effect 清掉 timer）、或 NapCat 已在运行，都会跳过。启动失败只记一条日志，不中断插件。
-- **只启动，绝不自动下载 / 安装 / 写配置**：`qq_bridge_napcat` 的 `download` / `configure` 仍是显式调用；`napcatStatus` 新增 `autoStart`（`enabled` / `delayMs` / `pending`）便于在卡片上看到排程状态。同步修正 `index.js` / `napcat.js` / `cordis.patch.yml` / `README.md` / `DESIGN.md` 里「插件从不自动执行任何内容」这类随新开关过时的措辞。
+- **只启动，绝不自动下载 / 安装 / 写配置**：`qq_bridge_neko_napcat` 的 `download` / `configure` 仍是显式调用；`napcatStatus` 新增 `autoStart`（`enabled` / `delayMs` / `pending`）便于在卡片上看到排程状态。同步修正 `index.js` / `napcat.js` / `cordis.patch.yml` / `README.md` / `DESIGN.md` 里「插件从不自动执行任何内容」这类随新开关过时的措辞。
 - 冒烟测试补 `normalizeAutoStartDelayMs` 纯函数、源码级「只走 napcatLaunch」断言，以及离线假 ctx 真跑 `apply()` 的功能测试（开关打开真的 spawn 一次、关开关 / 卸载不 spawn、默认关不排程）。
 
 ## v0.2.13 — 2026-11-12
 
-- **识图服务商改成下拉选择，不用手写模型名**：新增 `visionMode`（`auto` 自动找支持图片输入的模型 / `session` 用会话当前模型 / `fixed` 指定一个，默认 `auto`）、`visionProvider`、`visionProviderModel`。选 `fixed` 时两段联动下拉，从 DSH 已配置的提供商里选一个、再选它下面的模型，模型清单带「支持识图」标记；卡片向只读的 `/api/qq-bridge/catalog` 取清单。旧的 `visionModel`（`provider/model`）只作为没配新选项时的兜底，卡片上不再给输入框。`imageDescribeSafeBytes` / `imageDescribeMaxBytes` / `imageWakeTotalBytes` 仍是只为兼容旧配置保留的空键。
-- **每个群 / 私聊可独立个性化**：新增 `destinationProfiles`（数组，按 `group:<群号>` / `private:<QQ号>`）。每条可设 `quietHours` 休眠时段（如 `23:00-08:00`，期间只记账不回复）、`alwaysReply`（给主人私聊打开 = 24 小时实时回复、不受休眠约束）、`burstWaitMs` 连发等待、`idlePauseMs` 停听时间。卡片里可从只读的 `/api/qq-bridge/profiles` 列出的已接入目的地直接挑，不用背群号；后写的同 target 条目覆盖先写的。
+- **识图服务商改成下拉选择，不用手写模型名**：新增 `visionMode`（`auto` 自动找支持图片输入的模型 / `session` 用会话当前模型 / `fixed` 指定一个，默认 `auto`）、`visionProvider`、`visionProviderModel`。选 `fixed` 时两段联动下拉，从 DSH 已配置的提供商里选一个、再选它下面的模型，模型清单带「支持识图」标记；卡片向只读的 `/api/qq-bridge-neko/catalog` 取清单。旧的 `visionModel`（`provider/model`）只作为没配新选项时的兜底，卡片上不再给输入框。`imageDescribeSafeBytes` / `imageDescribeMaxBytes` / `imageWakeTotalBytes` 仍是只为兼容旧配置保留的空键。
+- **每个群 / 私聊可独立个性化**：新增 `destinationProfiles`（数组，按 `group:<群号>` / `private:<QQ号>`）。每条可设 `quietHours` 休眠时段（如 `23:00-08:00`，期间只记账不回复）、`alwaysReply`（给主人私聊打开 = 24 小时实时回复、不受休眠约束）、`burstWaitMs` 连发等待、`idlePauseMs` 停听时间。卡片里可从只读的 `/api/qq-bridge-neko/profiles` 列出的已接入目的地直接挑，不用背群号；后写的同 target 条目覆盖先写的。
 - **连发等待与空闲停听**：全局 `burstWaitMs`（默认 `0` = 立刻回）让对方连着发消息时先攒着、停手这么久才回复；每个目的地可在档案里单独覆盖。`listenIdleMs`（默认 `120000` = 2 分钟，下限 10 秒、上限 24 小时）让会话跟随窗口在这么久没有新消息后自动失效、等下一条消息再续，不会一直挂着烧 token。分条间隔改成可调：`replyGapMinMs` / `replyGapMaxMs`（默认 `1200` / `2800` 毫秒，写反会自动换过来），不再写死 1.2–2.8 秒。
-- **模型优先级链**：新增 `modelChain`（从已配置提供商 / 模型里排的一串顺序，最多 8 条）与 `modelChainFailures`（默认 `5`，1–50）。`turn/end` 里连续报错 / blocked 达阈值就按顺序切到下一个模型、循环回绕，切换走宿主 `agent.model.select`（不重建会话），成功后清零计数；切换会记一条 `model-chain` 日志，`qq_bridge_status` 里能看到链的实时位置。卡片里同样用下拉排顺序。
+- **模型优先级链**：新增 `modelChain`（从已配置提供商 / 模型里排的一串顺序，最多 8 条）与 `modelChainFailures`（默认 `5`，1–50）。`turn/end` 里连续报错 / blocked 达阈值就按顺序切到下一个模型、循环回绕，切换走宿主 `agent.model.select`（不重建会话），成功后清零计数；切换会记一条 `model-chain` 日志，`qq_bridge_neko_status` 里能看到链的实时位置。卡片里同样用下拉排顺序。
 - **新建会话可指定落点**：`newSessionDir`（文件夹绝对路径，空 = 「QQ 桥接」工作区）、`newSessionModel`（默认模型，空 = 宿主默认或 `modelChain` 第一个）、`newSessionPreset`（默认预设模式）都能在卡片里选；预设与原 `agentPreset` 一起改成下拉。
 - **修一处归属残留**：QQ 唤醒投递失败回滚闸门时，一并回滚 / 清掉投递前落盘的 `state.pendingReplies[wakeSessionId]`，否则下一条非 QQ 轮会被误判成 QQ 轮、把正文误发进群。
 - 设置卡片补齐 `rotateEnabled` / `rotateMaxTurns` / `rotatePressureRatio` 三项（之前只能在安装配置里写）。`README.md` / `DESIGN.md` 同步补上新键的键名、默认值、效果与界面行为；冒烟测试（`test-smoke.mjs`）补齐新纯函数与卡片一致性断言。
 
 ## v0.2.12 — 2026-11-02
 
-- **QQ 回复风格不再鼓励使用 emoji**：`$DSH_HOME/.agent-presets/dsh-qq-bridge/skills/qq-session-reply-style/references/reply-style.md` 若还写着 “Emoji are welcome when they make the answer friendlier.”，插件启动时删掉这一句。「Avoid Markdown formatting. Use plain text.」以及前后其它行保持原样。不另加「默认不要带表情」或「少用某个表情」的规矩。这份文件不在插件目录里，DSH 升级时也不会改写 `.agent-presets`；它是人设安装时复制进去的。面板更新并重启后才会改到磁盘上的那一份。文件本来就不存在时不会新建，也不用删掉整个人设目录。用法说明和 `qq_bridge_send` 的说明不动。
+- **QQ 回复风格不再鼓励使用 emoji**：`$DSH_HOME/.agent-presets/dsh-qq-bridge/skills/qq-session-reply-style/references/reply-style.md` 若还写着 “Emoji are welcome when they make the answer friendlier.”，插件启动时删掉这一句。「Avoid Markdown formatting. Use plain text.」以及前后其它行保持原样。不另加「默认不要带表情」或「少用某个表情」的规矩。这份文件不在插件目录里，DSH 升级时也不会改写 `.agent-presets`；它是人设安装时复制进去的。面板更新并重启后才会改到磁盘上的那一份。文件本来就不存在时不会新建，也不用删掉整个人设目录。用法说明和 `qq_bridge_neko_send` 的说明不动。
 
 ## v0.2.11 — 2026-11-02
 
@@ -26,7 +32,7 @@
 
 ## v0.2.10 — 2026-11-02
 
-- **用法说明和发消息工具不再用具体表情名当例子**：注入的用法说明，以及 `qq_bridge_send` 的工具说明和参数说明，不再把笑哭、挥手写成推荐写法。模型之前会抓住这两个例子反复使用。现在只说明半角方括号里写 `[表情名]` 或 `[表情数字]`。对得上的表情名仍会变成 QQ 系统表情，名字表还在 `faces.js`。认不出的方括号仍留在文字里。
+- **用法说明和发消息工具不再用具体表情名当例子**：注入的用法说明，以及 `qq_bridge_neko_send` 的工具说明和参数说明，不再把笑哭、挥手写成推荐写法。模型之前会抓住这两个例子反复使用。现在只说明半角方括号里写 `[表情名]` 或 `[表情数字]`。对得上的表情名仍会变成 QQ 系统表情，名字表还在 `faces.js`。认不出的方括号仍留在文字里。
 
 ## v0.2.9 — 2026-11-02
 
@@ -43,33 +49,33 @@
 
 - **一键更新装完会自己重启 dsh-web**：安装成功后按面板原来的办法重启，不再把「请自己重启」当成正常结果。Linux 上如果是 systemd 拉起来的，会读本进程的 cgroup，大约 3 秒后只重启认出来的那个服务。服务在用户实例里时用 `systemctl --user`，不会重启整个登录。以前没把 cgroup 读进来，服务里一点更新就直接说面板没有重启。`systemd-run` 没权限或失败时，改为按当前的 node 命令行再拉起一次。两条都做不到，才用白话请你自己重启 dsh-web，并提醒刷新页面、登录口令可能会变。安装超过三分钟、但磁盘上已经是要装的版本时，同样会改包名并重启。进程还在，或没有确认装上时，仍然不会重启。
 - **检查和安装的提示改成短句**：设置卡片不再把「优先从 npm…三分钟…」那段长说明当作主要提示。检查按钮旁边写「只检查，不安装。」有更新按钮时另写「装完会重启面板。请刷新；登录口令可能会变。不改 NapCat。」检查结果是「有新版本 x.y.z（现在是 a.b.c），在 npm 上。这里只检查，还没安装。」或「在 GitHub 上」。安装成功是「已经从 npm 装上 vX.Y.Z，面板即将重启。」或「已经从 GitHub 装上 vX.Y.Z，面板即将重启。」自动重启失败时才请自己重启，并写明这次是从 npm 还是从 GitHub 装上的。
-- **发版改为推 main**：改 `package.json` 的 `version` 并推到 `main` 后，Actions 在 npm 上还没有 `@fengye_nobug/dsh-qq-bot` 的这一版时才 `npm publish`，并补 tag `vX.Y.Z` 和 GitHub Release。同一版本已在 registry 里则跳过。`NPM_TOKEN` 放在仓库 Actions Secrets，不写进仓库。
+- **发版改为推 main**：改 `package.json` 的 `version` 并推到 `main` 后，Actions 在 npm 上还没有 `@fengye_nobug/dsh-qq-bridge-neko` 的这一版时才 `npm publish`，并补 tag `vX.Y.Z` 和 GitHub Release。同一版本已在 registry 里则跳过。`NPM_TOKEN` 放在仓库 Actions Secrets，不写进仓库。
 
 ## v0.2.6 — 2026-10-30
 
-- **一键更新之后，Cordis 按实际装上的包名挂 `qq-bridge`**：npm 包是 `@fengye_nobug/dsh-qq-bot`。v0.2.5 自带的 `cordis.patch.yml` 仍写 `name: dsh-qq-bot`。Cordis 按这个名字去加载，无作用域包并不存在，插件 id `qq-bridge` 不会挂上，`/api/qq-bridge/settings` 就是 HTTP 404，设置页显示本机接口不可用。现在插件自带的补丁把 `name` 写成 `@fengye_nobug/dsh-qq-bot`。安装成功后，还会看 profile 的 `cordis.patch.yml`、`$DSH_HOME/cordis.patch.yml`（这份文件里有 `qq-bridge` 才改），以及已经装进 profile 的插件补丁。这三处里 `qq-bridge` 的 `name` 如果还是 `dsh-qq-bot` 或 `dsh-qq-bridge`，就改成磁盘上 `package.json` 的包名。别的插件不动，`config` 里的设置不动。界面显示名和消息来源仍是 `dsh-qq-bot`，Cordis id 仍是 `qq-bridge`。从 0.2.5 点「更新」时，跑的仍是 0.2.5 里的安装程序，profile 里手写的旧 `name` 要先改成 `@fengye_nobug/dsh-qq-bot` 再重启；这一版自己跑一键更新时会改。
-- **一键更新卡住时会停掉安装进程**：`dsh plugin add` 或它拉起的 `pnpm add` 超过三分钟没有结束，会停掉这一组进程，并用白话说明，不带路径和堆栈。profile 里的 `.plugin-manager/run.json` 只在记录的进程已经不在、或记录读不懂时删掉；进程还在就不删，也不会再开第二个安装。超时之后如果磁盘上已经是这次要装的版本，仍把 `qq-bridge` 的 `name` 改成实际包名，但不会自动重启，需要自己重启 dsh-web，设置页才会出来。没有确认装上时，可以再点一次「更新」。
+- **一键更新之后，Cordis 按实际装上的包名挂 `qq-bridge-neko`**：npm 包是 `@fengye_nobug/dsh-qq-bridge-neko`。v0.2.5 自带的 `cordis.patch.yml` 仍写 `name: dsh-qq-bridge-neko`。Cordis 按这个名字去加载，无作用域包并不存在，插件 id `qq-bridge-neko` 不会挂上，`/api/qq-bridge-neko/settings` 就是 HTTP 404，设置页显示本机接口不可用。现在插件自带的补丁把 `name` 写成 `@fengye_nobug/dsh-qq-bridge-neko`。安装成功后，还会看 profile 的 `cordis.patch.yml`、`$DSH_HOME/cordis.patch.yml`（这份文件里有 `qq-bridge-neko` 才改），以及已经装进 profile 的插件补丁。这三处里 `qq-bridge-neko` 的 `name` 如果还是 `dsh-qq-bridge-neko` 或 `dsh-qq-bridge`，就改成磁盘上 `package.json` 的包名。别的插件不动，`config` 里的设置不动。界面显示名和消息来源仍是 `dsh-qq-bridge-neko`，Cordis id 仍是 `qq-bridge-neko`。从 0.2.5 点「更新」时，跑的仍是 0.2.5 里的安装程序，profile 里手写的旧 `name` 要先改成 `@fengye_nobug/dsh-qq-bridge-neko` 再重启；这一版自己跑一键更新时会改。
+- **一键更新卡住时会停掉安装进程**：`dsh plugin add` 或它拉起的 `pnpm add` 超过三分钟没有结束，会停掉这一组进程，并用白话说明，不带路径和堆栈。profile 里的 `.plugin-manager/run.json` 只在记录的进程已经不在、或记录读不懂时删掉；进程还在就不删，也不会再开第二个安装。超时之后如果磁盘上已经是这次要装的版本，仍把 `qq-bridge-neko` 的 `name` 改成实际包名，但不会自动重启，需要自己重启 dsh-web，设置页才会出来。没有确认装上时，可以再点一次「更新」。
 
 ## v0.2.5 — 2026-10-30
 
-- **设置卡片可以一键更新**：有新正式版时出现「更新到 vX.Y.Z」。点下去才安装，并重启面板。优先执行 `dsh plugin --profile web add @fengye_nobug/dsh-qq-bot@版本`，走本机 npm / pnpm 已经配置的 registry。插件不写死镜像地址。registry 里找不到这个版本时，改从 GitHub 下载官方源码包（先 github.com，连不上再试同一标签的 codeload.github.com），不走第三方镜像。v0.2.3 及更早标签里的 `package.json` 仍是无作用域名，这种源码包仍然能装。装完提示刷新页面，登录口令可能会变。现有设置还在，不改 NapCat。已经是最新时没有这个按钮。不会安装更旧的版本，也不装草稿和预发布。连不上、安装失败、没能重启，都用白话说明。
-- **「检查更新」和「启动时检查一次」仍然只询问**：不下载、不安装。先问 npm 上的 `@fengye_nobug/dsh-qq-bot`。有比当前新的正式版时不再访问 GitHub。npm 上没有更新，或包还连不上时，才看 GitHub Releases。
-- **npm 包名改为 `@fengye_nobug/dsh-qq-bot`**：无作用域的 `dsh-qq-bot` 发不出去，npm 认为它和已有的 `dsh-qqbot` 太像。npm 上已经发出的是 `@fengye_nobug/dsh-qq-bot@0.2.4`。源码 0.2.5 还没发到 npm，GitHub Release 仍是 v0.2.3。界面显示名和消息来源 `plugin:dsh-qq-bot` 不变，Cordis id 仍是 `qq-bridge`。不要再用 `dsh plugin add dsh-qq-bot@版本`。
+- **设置卡片可以一键更新**：有新正式版时出现「更新到 vX.Y.Z」。点下去才安装，并重启面板。优先执行 `dsh plugin --profile web add @fengye_nobug/dsh-qq-bridge-neko@版本`，走本机 npm / pnpm 已经配置的 registry。插件不写死镜像地址。registry 里找不到这个版本时，改从 GitHub 下载官方源码包（先 github.com，连不上再试同一标签的 codeload.github.com），不走第三方镜像。v0.2.3 及更早标签里的 `package.json` 仍是无作用域名，这种源码包仍然能装。装完提示刷新页面，登录口令可能会变。现有设置还在，不改 NapCat。已经是最新时没有这个按钮。不会安装更旧的版本，也不装草稿和预发布。连不上、安装失败、没能重启，都用白话说明。
+- **「检查更新」和「启动时检查一次」仍然只询问**：不下载、不安装。先问 npm 上的 `@fengye_nobug/dsh-qq-bridge-neko`。有比当前新的正式版时不再访问 GitHub。npm 上没有更新，或包还连不上时，才看 GitHub Releases。
+- **npm 包名改为 `@fengye_nobug/dsh-qq-bridge-neko`**：无作用域的 `dsh-qq-bridge-neko` 发不出去，npm 认为它和已有的 `dsh-qqbot` 太像。npm 上已经发出的是 `@fengye_nobug/dsh-qq-bridge-neko@0.2.4`。源码 0.2.5 还没发到 npm，GitHub Release 仍是 v0.2.3。界面显示名和消息来源 `plugin:dsh-qq-bridge-neko` 不变，Cordis id 仍是 `qq-bridge-neko`。不要再用 `dsh plugin add dsh-qq-bridge-neko@版本`。
 
 ## v0.2.4 — 2026-10-30
 
-- **设置页可以检查 GitHub 上有没有新版本**：卡片显示当前版本。点「检查更新」才请求 `yunfengnobug/dsh-qq-bot` 的 Releases，按 semver 对比。有新版时写出最新版本号、说明摘要，以及 `github:yunfengnobug/dsh-qq-bot#vX.Y.Z` 的安装命令。没有新版、连不上、被限流，都用白话说明，不把英文报错摆到界面上。不会自动下载或安装。
+- **设置页可以检查 GitHub 上有没有新版本**：卡片显示当前版本。点「检查更新」才请求 `SmilessNEKO/dsh_qq_onebot_neko` 的 Releases，按 semver 对比。有新版时写出最新版本号、说明摘要，以及 `github:SmilessNEKO/dsh_qq_onebot_neko#vX.Y.Z` 的安装命令。没有新版、连不上、被限流，都用白话说明，不把英文报错摆到界面上。不会自动下载或安装。
 - **新设置「启动时检查一次」**（`checkUpdateOnStart`，默认 `false`）：打开并保存后，下次启动 dsh-web 向 GitHub 问一次，只写日志。默认关。
 - **安装说明**：README 写清推荐用 Release tag（已发布的是 `v0.2.3`）、Watch Releases、最低环境、白名单先填再 @、三条升级路径（面板升级 / `#vX.Y.Z` / 重装后重启 dsh-web）、与官方 `sj244/dsh-qq-bridge` 不能同时挂同一个 OneBot，以及以后的发版流程（改版本号 → CHANGELOG → tag `vX.Y.Z` → GitHub Release）。
-- **npm 与插件市场**：`package.json` 补了 `publishConfig.access`（`public`）和 `engines.node`（`>=22`），`files` 白名单含更新检查模块和 CHANGELOG。维护者用 `npm login` 后自己 `npm publish`，本仓库不代发。当时写的安装命令是无作用域的 `dsh-qq-bot@<版本>`。这个名字发不出去，实际包名和命令见 v0.2.5。本 fork 还没进 awesome-dsh-plugin，申请步骤和 Issue 模板（连不上 / 不回 / 发不出）写在 README。
+- **npm 与插件市场**：`package.json` 补了 `publishConfig.access`（`public`）和 `engines.node`（`>=22`），`files` 白名单含更新检查模块和 CHANGELOG。维护者用 `npm login` 后自己 `npm publish`，本仓库不代发。当时写的安装命令是无作用域的 `dsh-qq-bridge-neko@<版本>`。这个名字发不出去，实际包名和命令见 v0.2.5。本 fork 还没进 awesome-dsh-plugin，申请步骤和 Issue 模板（连不上 / 不回 / 发不出）写在 README。
 
 ## v0.2.3 — 2026-10-30
 
-- **商城表情按原生表情包发出去，普通图片仍是图片**：入站 `mface`，以及带着 `emoji_id` / `emoji_package_id` / `key` / `summary` 的 `image` 段，会把这四项跟图片哈希留在一起。图片落盘时旁边写 `<hash>.mface.json`。`qq_bridge_sticker` 的 `save` 把它们抄进登记表。`send` 时四项都在就发 OneBot `mface`（`emoji_package_id` 是数字）；缺任何一项仍用 `base64://` 发图片。模型看到的占位符也分开：商城表情是 `[表情包#短哈希]`，普通图片是 `[图片#短哈希]`。没有可下载图片的 `mface` 只有文字占位符，登记不了。没有这些 id 的图（本地图、收藏表情、普通图片）发出去仍是图片。
+- **商城表情按原生表情包发出去，普通图片仍是图片**：入站 `mface`，以及带着 `emoji_id` / `emoji_package_id` / `key` / `summary` 的 `image` 段，会把这四项跟图片哈希留在一起。图片落盘时旁边写 `<hash>.mface.json`。`qq_bridge_neko_sticker` 的 `save` 把它们抄进登记表。`send` 时四项都在就发 OneBot `mface`（`emoji_package_id` 是数字）；缺任何一项仍用 `base64://` 发图片。模型看到的占位符也分开：商城表情是 `[表情包#短哈希]`，普通图片是 `[图片#短哈希]`。没有可下载图片的 `mface` 只有文字占位符，登记不了。没有这些 id 的图（本地图、收藏表情、普通图片）发出去仍是图片。
 
 ## v0.2.2 — 2026-10-30
 
-- **出站把 `[笑哭]` 这类表情名变成系统表情**：`sendToQQ` 在去掉 Markdown 之后，把正文拆成 OneBot 消息段。`[笑哭]` 是 face 182，`[挥手]` 是 face 129，NapCat 显示系统表情。也认入站占位符 `[表情182]` 和 `[CQ:face,id=182]`。对不上的方括号留在文字段里。标记块和 `qq_bridge_send` 都走这条路。`qq_bridge_sticker` 继续按登记表发送图片。字数上限按拆表情之前的正文计算。
+- **出站把 `[笑哭]` 这类表情名变成系统表情**：`sendToQQ` 在去掉 Markdown 之后，把正文拆成 OneBot 消息段。`[笑哭]` 是 face 182，`[挥手]` 是 face 129，NapCat 显示系统表情。也认入站占位符 `[表情182]` 和 `[CQ:face,id=182]`。对不上的方括号留在文字段里。标记块和 `qq_bridge_neko_send` 都走这条路。`qq_bridge_neko_sticker` 继续按登记表发送图片。字数上限按拆表情之前的正文计算。
 
 ## v0.2.1 — 2026-10-30
 
@@ -78,15 +84,15 @@
 
 ## v0.2.0 — 2026-10-30
 
-Fork 功能版本。Cordis 插件 id 仍是 `qq-bridge`。
+Fork 功能版本。Cordis 插件 id 仍是 `qq-bridge-neko`。
 
-- **设置卡片不等宿主设置服务**：DSH 0.2.x 上 `settingsScope` / `webUiSettings` 可能不存在，以前会一直等、卡片不出现。现在加载时就挂到设置页和插件页（含插件详情，只挂在本包上）。宿主设置域还在就用它，否则走 `/api/qq-bridge/settings`。请求带上面板登录 cookie。卡片默认展开。
+- **设置卡片不等宿主设置服务**：DSH 0.2.x 上 `settingsScope` / `webUiSettings` 可能不存在，以前会一直等、卡片不出现。现在加载时就挂到设置页和插件页（含插件详情，只挂在本包上）。宿主设置域还在就用它，否则走 `/api/qq-bridge-neko/settings`。请求带上面板登录 cookie。卡片默认展开。
 - **NapCat 网页地址和缺失目录**：新增设置 `napcatWebuiUrl`（「NapCat 网页管理地址」）。留空仍读 `webui.json`；地址是 `127.0.0.1` 或 `localhost` 时，「打开 WebUI」保持可点，并说明只有跑着 NapCat 的机器能打开。安装目录不存在时「打开文件夹」不会去猜路径，提示自己部署或 Docker 要另填目录。NapCat 已经自己跑着时，可以跳过下载那一段，但 OneBot 端口仍要对上。
 - **设置卡片改成白话**：标签、说明和选项都是中文，例如「群里发出去的是哪一段」「忙的时候怎么插话」。配置键仍是英文。
 - **设置和 NapCat 按钮不再只限本机回环**：本机请求照旧可用。经反向代理访问时，认 DSH 面板已经通过的登录会话，不必再配 `trustedHosts`。没有会话的外网请求仍然拒绝。打到 `127.0.0.1`、但来源是别的网站的请求也仍然拒绝。
 - **出站目的地钉在唤醒那一轮**：标记块、发消息工具、表情包和会话跟随都用这一轮被叫醒时的群或私聊。别的群里只被记录的消息仍会更新“最后一次入站”，但不会把正在回答的这一轮带跑。工具里显式写了群号或 QQ 号时发到那里，并且不引用别的会话的原消息。
 - **按目的地分会话，并限制每个会话保留的轮数**：新设置 `sessionScope`（`single` 默认，沿用一个 `targetSessionId`；`perGroup` 为每个群、每个私聊自动创建或恢复一条 DSH 会话）。映射持久化在状态文件的 `sessionByDest`。`maxRecentTurns` 默认 40，`0` 表示不限制；QQ 驱动的一轮结束后，若宿主有 `compaction.compactNow`，会尽量把更早的轮次压到这个上限。
-- **Fork 品牌改为 dsh-qq-bot**：包名、界面显示名、NapCat 配置里的默认名称改为 dsh-qq-bot。Cordis 插件 id、设置命名空间和 `/api/qq-bridge/...` 仍是 `qq-bridge`，已有 profile 覆盖不用改。v4 消息来源写成 `plugin:dsh-qq-bot`，同时仍认上游的 `plugin:dsh-qq-bridge`。上游 [sj244/dsh-qq-bridge](https://github.com/sj244/dsh-qq-bridge) 的 MIT 版权保留。
+- **Fork 品牌改为 dsh-qq-bridge-neko**：包名、界面显示名、NapCat 配置里的默认名称改为 dsh-qq-bridge-neko。Cordis 插件 id、设置命名空间和 `/api/qq-bridge-neko/...` 仍是 `qq-bridge-neko`，已有 profile 覆盖不用改。v4 消息来源写成 `plugin:dsh-qq-bridge-neko`，同时仍认上游的 `plugin:dsh-qq-bridge`。上游 [sj244/dsh-qq-bridge](https://github.com/sj244/dsh-qq-bridge) 的 MIT 版权保留。
 
 - **修 issue #1：相邻重复的 `[QQ]` 块只发一次**：模型先写回答、再调工具、随后又把同一句重写一遍时，
   本轮正文按 step 累积，拼接后 QQ 会收到连着两句相同的话。现在相邻且完全相同的块只保留一个；
@@ -123,10 +129,10 @@ Fork 功能版本。Cordis 插件 id 仍是 `qq-bridge`。
   现在判据是提示词所依赖设置（`replyMode` 与 `replyMaxChars`）的签名。
 - **目标会话被卸载后不再复用死句柄**：命中缓存句柄时按对象同一性验活，失效就删条目并走 `resume`。
 - **出站被拒时新增独立丢弃台账并回注会话**：标记块被拒（超长、未连接、无目的地）原来只写日志，
-  模型以为已经回复。现在记入 `state.dropped`（环形上限 20 条），并在 `qq_bridge_status` 的
+  模型以为已经回复。现在记入 `state.dropped`（环形上限 20 条），并在 `qq_bridge_neko_status` 的
   `recentDropped` 暴露；同时用 `agent.inject()` 把原因回注会话 —— 只进上下文、不唤醒，
   避免模型再写一条同样超长的消息。被拒的出站仍然不写 `outbox`：那份台账的语义是「真的发到 QQ 了」。
-  两条出站路径（标记块与 `qq_bridge_send` 工具）都记进同一份丢弃台账；
+  两条出站路径（标记块与 `qq_bridge_neko_send` 工具）都记进同一份丢弃台账；
   工具路径不回注会话，因为原因已经随工具结果回给模型。
 - **图片占位符与描述一一对应**：原来占位符按消息里全部图片段生成，而只有落盘成功的图才进描述数组，
   第 1 张落盘失败时第 2 张的描述会落到第 1 个占位符上。现在落盘失败的位置留空位，
@@ -203,7 +209,7 @@ Fork 功能版本。Cordis 插件 id 仍是 `qq-bridge`。
   README 的设置项表同步了这一默认值。
 - **超长出站改为拒绝发送**：出站文本超过 `replyMaxChars` 时**一条都不发**，不再分段。
   `sendToQQ()` 返回 `{ sent: 0, dropped: true, reason: 'too-long', limit, length }`。
-  删除了分段函数 `chunkText()` 与分段发送路径。拒绝原因会经 `qq_bridge_send` 的返回、
+  删除了分段函数 `chunkText()` 与分段发送路径。拒绝原因会经 `qq_bridge_neko_send` 的返回、
   标记块模式的日志、用法说明与设置项说明传到模型侧，文案统一为“超过上限的回复不会发出，请缩短后重发”。
 - **表情包措辞更新**：用法说明里加一条：发了表情包不要解释它是什么意思（除非有人问）。
   人自己看得懂表情包，解释反而奇怪。
@@ -221,8 +227,8 @@ Fork 功能版本。Cordis 插件 id 仍是 `qq-bridge`。
 - **设置卡片的“启动 NapCat”按钮反映运行状态**：NapCat 运行中时，按钮显示“已在运行”并禁用，
   不再重复启动。宿主半新增 `napcatRunning()`，判据有 2 条：本插件启动的进程还没结束，
   或 OneBot WS 已连接（`transport.isOpen()`）。第 2 条用于识别外部启动的 NapCat，例如手动跑过 bat。
-  `GET /api/qq-bridge/napcat` 的返回值新增 `running` 与 `startedByPlugin` 两个布尔字段。
-  `POST /api/qq-bridge/napcat/launch` 在 NapCat 已运行时不再启动，
+  `GET /api/qq-bridge-neko/napcat` 的返回值新增 `running` 与 `startedByPlugin` 两个布尔字段。
+  `POST /api/qq-bridge-neko/napcat/launch` 在 NapCat 已运行时不再启动，
   返回 `{ ok: false, error: 'NapCat 已在运行，未重复启动' }`。
   卡片展开期间每 5 秒轮询一次该接口，用于发现外部启动。
   卡片收起或组件卸载时清掉定时器。
@@ -242,8 +248,8 @@ Fork 功能版本。Cordis 插件 id 仍是 `qq-bridge`。
   错误信息现在写明**期望路径**与**下一步动作**，且不含 token 值。
 - **设置卡片新增 3 个操作按钮**：展开卡片后可以**打开 WebUI**、**启动 NapCat**、**打开文件夹**。
   打开 WebUI 的地址由 `<安装目录>/config/webui.json` 里的 host / port / token 拼成（没读到就禁用并写明原因）；
-  启动复用 `qq_bridge_napcat` 的 launch；打开文件夹按系统调用 `explorer.exe` / `open` / `xdg-open`。
-  宿主半新挂 `GET /api/qq-bridge/napcat` 与 `POST /api/qq-bridge/napcat/launch|reveal` 三条
+  启动复用 `qq_bridge_neko_napcat` 的 launch；打开文件夹按系统调用 `explorer.exe` / `open` / `xdg-open`。
+  宿主半新挂 `GET /api/qq-bridge-neko/napcat` 与 `POST /api/qq-bridge-neko/napcat/launch|reveal` 三条
   **不受 legacy 门控**的路由（两代宿主都有），只服务本机：非 loopback 一律 403。
   token 只拼进 URL，不写日志。
 - **出站更新（二次确认）**：工具模式下，不是 QQ 唤醒的那一轮不再“硬拒绝”。第一次调用只回一句确认、
@@ -261,28 +267,28 @@ Fork 功能版本。Cordis 插件 id 仍是 `qq-bridge`。
   **整条 fiber failed**（客户端半照样显示 tab，看起来就像“设置项全没了”）。现在按方法探测走两条路：
   老宿主维持命名空间，新宿主直接读 entry 配置并 `configure({ auto: true })` 生成页面。
   顺带修掉 `readSettings()` 里若干字段没回落 `config` 的隐患（新模型下会悄悄丢用户配置）。
-  客户端卡片也**两个可写设置 key 都绑**（0.1.5 的 `qq-bridge` vs 0.2.0 的 `include:qq-bridge`），谁 ready 用谁。
+  客户端卡片也**两个可写设置 key 都绑**（0.1.5 的 `qq-bridge-neko` vs 0.2.0 的 `include:qq-bridge-neko`），谁 ready 用谁。
 - **兼容 DSH 0.2.0 的消息格式 v4**：v4 废弃了 `source.kind === 'plugin'`（`assertV4MessageSources` 直接抛
   “requires a producer-owned source kind”），导致 QQ 唤醒的轮次整个失败。注入消息的 source 改为按宿主分叉：
   0.1.5 用老包装、0.2.0 用 producer-owned 的 `{ kind: 'plugin:dsh-qq-bridge' }`（`injectedMessageSource()`，导出可测）。
 - **0.2.0 上设置卡片可用了（自建设置通道）**：0.2.0 的宿主设置桥对第三方插件不给可写域（#677 迁移未完成），
   于是照抄生态里真正能用的做法（皮肤中心）：宿主半**可选**注入 `webServer`，挂一条**只服务本机**的
-  `GET/POST /api/qq-bridge/settings`；值存 `$DSH_HOME/qq-bridge-settings.json`
+  `GET/POST /api/qq-bridge-neko/settings`；值存 `$DSH_HOME/qq-bridge-neko-settings.json`
   （优先级：设置文件 > composition config）；浏览器半在拿不到可写域时自动改走这个接口。
   非 loopback 请求一律 403，只写 schema 白名单里的键。0.1.5 与 0.2.0 上都能改设置了。
 - **表情包（新功能）**：群友发的图可以登记成表情包，之后按情绪或哈希再发出去。新模块 `stickers.js`
   （纯函数 + 文件读写，导出以便测试）：`hashOfBuffer()` 取图片字节 sha256 的前 16 位十六进制，
   `loadStickers()` / `saveStickers()`（原子写，读不到或坏了返回空表）、`upsertSticker()` /
   `findSticker()` / `listStickers()`、`importSticker()`（算 hash、按需复制图片本体、登记）。
-  登记表存 `<statePath 目录>/qq-bridge-stickers.json`，图片本体存同目录的 `qq-bridge-stickers/<hash>.<ext>`。
-  新工具 `qq_bridge_sticker`（**不受 `debugTools` 限制**）有 3 个 action：`list` 列已登记的
+  登记表存 `<statePath 目录>/qq-bridge-neko-stickers.json`，图片本体存同目录的 `qq-bridge-neko-stickers/<hash>.<ext>`。
+  新工具 `qq_bridge_neko_sticker`（**不受 `debugTools` 限制**）有 3 个 action：`list` 列已登记的
   （短哈希 / mood / 截断描述 / 大小）、`save` 登记一张图（给 `hash`，或 `fromLast: true` 取缓冲区里最近一张；
   `mood` 与 `description` 必填）、`send` 发一张（给 `hash` 精确发，或只给 `mood` 在该情绪里随机挑一张）。
-  发送与 `qq_bridge_send` 共用同一道来源闸门（抽出为 `outboundGate()`）；图片本体用 `base64://` 发送，
+  发送与 `qq_bridge_neko_send` 共用同一道来源闸门（抽出为 `outboundGate()`）；图片本体用 `base64://` 发送，
   不用本地路径（NapCat 的 `enableLocalFile2Url` 是 false）；成功记 outbox（`via: 'tool'`、`action: 'sticker'`）
   并更新该条的 `sentCount` / `lastSentAt`。
 - **图片占位符带短哈希 + 描述缓存命中**：入站占位符从 `[图片]：<描述>` 改成 `[图片#<短哈希>]：<描述>`
-  （描述失败写成 `[图片#<短哈希>]：（描述失败：原因）`），模型据此能指着一张具体的图交给 `qq_bridge_sticker`；
+  （描述失败写成 `[图片#<短哈希>]：（描述失败：原因）`），模型据此能指着一张具体的图交给 `qq_bridge_neko_sticker`；
   注入的系统提示同步改了格式说明。图片缓存的文件名改成内容哈希（`<hash>.<ext>`）：同一张图不重复落盘，
   命中已有文件时也拿得到哈希。`describeImage()` 先查登记表，命中且有 `description` 时**直接返回登记的描述、
   不调用多模态模型**（反复出现的图只描述一次），日志只记短哈希。新增测试套件 `test-stickers.mjs`（40 条）；
@@ -318,10 +324,10 @@ Fork 功能版本。Cordis 插件 id 仍是 `qq-bridge`。
 - **唤醒策略（省 token）**：白名单 fail-closed → 被 @ / 命中昵称必唤醒 → 否则按概率（默认 5%）→
   其余**只记录不唤醒**（零模型调用），下次唤醒时取最近 `recentChatLimit` 条（默认 8）作为上下文附上；
   没进摘要的旧条目随这次清缓冲一起删掉，不会留到下一次唤醒。
-- **会话跟随** `qq_bridge_listen`：一段线性对话开个短窗，期间普通消息也唤醒，不必每句都 @。
+- **会话跟随** `qq_bridge_neko_listen`：一段线性对话开个短窗，期间普通消息也唤醒，不必每句都 @。
 - **OneBot v11 传输**：内置 WebSocket（**零第三方运行时依赖**），指数退避重连、心跳看门狗、action/echo 配对。
 - **出站方式开关** `replyMode`：
-  `marker`（只发 `[QQ]…[/QQ]` 块）｜`tool`（关掉标记块，改用 `qq_bridge_send` 工具，**发不出去时有明确反馈**）｜`always`。
+  `marker`（只发 `[QQ]…[/QQ]` 块）｜`tool`（关掉标记块，改用 `qq_bridge_neko_send` 工具，**发不出去时有明确反馈**）｜`always`。
 - **投递方式** `delivery`：`auto`（目标正忙时**插话**）、`followup`（排队）、`steer`（总是插话）。
 - **设置界面**：`设置 → 插件 → 插件配置` 里的“QQ 桥接”卡片（目标会话下拉、昵称、白名单、概率、出站/投递方式……），
   **保存即生效**，改出站方式会立刻重挂注入给会话的用法说明。

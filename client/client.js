@@ -1,7 +1,7 @@
 /**
- * dsh-qq-bot —— 浏览器半（client half）
+ * dsh-qq-bridge-neko —— 浏览器半（client half）
  *
- * 作用：在 **设置 → 插件 → 插件配置** 里放一张名为“QQ 桥接”的卡片，
+ * 作用：在 **设置 → 插件 → 插件配置** 里放一张名为“QQ 桥接 Neko”的卡片，
  * 用来改昵称、白名单、唤醒概率、目标会话这些设置 —— 也就是用户要的那个界面。
  *
  * 为什么这里的东西长得不像源码：
@@ -13,12 +13,12 @@
  *   参考实现：第三方插件 `dshmarket` 的 `client/client.js`（同样是手写/预构建产物）。
  *
  * 与宿主半的约定：
- *   - `id` 必须等于 npm 包名 `@fengye_nobug/dsh-qq-bot`；
- *   - 卡片注册进 `settings.plugin.item`，**key 必须等于宿主注册的 settings 命名空间** `qq-bridge`，
+ *   - `id` 必须等于 npm 包名 `@fengye_nobug/dsh-qq-bridge-neko`；
+ *   - 卡片注册进 `settings.plugin.item`，**key 必须等于宿主注册的 settings 命名空间** `qq-bridge-neko`，
  *     否则配置页那一栏里什么都不会出现（它按命名空间派发）。
  */
 window.__ModuleLoader__.load({
-  id: '@fengye_nobug/dsh-qq-bot',
+  id: '@fengye_nobug/dsh-qq-bridge-neko',
   factory: (require) => {
     var module = { exports: {} }
     var exports = module.exports
@@ -29,7 +29,7 @@ window.__ModuleLoader__.load({
     const h = react.createElement
 
     /** settings 命名空间，必须与 index.js 里的 NS 一致。 */
-    const NS = 'qq-bridge'
+    const NS = 'qq-bridge-neko'
 
     // ── 表单描述 ──────────────────────────────────────────────────────────────
     // 加一个设置项 = 在这里加一行。kind:
@@ -210,7 +210,7 @@ window.__ModuleLoader__.load({
           ['tool', '用发消息工具'],
           ['always', '整段回答都进群（慎用）'],
         ],
-        hint: '「发给群」的那段要用 [QQ] 和 [/QQ] 包起来，包外面的话不会进群。选「用发消息工具」就改调 qq_bridge_send。选「整段回答都进群」会把思考过程也发出去，一般别用。',
+        hint: '「发给群」的那段要用 [QQ] 和 [/QQ] 包起来，包外面的话不会进群。选「用发消息工具」就改调 qq_bridge_neko_send。选「整段回答都进群」会把思考过程也发出去，一般别用。',
       },
       {
         key: 'delivery',
@@ -1316,11 +1316,11 @@ window.__ModuleLoader__.load({
         return h(
           'div',
           { style: S.wrap },
-          h('div', { style: S.title }, 'QQ 桥接'),
+          h('div', { style: S.title }, 'QQ 桥接 Neko'),
           h(
             'div',
             { style: S.sub },
-            '这个部署没有为 qq-bridge 提供可写的设置服务（settings 提供者没挂载，或连接处于内存模式）。',
+            '这个部署没有为 qq-bridge-neko 提供可写的设置服务（settings 提供者没挂载，或连接处于内存模式）。',
           ),
           h(
             'div',
@@ -1330,7 +1330,7 @@ window.__ModuleLoader__.load({
           h(
             'div',
             { style: S.hint },
-            '先看诊断里「本机接口」那项：若宿主没有 webServer 服务，接口挂不上（此时仍可点右上角「打开配置文件」，改 profile 的 cordis.patch.yml 里 `- id: qq-bridge` 的 config 后重启）。',
+            '先看诊断里「本机接口」那项：若宿主没有 webServer 服务，接口挂不上（此时仍可点右上角「打开配置文件」，改 profile 的 cordis.patch.yml 里 `- id: qq-bridge-neko` 的 config 后重启）。',
           ),
           h(
             'div',
@@ -1658,7 +1658,7 @@ window.__ModuleLoader__.load({
       const header = h(
         'button',
         { type: 'button', onClick: () => setOpen(!open), 'aria-expanded': open, style: S.header },
-        h('span', { style: S.title }, 'QQ 桥接'),
+        h('span', { style: S.title }, 'QQ 桥接 Neko'),
         h('span', { style: S.sub }, dirty ? '有未保存的改动' : pluginVersion ? `当前版本 ${pluginVersion}` : '把固定的 DSH 会话接到 QQ'),
         h('span', { style: S.chevron }, open ? '▴' : '▾'),
       )
@@ -1764,23 +1764,23 @@ window.__ModuleLoader__.load({
      * 绑一个**可写的**设置域。导出（经 __test）以便离线测试。
      *
      * 两代 DSH 对“这个插件的设置”用的 key 不一样：
-     *   0.1.5-rc.3：settings 命名空间 —— `qq-bridge`（宿主半 register 出来的）；
-     *   0.2.0     ：profile **entry id** —— `include:qq-bridge`（由插件自己的 Config 投影而来）。
-     * 只绑前者的话，0.2.0 上永远拿到 `unavailable`，用户看到的就是“这个部署没有为 qq-bridge
+     *   0.1.5-rc.3：settings 命名空间 —— `qq-bridge-neko`（宿主半 register 出来的）；
+     *   0.2.0     ：profile **entry id** —— `include:qq-bridge-neko`（由插件自己的 Config 投影而来）。
+     * 只绑前者的话，0.2.0 上永远拿到 `unavailable`，用户看到的就是“这个部署没有为 qq-bridge-neko
      * 提供可写的设置服务”（2026-10-01 桌面端真机）。所以**两个都绑，谁 ready 用谁**。
      */
     /** 0.2.0 的兜底数据源：宿主自己挂的本机接口（见宿主半的 handleSettingsRequest）。 */
-    const API_PATH = '/api/qq-bridge/settings'
+    const API_PATH = '/api/qq-bridge-neko/settings'
     /** NapCat 操作接口（宿主半不受 legacy 门控，两代宿主都挂）。 */
-    const NAPCAT_API = '/api/qq-bridge/napcat'
+    const NAPCAT_API = '/api/qq-bridge-neko/napcat'
     /** 检查更新。GET 只读当前版本；POST 不带 action 只检查。安装要另发 action 为 apply。浏览器不直接访问 npm 或 GitHub。 */
-    const UPDATE_API = '/api/qq-bridge/update'
+    const UPDATE_API = '/api/qq-bridge-neko/update'
     /** 群白名单的群名和头像。只读；保存仍走设置接口。 */
-    const GROUP_META_API = '/api/qq-bridge/groups'
+    const GROUP_META_API = '/api/qq-bridge-neko/groups'
     /** 可选项清单：已配置的提供商 / 模型 / 人设预设。只读，用来做下拉。 */
-    const CATALOG_API = '/api/qq-bridge/catalog'
+    const CATALOG_API = '/api/qq-bridge-neko/catalog'
     /** 已知的 QQ 目的地（群 / 私聊），给「单独设置」那栏用。只读。 */
-    const PROFILES_API = '/api/qq-bridge/profiles'
+    const PROFILES_API = '/api/qq-bridge-neko/profiles'
     /** 稳定引用：useSyncExternalStore 的 getSnapshot 每次返回新对象会死循环。 */
     const LOADING_SNAPSHOT = { status: 'loading' }
     const UNAVAILABLE_SNAPSHOT = { status: 'unavailable' }
@@ -1859,7 +1859,7 @@ window.__ModuleLoader__.load({
         },
         /** 撤销一个字段的本机覆盖：接口本来就支持 `unset`，这里只是把它暴露给卡片。 */
         unset: async (field) => {
-          if (typeof fetch !== 'function') throw new Error('qq-bridge: 这个环境没有 fetch')
+          if (typeof fetch !== 'function') throw new Error('qq-bridge-neko: 这个环境没有 fetch')
           const res = await fetch(API_PATH, {
             method: 'POST',
             credentials: 'include',
@@ -1877,9 +1877,9 @@ window.__ModuleLoader__.load({
      * 绑一个**可写的**设置域。导出（经 __test）以便离线测试。
      *
      * 两代 DSH 对“这个插件的设置”用的 key 不一样：
-     *   0.1.5-rc.3：settings 命名空间 —— `qq-bridge`（宿主半 register 出来的）；
-     *   0.2.0     ：profile **entry id** —— `include:qq-bridge`（由插件自己的 Config 投影而来）。
-     * 只绑前者的话，0.2.0 上永远拿到 `unavailable`，用户看到的就是“这个部署没有为 qq-bridge
+     *   0.1.5-rc.3：settings 命名空间 —— `qq-bridge-neko`（宿主半 register 出来的）；
+     *   0.2.0     ：profile **entry id** —— `include:qq-bridge-neko`（由插件自己的 Config 投影而来）。
+     * 只绑前者的话，0.2.0 上永远拿到 `unavailable`，用户看到的就是“这个部署没有为 qq-bridge-neko
      * 提供可写的设置服务”（2026-10-01 桌面端真机）。所以**两个都绑、谁 ready 用谁**；
      * **全都不 ready** 时再退到宿主自己的本机接口（0.2.0 的兜底，见 createApiScope）。
      */
@@ -1888,13 +1888,13 @@ window.__ModuleLoader__.load({
       const candidates = []
       // 0.2.0 的表单 key 到底叫什么，源码里能看到的写法**全试一遍**（谁 ready 用谁）：
       // settings 命名空间 / profile entry id / 包名，以及带 include: 前缀的两种。
-      for (const namespace of [NS, `include:${NS}`, '@fengye_nobug/dsh-qq-bot', 'include:@fengye_nobug/dsh-qq-bot', 'dsh-qq-bot', 'include:dsh-qq-bot', 'dsh-qq-bridge', 'include:dsh-qq-bridge']) {
+      for (const namespace of [NS, `include:${NS}`, '@fengye_nobug/dsh-qq-bridge-neko', 'include:@fengye_nobug/dsh-qq-bridge-neko', 'dsh-qq-bridge-neko', 'include:dsh-qq-bridge-neko', 'dsh-qq-bridge', 'include:dsh-qq-bridge']) {
         try {
           const scope = service.bind({ namespace })
           if (scope && typeof scope === 'object') candidates.push({ namespace, scope })
         } catch (error) {
           // 某个候选绑不上不影响另一个。
-          console?.debug?.(`qq-bridge: bind(${namespace}) 失败：${error?.message ?? error}`)
+          console?.debug?.(`qq-bridge-neko: bind(${namespace}) 失败：${error?.message ?? error}`)
         }
       }
       const snapshotOf = (candidate) => {
@@ -1957,7 +1957,7 @@ window.__ModuleLoader__.load({
           const candidate = readyScope()
           if (candidate && typeof candidate.scope.set === 'function') return candidate.scope.set(field, value)
           if (api.getSnapshot().status === 'ready') return api.set(field, value)
-          throw new Error('qq-bridge: 没有可写的设置源')
+          throw new Error('qq-bridge-neko: 没有可写的设置源')
         },
         /**
          * 撤销一个字段的本机覆盖。
@@ -1977,16 +1977,16 @@ window.__ModuleLoader__.load({
     function subjectIsOurs(subject) {
       if (!subject || typeof subject !== 'object') return false
       const pkgName = subject.pkg && typeof subject.pkg === 'object' ? String(subject.pkg.name ?? '') : ''
-      if (pkgName === '@fengye_nobug/dsh-qq-bot' || pkgName === 'dsh-qq-bot' || pkgName === 'dsh-qq-bridge') return true
+      if (pkgName === '@fengye_nobug/dsh-qq-bridge-neko' || pkgName === 'dsh-qq-bridge-neko' || pkgName === 'dsh-qq-bridge') return true
       const id = String(subject.id ?? '')
-      if (id === NS || id === '@fengye_nobug/dsh-qq-bot' || id === 'dsh-qq-bot' || id === 'dsh-qq-bridge') return true
-      if (subject.kind === 'item' && id.includes('qq-bridge')) return true
+      if (id === NS || id === '@fengye_nobug/dsh-qq-bridge-neko' || id === 'dsh-qq-bridge-neko' || id === 'dsh-qq-bridge') return true
+      if (subject.kind === 'item' && id.includes('qq-bridge-neko')) return true
       const pkg = String(subject.package ?? subject.packageName ?? '')
-      return pkg === '@fengye_nobug/dsh-qq-bot' || pkg === 'dsh-qq-bot' || pkg === 'dsh-qq-bridge'
+      return pkg === '@fengye_nobug/dsh-qq-bridge-neko' || pkg === 'dsh-qq-bridge-neko' || pkg === 'dsh-qq-bridge'
     }
 
     /**
-     * 不经过宿主设置服务，直接读写 `/api/qq-bridge/settings`。
+     * 不经过宿主设置服务，直接读写 `/api/qq-bridge-neko/settings`。
      * DSH 0.2.x 上 `settingsScope` / `webUiSettings` 可能根本不存在；再等它们，卡片永远不会挂上。
      */
     function apiBoundScope() {
@@ -2067,15 +2067,15 @@ window.__ModuleLoader__.load({
           try {
             scoped.slots.inject(slot, () => scoped.slots.register({ ...options, name: slot }, render || card))
           } catch (error) {
-            console?.debug?.(`qq-bridge: slot ${slot} unavailable (${error?.message ?? error})`)
+            console?.debug?.(`qq-bridge-neko: slot ${slot} unavailable (${error?.message ?? error})`)
           }
         }
-        registerCard('settings.plugins.tab', { id: NS, order: 100, label: () => 'QQ 桥接' })
+        registerCard('settings.plugins.tab', { id: NS, order: 100, label: () => 'QQ 桥接 Neko' })
         registerCard('settings.plugin.item', { key: NS })
-        registerCard('plugins.tab', { id: NS, order: 100, label: () => 'QQ 桥接' })
+        registerCard('plugins.tab', { id: NS, order: 100, label: () => 'QQ 桥接 Neko' })
         registerCard(
           'plugins.detail.section',
-          { id: 'qq-bridge-settings', order: 50, label: () => 'QQ 桥接设置' },
+          { id: 'qq-bridge-neko-settings', order: 50, label: () => 'QQ 桥接 Neko 设置' },
           (props) => {
             const subject = props && props.subject
             if (subject && !subjectIsOurs(subject)) return null
@@ -2107,7 +2107,7 @@ window.__ModuleLoader__.load({
     exports.inject = inject
     // 导出 name：Cordis 用它做插件标识，Slots inspect 里的 registrant 会显示成它
     // （不导的话那边显示的是产物里的 fallback 短名，排障时认不出是谁注册的卡片）。
-    exports.name = '@fengye_nobug/dsh-qq-bot'
+    exports.name = '@fengye_nobug/dsh-qq-bridge-neko'
     // 纯函数给离线测试用（test-smoke.mjs 会在假 ctx 里真跑这个 bundle）。
     // Cordis 只认 apply / inject / name / Config，多余的导出它不管。
     exports.__test = { sessionOptions, draftFrom, parse, fields: FIELDS, bindSettings, groupDisplayRows }

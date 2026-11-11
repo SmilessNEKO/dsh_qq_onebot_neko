@@ -1,8 +1,8 @@
-# dsh-qq-bot
+# dsh-qq-bridge-neko
 
 把已经在用的 DSH 会话接到 QQ 个人号。协议是 OneBot，常用实现是 NapCat。
 
-Cordis 插件 id 是 `qq-bridge`。npm 包名是 `@fengye_nobug/dsh-qq-bot`。界面显示名是 dsh-qq-bot。
+Cordis 插件 id 是 `qq-bridge-neko`。npm 包名是 `@fengye_nobug/dsh-qq-bridge-neko`。界面显示名是 dsh-qq-bridge-neko。
 
 唤醒、出站、图片、NapCat 和全部设置项见 [`DESIGN.md`](./DESIGN.md)。变更见 [`CHANGELOG.md`](./CHANGELOG.md)。
 
@@ -34,29 +34,31 @@ Cordis 插件 id 是 `qq-bridge`。npm 包名是 `@fengye_nobug/dsh-qq-bot`。�
 
 不做审批桥接，也不走 QQ 官方机器人。
 
-## 安装
+## 安装（独立发行版）
 
-日常安装用 npm 上已经发出的版本。仓库源码如果比已发布的版本新，不要直接装 main。
+这是一个**独立身份**的插件：npm 包名 `@fengye_nobug/dsh-qq-bridge-neko`、Cordis id 与 settings 命名空间 `qq-bridge-neko`、接口 `/api/qq-bridge-neko/...`、工具 `qq_bridge_neko_*`、状态文件 `qq-bridge-neko-*.json`，都与旧的 `qq-bridge` / `@fengye_nobug/dsh-qq-bot` 不同。因此它可以和旧插件**并存在同一个 profile**：设置页会多出一张「QQ 桥接 Neko」卡片，宿主不再按 id 去重把新代码盖掉。两边各自连自己的 OneBot（同时连同一个端口会抢连接，测试时只开一边或配不同端口）。
 
-```sh
-dsh plugin --profile web add @fengye_nobug/dsh-qq-bot@0.2.5
-```
+发版走本地打包 + 上传到本仓库 GitHub Release，不通过上游 main、也不依赖 npm registry。装其中一种：
 
-registry 里还没有这一版时：
+本地打好的包（`npm pack` 产物，文件名形如 `fengye_nobug-dsh-qq-bridge-neko-1.0.0.tgz`）：
 
 ```sh
-dsh plugin --profile web add github:yunfengnobug/dsh-qq-bot#v0.2.5
+dsh plugin --profile web add <本地 .tgz 的绝对路径>
 ```
 
-装完重启 dsh-web。
+或从本仓库的 GitHub Release 装：
+
+```sh
+dsh plugin --profile web add github:SmilessNEKO/dsh_qq_onebot_neko#v1.0.0
+```
+
+装完重启 dsh-web 并刷新页面（新 bundle 才会加载，登录口令可能会变）。
 
 环境：DSH 0.1.5-rc.3，或 0.2.0 及以后；Node ≥ 22；NapCat 的 OneBot v11 正向 WebSocket。
 
-`cordis.patch.yml` 里 `qq-bridge` 的 `name` 写成 `@fengye_nobug/dsh-qq-bot`。写成 `dsh-qq-bot` 或 `dsh-qq-bridge` 时插件挂不上，设置接口是 HTTP 404。
+`cordis.patch.yml` 里 `qq-bridge-neko` 这一行的 `name` 必须写成 `@fengye_nobug/dsh-qq-bridge-neko`；写成无作用域的 `dsh-qq-bridge-neko` 时 Cordis 解析不到模块，插件挂不上、设置接口是 HTTP 404。profile 里按 `id: qq-bridge-neko` 写的覆盖可以留着，其中的 `name` 同样用上面的包名。
 
-不要和另一个 Cordis id 也是 `qq-bridge` 的 QQ 插件一起挂，它们会抢同一条 OneBot。已经装着 `dsh-qq-bridge` 时，先卸掉再装上面的包，然后重启。profile 里按 `id: qq-bridge` 写的覆盖可以留着；其中的 `name` 同样写成 `@fengye_nobug/dsh-qq-bot`。
-
-升级的几条路径、开发期怎么链到本地目录，见 [`DESIGN.md`](./DESIGN.md) 的「使用细节」。
+开发期怎么链到本地目录、升级的几条路径，见 [`DESIGN.md`](./DESIGN.md) 的「使用细节」。
 
 ## 配置
 
@@ -64,7 +66,7 @@ dsh plugin --profile web add github:yunfengnobug/dsh-qq-bot#v0.2.5
 
 群白名单仍按群号填写。连上之后，卡片里每个群号旁边会显示当前群名和头像。没连上，或暂时查不到，就只显示群号，保存不受影响。
 
-DSH 0.2 的卡片把值写进 `$DSH_HOME/qq-bridge-settings.json`。这份文件比 `cordis.patch.yml` 优先，保存后马上生效，重启还在。只改 `cordis.patch.yml` 要重启。
+DSH 0.2 的卡片把值写进 `$DSH_HOME/qq-bridge-neko-settings.json`。这份文件比 `cordis.patch.yml` 优先，保存后马上生效，重启还在。只改 `cordis.patch.yml` 要重启。
 
 主人 QQ 在设置卡片里就叫「主人 QQ」（`ownerWhitelist`，默认 `[]`）。只有这些号能在 QQ 里改群白名单。**留空 = 这些命令不会生效。** 多个号用逗号分开。保存后下一条消息就生效。只改 `cordis.patch.yml` 要重启；设置文件里已有同名键时，以设置文件为准。
 
@@ -100,7 +102,7 @@ DSH 0.2 的卡片把值写进 `$DSH_HOME/qq-bridge-settings.json`。这份文件
 
 其余键见 [`DESIGN.md`](./DESIGN.md)。
 
-识图服务商、模型优先级链、新会话默认模型与预设、以及每个目的地的个性化，都在设置卡片里用下拉 / 勾选完成：卡片会向 `/api/qq-bridge/catalog`（已配置提供商、各提供商的模型、是否支持识图、预设列表）和 `/api/qq-bridge/profiles`（已接入的群 / 私聊）取清单，不用手抄 id。刚装好、清单还没拉到时，对应下拉会先退化成一个可手填的输入框，拉到之后自动变成选项。两个接口都是只读，准入和设置接口相同。
+识图服务商、模型优先级链、新会话默认模型与预设、以及每个目的地的个性化，都在设置卡片里用下拉 / 勾选完成：卡片会向 `/api/qq-bridge-neko/catalog`（已配置提供商、各提供商的模型、是否支持识图、预设列表）和 `/api/qq-bridge-neko/profiles`（已接入的群 / 私聊）取清单，不用手抄 id。刚装好、清单还没拉到时，对应下拉会先退化成一个可手填的输入框，拉到之后自动变成选项。两个接口都是只读，准入和设置接口相同。
 
 ## 使用
 
@@ -128,13 +130,14 @@ DSH 0.2 的卡片把值写进 `$DSH_HOME/qq-bridge-settings.json`。这份文件
 
 「检查更新」和「启动时检查一次」只询问，不会安装。
 
-维护者发版：
+本仓库发版（本地维护）：
 
-1. 改 `package.json` 的 `version`。
-2. 在 [`CHANGELOG.md`](./CHANGELOG.md) 顶部写这一版。
-3. 推到 `main`。
+1. 改 `package.json` 的 `version`，在 [`CHANGELOG.md`](./CHANGELOG.md) 顶部写这一版。
+2. 本地 `npm pack` 打出 `.tgz`，`git` 提交并推到本仓库、打 `vX.Y.Z` tag。
+3. 在 GitHub 上建 Release，把 `.tgz` 作为资产上传（`.gitignore` 已忽略 `*.tgz`，不入库）。
+4. 用上面的 `dsh plugin add` 命令装 `.tgz` 或 `#vX.Y.Z` 测试。
 
-推到 `main` 后，Actions 在 npm 上还没有 `@fengye_nobug/dsh-qq-bot` 的这一版时才发布，并补 tag `vX.Y.Z` 和 GitHub Release。`NPM_TOKEN` 放在仓库 Actions Secrets，不写进仓库。
+不通过上游 main 发布，也不依赖 npm registry；`.github/workflows/npm-publish.yml` 保留为**手动**触发的可选通道，默认不在 push 时自动发布。
 
 ## 许可
 

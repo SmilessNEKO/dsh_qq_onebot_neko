@@ -1,22 +1,23 @@
-# dsh-qq-bot bundle patch: one insert row carrying the whole plugin config.
-# Cordis 插件 id 仍是 qq-bridge（与上游兼容）。界面显示名仍是 dsh-qq-bot。
+# dsh-qq-bridge-neko bundle patch: one insert row carrying the whole plugin config.
+# 独立发行版：Cordis id / 包名 / settings 命名空间 / API 路径 / 工具名 / state 文件名
+# 全部与旧的 qq-bridge 插件不同，因此可以和它并存在同一个 profile（各自连自己的 OneBot）。
 # name 是 Node 用来加载插件的包名，必须等于实际安装的 npm 包。
-# 无作用域的 dsh-qq-bot 发不出去；写成那个名字时 Cordis 解析不到模块，
-# qq-bridge 不会挂上，/api/qq-bridge/settings 就是 HTTP 404。
+# 无作用域的 dsh-qq-bridge-neko 发不出去；写成那个名字时 Cordis 解析不到模块，
+# qq-bridge-neko 不会挂上，/api/qq-bridge-neko/settings 就是 HTTP 404。
 # 用户在 profile 的 cordis.patch.yml 里按 id 覆盖这一行；patch 会替换整份 config，
 # 所以要保留的键请全部重述。覆盖里如果写了 name，也要写成同一个包名。
 - insert:
-    - id: qq-bridge
-      name: '@fengye_nobug/dsh-qq-bot'
+    - id: qq-bridge-neko
+      name: '@fengye_nobug/dsh-qq-bridge-neko'
       config:
         # 固定目标会话：QQ 的一切都注入这一个会话（保留其上下文）。
         # 留空表示不驱动任何会话。
         targetSessionId: ''
         # 可选：resume 目标会话时挂载的 agent preset（留空则沿用会话 header 里记录的）。
         agentPreset: ''
-        # 状态文件（最近聊天缓冲 + 唤醒日志 + 出站目的地）。留空 = $DSH_HOME/qq-bridge-state.json
+        # 状态文件（最近聊天缓冲 + 唤醒日志 + 出站目的地）。留空 = $DSH_HOME/qq-bridge-neko-state.json
         statePath: ''
-        # 注册 qq_bridge_status / qq_bridge_send / qq_bridge_transport / qq_bridge_simulate
+        # 注册 qq_bridge_neko_status / qq_bridge_neko_send / qq_bridge_neko_transport / qq_bridge_neko_simulate
         # 四个调试工具（排障用，正式环境可关）。
         debugTools: true
 
@@ -39,7 +40,7 @@
         heartbeatTimeoutMs: 90000
 
         # ── M5：NapCat 自助托管（“一键包”体验，但不真打包）─────────────────────
-        # 注意：这些只是**参数**。下载 / 安装 / 写配置一律由显式调用 qq_bridge_napcat 触发，
+        # 注意：这些只是**参数**。下载 / 安装 / 写配置一律由显式调用 qq_bridge_neko_napcat 触发，
         # 插件加载时绝不自作主张下载或安装。唯一例外是 autoStartNapcat：打开后 DSH 启动延迟
         # 若干秒只「启动已经装好的」NapCat（需先手动装好并登录过一次），不碰下载 / 安装。
         # NapCat 安装目录；留空 = $DSH_HOME/napcat
@@ -64,7 +65,7 @@
         sessionScope: single
         # 每个会话最多保留的最近轮数。0 = 不限制。
         maxRecentTurns: 40
-        # ↓ 以下几项是 settings 命名空间 qq-bridge 的默认值（设置界面可覆盖）
+        # ↓ 以下几项是 settings 命名空间 qq-bridge-neko 的默认值（设置界面可覆盖）
         nicknames: ['244', '小助手']
         # 非昵称消息的唤醒概率（5%）
         wakeProbability: 0.05

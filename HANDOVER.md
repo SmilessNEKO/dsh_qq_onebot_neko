@@ -1,6 +1,6 @@
 # 交接说明
 
-> 这份交接说明来自上游 sj244/dsh-qq-bridge。本 fork 的 npm 包名是 **`@fengye_nobug/dsh-qq-bot`**（无作用域的 `dsh-qq-bot` 发不出去）。界面显示名仍是 dsh-qq-bot。Cordis 插件 id 仍是 `qq-bridge`。文中的本机路径、会话 id 若出现占位符，不要换成真实环境。
+> 这份交接说明来自上游 sj244/dsh-qq-bridge。本 fork 的 npm 包名是 **`@fengye_nobug/dsh-qq-bridge-neko`**（无作用域的 `dsh-qq-bridge-neko` 发不出去）。界面显示名是「QQ 桥接 Neko」。Cordis 插件 id 是 `qq-bridge-neko`（独立 id，与旧 `qq-bridge` 插件不同、可并存）。文中的本机路径、会话 id 若出现占位符，不要换成真实环境。
 
 > 交接对象：接手本项目的专门 agent
 > 交接人：DSH 工作区会话 `<HANDOVER_SESSION>` 的 agent
@@ -42,7 +42,7 @@
 | — | 插件在 profile 中的安装 | ⚠️ **已被用户卸载**（源码保留在本目录，可随时重装） |
 | — | 离线测试 | ✅ `node test-smoke.mjs`（策略/工具）+ `node test-onebot.mjs`（M2 端到端）+ `node test-napcat.mjs`（M5 解包/校验），全绿 |
 
-> 卸载是用户的决定（当时 DSH 新版不稳定、不想叠加变量），**不是代码不可用**。M1 曾通过 `qq_bridge_status` / `qq_bridge_simulate` 两个工具在运行中的 host 内跑通三条分支。
+> 卸载是用户的决定（当时 DSH 新版不稳定、不想叠加变量），**不是代码不可用**。M1 曾通过 `qq_bridge_neko_status` / `qq_bridge_neko_simulate` 两个工具在运行中的 host 内跑通三条分支。
 
 ---
 
@@ -56,7 +56,7 @@
 | `stickers.js` | 6.5 KB | **表情包登记表**：内容哈希、读写、查找、原子写、复制图片本体（见 §13.9） |
 | `cordis.patch.yml` | 3.3 KB | bundle 挂载声明 + 安装期默认配置（composition base，含 M2/M5 键） |
 | `client\client.js` | 42.7 KB | **M3 浏览器半**：设置页里那张“QQ 桥接”卡片（手写 `__ModuleLoader__` bundle，见 §15） |
-| `package.json` | 1.6 KB | 包声明：`name=@fengye_nobug/dsh-qq-bot`、`type=module`、`dsh.bundle.patch`、**`dsh.client`**。Cordis id 仍是 `qq-bridge`。界面显示名仍是 dsh-qq-bot |
+| `package.json` | 1.6 KB | 包声明：`name=@fengye_nobug/dsh-qq-bridge-neko`、`type=module`、`dsh.bundle.patch`、**`dsh.client`**。Cordis id 仍是 `qq-bridge-neko`。界面显示名仍是 dsh-qq-bridge-neko |
 | `DESIGN.md` | 12.9 KB | 设计草案：与现有 QQ 插件的区别、唤醒策略、接口表、设置项、里程碑、安全注意 |
 | `README.md` | 31.6 KB | 安装/使用说明，含 OneBot 接入、access_token 配置、NapCat 一键托管、依赖解析坑与解法 |
 | `CHANGELOG.md` | 23.1 KB | 逐版本变更记录，最新版本在最前面 |
@@ -96,7 +96,7 @@
   ```js
   agent.followup(createUserMessage({
     content: [{ type: 'text', text }],
-    source: { kind: 'plugin', plugin: 'qq-bridge' },
+    source: { kind: 'plugin', plugin: 'qq-bridge-neko' },
   }))
   ```
   `followup` 会**排入一轮普通对话并唤醒 driver**；agent 忙时自动排队，不会并发重叠。
@@ -149,7 +149,7 @@ ctx.on('session/event', (session, event) => {
 
 ### 4.5 状态持久化
 
-`statePath` 默认 `$DSH_HOME/qq-bridge-state.json`，结构：
+`statePath` 默认 `$DSH_HOME/qq-bridge-neko-state.json`，结构：
 
 ```json
 { "buffer": [...], "log": [...], "outbox": [...] }
@@ -160,7 +160,7 @@ ctx.on('session/event', (session, event) => {
 
 ### 4.6 设置与配置
 
-**两层**：`cordis.patch.yml`（安装期 composition base）→ `settings` 命名空间 `qq-bridge`（用户层，界面/`settings.yaml` 可覆盖）。
+**两层**：`cordis.patch.yml`（安装期 composition base）→ `settings` 命名空间 `qq-bridge-neko`（用户层，界面/`settings.yaml` 可覆盖）。
 
 | settings 键 | 默认 | 说明 |
 |---|---|---|
@@ -190,17 +190,17 @@ Config（`cordis.patch.yml`）另有：`agentPreset`（resume 时挂载的 prese
 
 ### 4.7 调试工具（`debugTools: true` 时注册）
 
-- `qq_bridge_status` —— 设置、目标会话是否已加载、**OneBot 连接状态**、目的地、缓冲条数、
+- `qq_bridge_neko_status` —— 设置、目标会话是否已加载、**OneBot 连接状态**、目的地、缓冲条数、
   最近唤醒日志、待发文本、state 路径。
-- `qq_bridge_send` —— **（M2 新增）** 立刻发一条消息，不经过目标会话；
+- `qq_bridge_neko_send` —— **（M2 新增）** 立刻发一条消息，不经过目标会话；
   可指定 `userId` / `groupId`，都不给则用最后一次入站目的地。**验证出站最直接的手段。**
-- `qq_bridge_transport` —— **（M2 新增）** 看连接状态（含 `accessTokenEnv` 是否解析到 token），
+- `qq_bridge_neko_transport` —— **（M2 新增）** 看连接状态（含 `accessTokenEnv` 是否解析到 token），
   或 `action: 'reconnect'` 强制重连。
-- `qq_bridge_simulate` —— 模拟一条入站消息走完整策略；`dryRun: true` 只返回决策、不注入。
+- `qq_bridge_neko_simulate` —— 模拟一条入站消息走完整策略；`dryRun: true` 只返回决策、不注入。
 
 **M5 新增（不受 `debugTools` 开关限制，因为它是本插件的“一键”入口而不是调试工具）：**
 
-- `qq_bridge_napcat` —— `status` / `download` / `configure` / `launch` / `stop`。
+- `qq_bridge_neko_napcat` —— `status` / `download` / `configure` / `launch` / `stop`。
   典型顺序：`status` → `download` →（**用户手动**跑一次 `NapCatInstaller.exe`）→ `configure` → `launch`。
   `status` 会一并列出 NapCat 配置目录的候选位置（因为 `config/` 落在哪取决于安装方式）。
 
@@ -231,7 +231,7 @@ Config（`cordis.patch.yml`）另有：`agentPreset`（resume 时挂载的 prese
 插件基本形态（与 `dsh-cron` 一致）：
 
 ```js
-export const name = 'qq-bridge'
+export const name = 'qq-bridge-neko'
 export const inject = ['agents', 'tools', 'settings']
 export const Config = Schema.object({ /* … */ })
 export function apply(ctx, config) { /* … */ }
@@ -400,18 +400,18 @@ node test-napcat.mjs           # M5：自造 zip 验证解包/CRC/zip-slip/摘�
 
 # 3) 从 profile 里做加载检查
 cd "$env:USERPROFILE\.dsh\profiles\web"
-node -e "import('@fengye_nobug/dsh-qq-bot').then(m=>console.log(m.name, JSON.stringify(m.inject))).catch(e=>{console.error(e.message);process.exit(1)})"
-# 期望：qq-bridge ["agents","tools","settings"]（导出的 name 是 Cordis id，npm 包名是 @fengye_nobug/dsh-qq-bot）
+node -e "import('@fengye_nobug/dsh-qq-bridge-neko').then(m=>console.log(m.name, JSON.stringify(m.inject))).catch(e=>{console.error(e.message);process.exit(1)})"
+# 期望：qq-bridge-neko ["agents","tools","settings"]（导出的 name 是 Cordis id，npm 包名是 @fengye_nobug/dsh-qq-bridge-neko）
 
 # 4) 安装 + 组合检查
 dsh plugin --profile web add "<REPO>"          # ⚠️ 用 dsh.cmd，别用 dsh（见 §7 坑 8）
-dsh --profile web --dump-config | Select-String "qq-bridge"     # 应看到 id qq-bridge、name @fengye_nobug/dsh-qq-bot
+dsh --profile web --dump-config | Select-String "qq-bridge-neko"     # 应看到 id qq-bridge-neko、name @fengye_nobug/dsh-qq-bridge-neko
 # 5) 重启 dsh web 后，在会话里调用调试工具：
-#    qq_bridge_status                    → 设置 / 目标会话 / OneBot 连接状态
-#    qq_bridge_transport                 → 连接状态 + token 是否解析到
-#    qq_bridge_simulate {dryRun:true}    → 只看决策，不消耗 token
-#    qq_bridge_send {text:'hi'}          → 直接测出站（需要 NapCat 已连上）
-#    qq_bridge_simulate {userId:'<白名单内>', text:'…'}  → 真正唤醒一轮（会花 token）
+#    qq_bridge_neko_status                    → 设置 / 目标会话 / OneBot 连接状态
+#    qq_bridge_neko_transport                 → 连接状态 + token 是否解析到
+#    qq_bridge_neko_simulate {dryRun:true}    → 只看决策，不消耗 token
+#    qq_bridge_neko_send {text:'hi'}          → 直接测出站（需要 NapCat 已连上）
+#    qq_bridge_neko_simulate {userId:'<白名单内>', text:'…'}  → 真正唤醒一轮（会花 token）
 ```
 
 **preset 挂载校验探针**（改 preset 时用）：临时定义一个动态 host 插件，注册一个调用
@@ -475,10 +475,10 @@ dsh --profile web --dump-config | Select-String "qq-bridge"     # 应看到 id q
 | `stripMarkdown(text)` | **M2**：出站前去掉 Markdown 标记 |
 | `sendToQQ(text, destination?)` | **M2 已实现**：真实发到 OneBot（私聊/群），按 `replyMaxChars` 判定超长不发，可选引用 |
 | `loadState()` / `saveState()` / `pushLog()` | 状态持久化（含 `lastDestination` / `lastMessageId`） |
-| `qq_bridge_status` / `qq_bridge_transport` / `qq_bridge_simulate` | 调试工具（`debugTools` 关闭后不注册） |
-| `outboundGate(action)` | 出站的**来源闸门**，`qq_bridge_send` 与 `qq_bridge_sticker` 共用（非 QQ 轮第一次调用只回确认） |
-| `qq_bridge_sticker` | 表情包：`list` / `save` / `send`（`stickers.js` 提供登记表） |
-| `napcatStatus()` / `napcatDownload()` / `napcatConfigure()` / `napcatLaunch()` / `napcatStop()` | **M5**：托管编排（`qq_bridge_napcat` 的五个 action） |
+| `qq_bridge_neko_status` / `qq_bridge_neko_transport` / `qq_bridge_neko_simulate` | 调试工具（`debugTools` 关闭后不注册） |
+| `outboundGate(action)` | 出站的**来源闸门**，`qq_bridge_neko_send` 与 `qq_bridge_neko_sticker` 共用（非 QQ 轮第一次调用只回确认） |
+| `qq_bridge_neko_sticker` | 表情包：`list` / `save` / `send`（`stickers.js` 提供登记表） |
+| `napcatStatus()` / `napcatDownload()` / `napcatConfigure()` / `napcatLaunch()` / `napcatStop()` | **M5**：托管编排（`qq_bridge_neko_napcat` 的五个 action） |
 | `proxyFor(settings)` | **M5**：下载代理，设置 → 环境变量 → 直连 |
 
 ### `napcat.js`（M5 托管层）
@@ -574,7 +574,7 @@ dsh --profile web --dump-config | Select-String "qq-bridge"     # 应看到 id q
 
 ```yaml
 - insert:
-    - id: qq-bridge
+    - id: qq-bridge-neko
       name: dsh-qq-bridge-dev3      # 真实目录副本；换目录名是为了绕 ESM 缓存
       config:
         targetSessionId: '<你的会话 id>'
@@ -583,7 +583,7 @@ dsh --profile web --dump-config | Select-String "qq-bridge"     # 应看到 id q
         groupWhitelist: ['<群号>']
 ```
 
-验证组合：`dsh --profile web --dump-config | Select-String "qq-bridge"`。
+验证组合：`dsh --profile web --dump-config | Select-String "qq-bridge-neko"`。
 
 ---
 
@@ -613,12 +613,12 @@ dsh --profile web --dump-config | Select-String "qq-bridge"     # 应看到 id q
   **不支持当前的 QQ 9.9.36-53644**，三条发送路径全试过（`send_poke` / `group_poke` / `poke` 消息段），
   分别报 `packetBackend发包能力不可用` 和 `1200 消息体无法解析`。
   要恢复只有两条路：**换成 PacketBackend 支持的 QQ**（官方 release 推荐 40768–44343）或等 NapCat 支持新版 QQ。
-  **完整实现留在本地分支 `poke-tool-wip`（未推送）**：`qq_bridge_poke` 工具 + `outboundGate()` 复用 +
+  **完整实现留在本地分支 `poke-tool-wip`（未推送）**：`qq_bridge_neko_poke` 工具 + `outboundGate()` 复用 +
   `pokeFailureHint()` 失败翻译 + 相关测试。
 
 
 ### 13.3 图片：缓存 + 多模态描述（两步缺一不可）
-- **落盘缓存**：`$DSH_HOME/qq-bridge-images/`，收到即下载（纯 I/O 不调模型），
+- **落盘缓存**：`$DSH_HOME/qq-bridge-neko-images/`，收到即下载（纯 I/O 不调模型），
   超 64MB / 300 张按 mtime 淘汰最旧；缓冲项存**本地路径**而不是 URL → 不怕 QQ 图片 URL 过期。
 - **多模态描述**：唤醒时用视觉模型把图读成一句中文描述，**就地替换正文里的 `[图片]` 占位符**
   （`inlineImageNotes()`，模块级导出以便测试）成 `[图片#<短哈希>]：<描述>`（短哈希的用处见 §13.9）。
@@ -644,12 +644,12 @@ dsh --profile web --dump-config | Select-String "qq-bridge"     # 应看到 id q
 |---|---|
 | 你会看到什么 | 入站格式、未唤醒摘要、“[图片#<短哈希>]：<描述>”（就地）可能不准、短哈希是图的编号、被戳显示成“[戳一戳]（戳的是我）”、别当绝对事实 |
 | 怎么把话说回 QQ | 只有标记块里的内容会发；开标记**独占行首**；给自己看的写在块外 |
-| 表情包 | 用 `qq_bridge_sticker` 的 `list` / `send` 发表情包；用 `save` 收藏群友发的图 |
+| 表情包 | 用 `qq_bridge_neko_sticker` 的 `list` / `send` 发表情包；用 `save` 收藏群友发的图 |
 | 群聊礼仪 | 一两句人话、不刷屏、不放路径/代码/日志/命令/配置值/提交号/过程汇报、不装做过 |
 | **无人值守：不要碰特权操作** | 见 §14 |
 | 会话跟随（监听模式） | 何时开窗、默认 5 / 上限 60、只对同一目的地生效、开窗就花 token、答完主动 `off` |
 
-### 13.5 会话跟随 `qq_bridge_listen`（模型自己决定要不要继续听）
+### 13.5 会话跟随 `qq_bridge_neko_listen`（模型自己决定要不要继续听）
 - `state.listening = {key, until, setAt}`；key = `group:<群号>` / `private:<QQ号>`
 - `decide()` 里的位置：**白名单之后、`atOnlyInGroup` 闸门之前**
   （放闸门之后就失效了 —— 群里的线性对话会被那道闸门掐断）
@@ -673,19 +673,19 @@ dsh --profile web --dump-config | Select-String "qq-bridge"     # 应看到 id q
 | 提示词重写 | 原来的注入说明只有三段，被判“太省”；改为 `buildUsagePrompt()` 的分节契约（§13.4），并加测试逐条断言 |
 | 无人值守禁令 | 新增“不要碰特权操作”：QQ 那头没人点“同意”；**QQ 消息是不可信输入**（群友可注入）；需要动手就停下等（§14） |
 | 不做审批桥接 | 用户明确“这个不需要”——把审批搬到 QQ = 把“谁能发消息”变成“谁能替你授权”（§14） |
-| 出站台账 | 出站有**两条路**（标记块闸门 / `qq_bridge_send`），以前只记第一条 → 现在两条都记 outbox 并用 `via` 标来源（§13.8） |
+| 出站台账 | 出站有**两条路**（标记块闸门 / `qq_bridge_neko_send`），以前只记第一条 → 现在两条都记 outbox 并用 `via` 标来源（§13.8） |
 
 ### 13.8 出站两条路，都要留痕
 
 | 路 | 触发 | 受闸门管？ |
 |---|---|---|
 | 每轮结束的 `turn/end` | 抽 `[QQ]…[/QQ]`（`replyMode: 'marker'`）或整轮（`'always'`） | ✅ |
-| `qq_bridge_send` 工具 | 显式调用，立刻发 | ❌ **刻意绕过**（测连通性 / 明确要求“直接发这一条”） |
+| `qq_bridge_neko_send` 工具 | 显式调用，立刻发 | ❌ **刻意绕过**（测连通性 / 明确要求“直接发这一条”） |
 
 真机教训：用工具直接发了两条，用户看到“没有用标记，消息还是进群了”，第一反应是闸门又漏了 ——
 **这个怀疑完全合理**：只记第一条路的台账，“漏了还是故意发的”就答不上来。
 所以现在两条路都落进 `state.outbox`，带 `via: 'marker' | 'always' | 'tool'`（工具那笔还带 `to`）；
-工具描述与注入的系统提示都写明：**回群只用标记块，别拿 `qq_bridge_send` 当回复通道**。
+工具描述与注入的系统提示都写明：**回群只用标记块，别拿 `qq_bridge_neko_send` 当回复通道**。
 
 
 > **两条通用教训**：
@@ -698,15 +698,15 @@ dsh --profile web --dump-config | Select-String "qq-bridge"     # 应看到 id q
 - **占位符带短哈希的原因**：入站占位符从 `[图片]：<描述>` 改成 `[图片#<短哈希>]：<描述>`
   （`inlineImageNotes()`，模块级导出以便测试）。两个理由：① 多模态描述可能不准，
   模型需要指着一张**具体的**图说话（“把刚才那张存下来”）；② 短哈希是那张图在插件里的唯一稳定编号，
-  模型能把这个短哈希原样交给 `qq_bridge_sticker` 的 `save` / `send`。描述失败写成
+  模型能把这个短哈希原样交给 `qq_bridge_neko_sticker` 的 `save` / `send`。描述失败写成
   `[图片#<短哈希>]：（描述失败：原因）`；哈希取不到（老缓存条目）时退回裸 `[图片]`。
   注入的系统提示同步改了格式说明。
 - **图片缓存文件名改成内容哈希**（`<hash>.<ext>`）：同一张图不重复落盘，命中已有文件时也拿得到哈希 ——
   短哈希与登记表都建立在“同一张图算出同一个 hash”上。
-- **描述缓存命中的原因**：`describeImage()` 先查 `qq-bridge-stickers.json`。命中且有 `description`
+- **描述缓存命中的原因**：`describeImage()` 先查 `qq-bridge-neko-stickers.json`。命中且有 `description`
   就**直接返回登记的描述**，不调用多模态模型。群里反复出现的图（表情包、梗图就是这种用法）
   每唤醒一次描述一次是纯浪费。日志只记短哈希，不记图片 URL。
-- `qq_bridge_sticker`（不受 `debugTools` 限制）的 `send` 与 `qq_bridge_send` **共用同一道来源闸门**：
+- `qq_bridge_neko_sticker`（不受 `debugTools` 限制）的 `send` 与 `qq_bridge_neko_send` **共用同一道来源闸门**：
   `outboundGate()` 从此前内联的两步确认里抽出来，两个工具都过这道闸门。图片本体用 `base64://` 送，
   不用本地路径（NapCat 的 `enableLocalFile2Url` 是 false）。
 - **离线已验证**：登记表读写 / 查找 / 原子写；`save` 的复制与来源标注；`send` 的请求形状
@@ -786,8 +786,8 @@ dsh --profile web --dump-config | Select-String "qq-bridge"     # 应看到 id q
 
 **为什么必须做它**：DSH 的“设置 → 插件 → 插件配置”是**按设置命名空间派发卡片**的 ——
 它把“宿主注册了哪些命名空间”与“哪些卡片声明了这些 key”取交集。
-宿主半注册了 `qq-bridge` 命名空间，但没有浏览器半 → **交集为空 → 界面上什么都不出现**。
-（实测确认：用户截图里确实没有 qq-bridge 一栏。）
+宿主半注册了 `qq-bridge-neko` 命名空间，但没有浏览器半 → **交集为空 → 界面上什么都不出现**。
+（实测确认：用户截图里确实没有 qq-bridge-neko 一栏。）
 
 **怎么做的**：给包加 `client/client.js`，并在 `package.json` 里声明：
 
@@ -807,8 +807,8 @@ dsh --profile web --dump-config | Select-String "qq-bridge"     # 应看到 id q
 > 2. **刷新浏览器页面（F5）** —— boot graph 是**页面加载时**注入的（`window.__DSH_BOOT__`）。
 >    重启服务器只会让已经打开的页面断线重连，它手里仍是旧的那份清单，**压根不知道新 bundle 存在**。
 >
-> **症状对照**：`qq_bridge_status.clientHalf.inBootGraph` 已经是 `true`（宿主认得），
-> 但 `Slots` inspect 里 `settings.plugin.item` 的 occupants 里**没有** `qq-bridge` ——
+> **症状对照**：`qq_bridge_neko_status.clientHalf.inBootGraph` 已经是 `true`（宿主认得），
+> 但 `Slots` inspect 里 `settings.plugin.item` 的 occupants 里**没有** `qq-bridge-neko` ——
 > 那就一定是页面没刷新，而不是代码有问题。
 > 旁证：第三方插件 `dshmarket` 就活在这个部署里（`Slots` inspect 能看到它的卡片占着
 > `settings.plugin.item` 的 `dsh-market` key），说明仓库外的浏览器半确实会被加载。
@@ -835,17 +835,17 @@ window.__ModuleLoader__.load({
 
 | 用途 | 用法 |
 |---|---|
-| 绑定命名空间 | `ctx.settingsScope.bind({ namespace: 'qq-bridge' })` |
+| 绑定命名空间 | `ctx.settingsScope.bind({ namespace: 'qq-bridge-neko' })` |
 | 订阅（配 `useSyncExternalStore`） | `scope.subscribe(cb)` + `scope.getSnapshot()`（快照引用稳定到下次变化） |
 | 写一项 | `await scope.set(field, value)`，值是 JSON 形状；写的是**用户层**，即时生效 |
 | 恢复默认 | `scope.unset(field)`；`snapshot.user` 里**存在该字段**即“已被覆盖” |
 | 会话下拉的数据源 | `ctx.sessions.list`（`ids[]` + `byId[id].displayTitle`）＋ `ctx.sessions.refresh()` |
 | **过滤归档会话** | `ctx.workspaces.list.getSnapshot().archivedSessionIds`（workspace 域的归档集；不下拉归档的会话） |
-| 注册卡片 | 0.1.5-rc.3：`ctx.slots.inject('settings.plugin.item', () => ctx.slots.register({ name, key: 'qq-bridge' }, Cell))`；0.2.0：同样注入 `settings.plugins.tab`，注册 `{ name, id: 'qq-bridge', order, label }`。两个都注入，哪个存在哪个生效 |
+| 注册卡片 | 0.1.5-rc.3：`ctx.slots.inject('settings.plugin.item', () => ctx.slots.register({ name, key: 'qq-bridge-neko' }, Cell))`；0.2.0：同样注入 `settings.plugins.tab`，注册 `{ name, id: 'qq-bridge-neko', order, label }`。两个都注入，哪个存在哪个生效 |
 
 > ⚠️ **最容易踩的一条**：卡片 `key` 必须**逐字等于**宿主注册的 settings 命名空间。
 > 不一致不会报错，界面上就是静默什么都不出现。`test-smoke.mjs` 有断言盯着这个一致性
-> （从 `index.js` 导入 `NS`，与 `client/client.js` 里的 `const NS = 'qq-bridge'` 对照）。
+> （从 `index.js` 导入 `NS`，与 `client/client.js` 里的 `const NS = 'qq-bridge-neko'` 对照）。
 
 > 卡片 UI 刻意用**原生 HTML + 内联样式**，不依赖 `@deepseek-ai/dsh-client-ui-primitives`：
 > 少一个会跨版本变的依赖；样式跟随主题文字色，深浅色都能看。以后想换官方组件再说。
@@ -854,15 +854,15 @@ window.__ModuleLoader__.load({
 
 | 环节 | 证据 |
 |---|---|
-| 卡片出现 | 用户截图；`Slots` inspect 里 `settings.plugin.item` 的 occupants 多了 `qq-bridge` |
+| 卡片出现 | 用户截图；`Slots` inspect 里 `settings.plugin.item` 的 occupants 多了 `qq-bridge-neko` |
 | **读** | 卡片把 `<TARGET_SESSION_ID>`、昵称列表等现有值正确显示出来 |
-| **写** | 用户在卡片里加了个昵称并保存 → `qq_bridge_status` 的 `settings.nicknames` 立刻变成 `['244','小助手','测试昵称']` |
+| **写** | 用户在卡片里加了个昵称并保存 → `qq_bridge_neko_status` 的 `settings.nicknames` 立刻变成 `['244','小助手','测试昵称']` |
 | **生效** | 随后群里一句**没有 @** 的“测试昵称 在吗”被唤醒，日志 `reason: "nickname"` —— 界面 → settings 用户层 → `readSettings()` → `decide()` 整条链路都通了 |
 
 ## 16. 上架插件市场（awesome-dsh-plugin）
 
 规范：<https://github.com/awesome-dsh-plugin/awesome-dsh-plugin/blob/main/contributing.md>
-条目文件：`docs/awesome-dsh-plugin-entry.yml`。本 fork 若单独上架，复制成 `data/plugins/yunfengnobug__dsh-qq-bot.yml` 再开 PR。上游 sj244/dsh-qq-bridge 若已有条目，保留原文件，不要覆盖。
+条目文件：`docs/awesome-dsh-plugin-entry.yml`。本 fork 若单独上架，复制成 `data/plugins/yunfengnobug__dsh-qq-bridge-neko.yml` 再开 PR。上游 sj244/dsh-qq-bridge 若已有条目，保留原文件，不要覆盖。
 
 **要求对照**：
 
@@ -897,7 +897,7 @@ window.__ModuleLoader__.load({
   `test-smoke.mjs` 会校验路径规格 + **文件真实存在** —— 规范点名过“路径写错只会在市场里静默 404”。
 - ⏳ 发布到 npm（可选，预构建安装可跳过构建授权）；要发的话 `repository` 必须指回本仓库（已经是了）。
 
-**提交方式**：把 `docs/awesome-dsh-plugin-entry.yml` 复制成 `data/plugins/yunfengnobug__dsh-qq-bot.yml`，
+**提交方式**：把 `docs/awesome-dsh-plugin-entry.yml` 复制成 `data/plugins/yunfengnobug__dsh-qq-bridge-neko.yml`，
 推到本仓库 fork 的分支后开 PR。一个 PR 最多 3 条（本项目 1 条），市场 README 由脚本生成、别手改。
 中文用户看条目里的 `description.zh`；`description.en` 是目录规范要求的英文字段。
 
@@ -950,7 +950,7 @@ turnActive           有没有一轮正在跑（决定注入时能不能直接"�
 >
 > | 来源 | 对 `pendingFromQQ` |
 > |---|---|
-> | 本项目自己注入的（消息 id / `[QQ · ` 前缀 / `plugin==='qq-bridge'`） | **true** |
+> | 本项目自己注入的（消息 id / `[QQ · ` 前缀 / `plugin==='qq-bridge-neko'`） | **true** |
 > | `kind === 'user'`（人在 DSH 里打字） | **false** |
 > | `kind === 'plugin'` 且包名以 `@deepseek-ai/` 开头（harness 自家注入） | **不动** |
 > | 其他 plugin（cron / goal / 第三方） | **false**（严格：别让它们搭 QQ 的顺风车） |
@@ -1005,7 +1005,7 @@ QQ 说的话排在队尾、要等当前那轮跑完才被处理。聊天要的�
 > 放宽的唯一风险是“DSH 里有人手打一段以 `[QQ · ` 开头的话”，那也不吃亏 —— 它本来就长得像 QQ 消息。
 > **通用教训：凡是“上游可能重写”的字段，都必须配一个自己能对上的锚。**
 >
-> 另外 `qq_bridge_status` 多了 `recentInboundSources`（最近 5 条 `user/message` 观测，带 `ours` 标记）——
+> 另外 `qq_bridge_neko_status` 多了 `recentInboundSources`（最近 5 条 `user/message` 观测，带 `ours` 标记）——
 > 再出哑火先看那里：`ours: false` = 没认出来；`ours: true` 但工具仍被拒 = 标被别的事件清掉了。
 
 **测试**：`test-smoke.mjs` 现在会捕获 `ctx.on` 的处理器并直接喂 `session/event`，
@@ -1015,7 +1015,7 @@ QQ 说的话排在队尾、要等当前那轮跑完才被处理。聊天要的�
 
 > **已实现（开关，2026-09-30）**：`replyMode` 新增 `'tool'` —— **标记块与工具由用户选**，
 > 相当于给“标记块发送”装了个开关。`'tool'` 时 `turn/end` 那条路完全关掉，出站只走
-> `qq_bridge_send`；该工具因此**移出 `debugTools`**（它是产品通道，不是调试工具），
+> `qq_bridge_neko_send`；该工具因此**移出 `debugTools`**（它是产品通道，不是调试工具），
 > 并且带**来源闸门**：不是 QQ 唤醒的那一轮，它**拒绝发送并把原因回给模型** ——
 > 这正是标记块缺的那个反馈回路。提示词也按模式分叉（`buildUsagePrompt` 会读 `replyMode`），
 > 否则会教模型一个在本部署里根本不生效的做法。

@@ -1,4 +1,4 @@
-// qq-bridge 冒烟测试：用一个假 ctx 直接调 apply()，验证
+// qq-bridge-neko 冒烟测试：用一个假 ctx 直接调 apply()，验证
 //  (1) apply 不抛错、注册了 2 个调试工具；
 //  (2) 唤醒策略三条分支（白名单外丢弃 / 昵称必唤醒 / 其余按概率）；
 // 运行：node test-smoke.mjs
@@ -12,16 +12,16 @@ import { hashOfBuffer, isCompleteMface, loadStickers, mfaceSendData, normalizeMf
 
 // 状态文件必须每次从零开始：这个会话的 $env:TEMP 是固定的，
 // 不删的话上一次运行留下的 buffer/log 会串进这一次（测出过“只灌 1 条却显示 9 条”）。
-const statePath = process.env.TEMP + '/qq-bridge-smoke.json'
+const statePath = process.env.TEMP + '/qq-bridge-neko-smoke.json'
 if (existsSync(statePath)) rmSync(statePath, { force: true })
 
 // ── 表情包 / 描述缓存用的夹具（必须在 apply 之前写好）─────────────────────────
 // 登记表的路径与宿主半一致：statePath 所在目录。
-const stickersJson = join(dirname(statePath), 'qq-bridge-stickers.json')
+const stickersJson = join(dirname(statePath), 'qq-bridge-neko-stickers.json')
 // 一张真 PNG（只要前 4 个字节对，sniffImageMediaType 就认）。
 const CACHED_PNG = Buffer.from('89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c489', 'hex')
 const CACHED_HASH = hashOfBuffer(CACHED_PNG)
-const cachedImagePath = join(tmpdir(), `qq-bridge-smoke-image-${CACHED_HASH}.png`)
+const cachedImagePath = join(tmpdir(), `qq-bridge-neko-smoke-image-${CACHED_HASH}.png`)
 writeFileSync(cachedImagePath, CACHED_PNG)
 {
   const store = loadStickers(stickersJson)
@@ -29,7 +29,7 @@ writeFileSync(cachedImagePath, CACHED_PNG)
     hash: CACHED_HASH,
     mood: '无语',
     description: '一只无语的猫',
-    file: `qq-bridge-stickers/${CACHED_HASH}.png`,
+    file: `qq-bridge-neko-stickers/${CACHED_HASH}.png`,
     ext: 'png',
     source: 'group:12345678',
     addedAt: 1,
@@ -122,7 +122,7 @@ const config = {
   // ⚠️ 必须显式指向一个**不存在**的目录：否则测试结果会依赖本机
   // $DSH_HOME/napcat 的真实状态（那里装过 NapCat 的话，“未安装时 launch 报错”
   // 这条断言就会走到下一个分支而失败）。
-  napcatInstallDir: process.env.TEMP + '/qq-bridge-smoke-napcat-absent',
+  napcatInstallDir: process.env.TEMP + '/qq-bridge-neko-smoke-napcat-absent',
   nicknames: ['244', '小助手'],
   wakeProbability: 0.05,
   whitelist: ['test-user'],
@@ -143,26 +143,26 @@ const mainSessionHandler = handlers['session/event']
 // legacy（0.1.5 形态）宿主上**不该**挂设置接口：老模型读 settings 命名空间、不读设置文件，
 // 挂上去只会是“改了不生效”的死接口。⚠️ 这条必须在**其它假 ctx 跑 apply 之前**断言 ——
 // 后面那些 `{...ctx}` 会继承主 ctx 的 webServer，往同一个数组里塞路由（第一版就被污染了）。
-check('legacy 宿主上不挂设置路由', !capturedRoutes.some((r) => r.path === '/api/qq-bridge/settings'))
+check('legacy 宿主上不挂设置路由', !capturedRoutes.some((r) => r.path === '/api/qq-bridge-neko/settings'))
 // 三个操作按钮**不**受 legacy 门控：它们只管启动与打开，跟“设置值存在哪”无关，两代宿主都要挂。
 check(
   'legacy 宿主上也挂 napcat 操作路由（打开 WebUI / 启动 / 打开文件夹）',
-  ['/api/qq-bridge/napcat', '/api/qq-bridge/napcat/launch', '/api/qq-bridge/napcat/reveal'].every((p) =>
+  ['/api/qq-bridge-neko/napcat', '/api/qq-bridge-neko/napcat/launch', '/api/qq-bridge-neko/napcat/reveal'].every((p) =>
     capturedRoutes.some((r) => r.path === p && r.kind === 'exact' && typeof r.handler === 'function'),
   ),
   JSON.stringify(capturedRoutes.map((r) => r.path)),
 )
 check(
   'legacy 宿主也挂检查更新路由',
-  capturedRoutes.some((r) => r.path === '/api/qq-bridge/update' && r.kind === 'exact' && typeof r.handler === 'function'),
+  capturedRoutes.some((r) => r.path === '/api/qq-bridge-neko/update' && r.kind === 'exact' && typeof r.handler === 'function'),
 )
 check(
   'legacy 宿主也挂群资料路由（卡片不靠设置文件）',
-  capturedRoutes.some((r) => r.path === '/api/qq-bridge/groups' && r.kind === 'exact' && typeof r.handler === 'function'),
+  capturedRoutes.some((r) => r.path === '/api/qq-bridge-neko/groups' && r.kind === 'exact' && typeof r.handler === 'function'),
 )
 
 {
-  const groupRoute = capturedRoutes.find((r) => r.path === '/api/qq-bridge/groups')
+  const groupRoute = capturedRoutes.find((r) => r.path === '/api/qq-bridge-neko/groups')
   const makeRes = () => {
     const out = { status: 0, body: '' }
     return {
@@ -175,7 +175,7 @@ check(
       },
     }
   }
-  const req = (method, { addr = '127.0.0.1', url = '/api/qq-bridge/groups?ids=900001,900002', headers = {} } = {}) => ({
+  const req = (method, { addr = '127.0.0.1', url = '/api/qq-bridge-neko/groups?ids=900001,900002', headers = {} } = {}) => ({
     method,
     url,
     socket: { remoteAddress: addr },
@@ -198,7 +198,7 @@ check(
       resOk.out.body.slice(0, 240),
     )
     const resSkip = makeRes()
-    await groupRoute.handler(req('GET', { url: '/api/qq-bridge/groups?ids=900001,不是群号,900001' }), resSkip)
+    await groupRoute.handler(req('GET', { url: '/api/qq-bridge-neko/groups?ids=900001,不是群号,900001' }), resSkip)
     const skipped = JSON.parse(resSkip.out.body)
     check(
       '群资料接口丢掉非群号和重复项',
@@ -206,7 +206,7 @@ check(
       resSkip.out.body.slice(0, 200),
     )
     const resEmpty = makeRes()
-    await groupRoute.handler(req('GET', { url: '/api/qq-bridge/groups' }), resEmpty)
+    await groupRoute.handler(req('GET', { url: '/api/qq-bridge-neko/groups' }), resEmpty)
     const emptyBody = JSON.parse(resEmpty.out.body)
     check('没有群号时群资料接口返回空列表', resEmpty.out.status === 200 && emptyBody.ok === true && emptyBody.groups.length === 0)
     const resEvil = makeRes()
@@ -216,7 +216,7 @@ check(
     await groupRoute.handler(req('GET', { addr: '10.0.0.9' }), resRemote)
     check('群资料接口拒绝非本机', resRemote.out.status === 403, String(resRemote.out.status))
     const resPost = makeRes()
-    await groupRoute.handler(req('POST', { url: '/api/qq-bridge/groups' }), resPost)
+    await groupRoute.handler(req('POST', { url: '/api/qq-bridge-neko/groups' }), resPost)
     check('群资料接口不接受 POST（保存仍走设置接口）', resPost.out.status === 405, String(resPost.out.status))
   }
 
@@ -360,14 +360,14 @@ check(
 console.log('registered tools:', registered.map((t) => t.name).join(', '))
 check('apply 未抛错且注册了 7 个工具', registered.length === 7)
 
-const sim = registered.find((t) => t.name === 'qq_bridge_simulate')
-const status = registered.find((t) => t.name === 'qq_bridge_status')
-check('qq_bridge_simulate 存在', !!sim)
-check('qq_bridge_status 存在', !!status)
-check('qq_bridge_send 存在（M2）', !!registered.find((t) => t.name === 'qq_bridge_send'))
-check('qq_bridge_transport 存在（M2）', !!registered.find((t) => t.name === 'qq_bridge_transport'))
-check('qq_bridge_napcat 存在（M5）', !!registered.find((t) => t.name === 'qq_bridge_napcat'))
-check('qq_bridge_sticker 存在（表情包）', !!registered.find((t) => t.name === 'qq_bridge_sticker'))
+const sim = registered.find((t) => t.name === 'qq_bridge_neko_simulate')
+const status = registered.find((t) => t.name === 'qq_bridge_neko_status')
+check('qq_bridge_neko_simulate 存在', !!sim)
+check('qq_bridge_neko_status 存在', !!status)
+check('qq_bridge_neko_send 存在（M2）', !!registered.find((t) => t.name === 'qq_bridge_neko_send'))
+check('qq_bridge_neko_transport 存在（M2）', !!registered.find((t) => t.name === 'qq_bridge_neko_transport'))
+check('qq_bridge_neko_napcat 存在（M5）', !!registered.find((t) => t.name === 'qq_bridge_neko_napcat'))
+check('qq_bridge_neko_sticker 存在（表情包）', !!registered.find((t) => t.name === 'qq_bridge_neko_sticker'))
 
 // ★ 描述缓存命中：登记过的图**不调用多模态**，登记里的 description 直接进正文。
 //   （用户要求：缓存命中就不调多模态 —— 反复出现的图只描述一次。）
@@ -414,7 +414,7 @@ check('qq_bridge_sticker 存在（表情包）', !!registered.find((t) => t.name
 // status 能跑通
 if (status) {
   const s = await status.execute({})
-  check('qq_bridge_status 可执行', typeof s === 'string' && s.includes('recentLog'), s.slice(0, 80).replace(/\s+/g, ' '))
+  check('qq_bridge_neko_status 可执行', typeof s === 'string' && s.includes('recentLog'), s.slice(0, 80).replace(/\s+/g, ' '))
 }
 
 // 策略分支（dryRun 只看决策，不触碰 agent）
@@ -450,9 +450,9 @@ if (sim) {
 
 // M5：NapCat 托管工具——status 必须能跑通（假 ctx 没有 subprocess，应优雅报告不可用）
 {
-  const nap = registered.find((t) => t.name === 'qq_bridge_napcat')
+  const nap = registered.find((t) => t.name === 'qq_bridge_neko_napcat')
   const out = JSON.parse(await nap.execute({ action: 'status' }))
-  check('qq_bridge_napcat status 可执行', typeof out.installDir === 'string' && 'installed' in out, JSON.stringify(out.installDir))
+  check('qq_bridge_neko_napcat status 可执行', typeof out.installDir === 'string' && 'installed' in out, JSON.stringify(out.installDir))
   check('无 subprocess 时如实报告', out.subprocessAvailable === false)
   const bad = JSON.parse(await nap.execute({ action: 'nonsense' }))
   check('未知 action 返回错误而非抛异常', typeof bad.error === 'string', bad.error)
@@ -593,8 +593,8 @@ if (sim) {
 
 // 会话跟随（listening window）：一次性 @ 之后，线性聊天不再需要反复 @
 {
-  const listen = registered.find((t) => t.name === 'qq_bridge_listen')
-  check('qq_bridge_listen 工具存在', !!listen)
+  const listen = registered.find((t) => t.name === 'qq_bridge_neko_listen')
+  check('qq_bridge_neko_listen 工具存在', !!listen)
 
   // 开窗前：普通消息走抽样（概率已被前面压成 0）→ record
   const before = JSON.parse(await sim.execute({ text: '没有昵称的一句', userId: 'test-user', dryRun: true }))
@@ -663,7 +663,7 @@ const qqSockets = []
   // 主 config 没有给 onebotUrl。传输要真有地址才建连，所以这里补一个。
   resolvedSettings.onebotUrl = 'ws://127.0.0.1:3001/'
   // reconnectNow() 是主 ctx 里唯一能启动传输的口子（start() 挂在空 effect 上）。
-  await registered.find((t) => t.name === 'qq_bridge_transport').execute({ action: 'reconnect' })
+  await registered.find((t) => t.name === 'qq_bridge_neko_transport').execute({ action: 'reconnect' })
   // 等 onopen 与 get_login_info 走完。这之后 transport.isOpen() 才是 true。
   await new Promise((r) => setTimeout(r, 20))
   check('主 ctx：传输真的连上了（transport.state 为 open）', JSON.parse(await status.execute({})).transport.state === 'open')
@@ -741,7 +741,7 @@ function sawSentText(s) {
   )
 
   // B) QQ 注入的那一轮：正常出站
-  fire('user/message', { source: { kind: 'plugin', plugin: 'qq-bridge' } })
+  fire('user/message', { source: { kind: 'plugin', plugin: 'qq-bridge-neko' } })
   start()
   reply('这段只给 DSH 看\n[QQ]群里看到这句[/QQ]')
   await endA()
@@ -749,7 +749,7 @@ function sawSentText(s) {
   check('QQ 触发的轮次：正常出站且只取块内', lastSentText() === '群里看到这句', JSON.stringify(sentTexts()))
 
   // C) 工具结果也是 user/message，不能把“这轮来自 QQ”冲掉
-  fire('user/message', { source: { kind: 'plugin', plugin: 'qq-bridge' } })
+  fire('user/message', { source: { kind: 'plugin', plugin: 'qq-bridge-neko' } })
   start()
   fire('user/message', { source: { kind: 'tool' } })
   reply('[QQ]工具跑完后的回复[/QQ]')
@@ -770,7 +770,7 @@ function sawSentText(s) {
 
   // G) **口子①回归**（复查时发现的）：QQ 那一轮还在跑，中途 DSH 里又来了一句
   //    → 那一轮仍然是 QQ 轮，工具/标记块该发就发（单一标时代这里会哑火）。
-  fire('user/message', { source: { kind: 'plugin', plugin: 'qq-bridge' } })
+  fire('user/message', { source: { kind: 'plugin', plugin: 'qq-bridge-neko' } })
   start()
   fire('user/message', { source: { kind: 'user' } }) // 中途插进来的 DSH 消息
   reply('[QQ]这一轮仍然是 QQ 轮，必须发出去[/QQ]')
@@ -781,7 +781,7 @@ function sawSentText(s) {
   //    → 这一轮不是 QQ 轮，一个字都不许发；但**下一条**消息起的那轮才是 QQ 轮。
   fire('user/message', { source: { kind: 'user' } })
   start()
-  fire('user/message', { source: { kind: 'plugin', plugin: 'qq-bridge' } })
+  fire('user/message', { source: { kind: 'plugin', plugin: 'qq-bridge-neko' } })
   reply('[QQ]DSH 那一轮不许发[/QQ]')
   await endA()
   check(
@@ -804,7 +804,7 @@ function sawSentText(s) {
   //    （`@deepseek-ai/dsh-system-prompt` 发的 “Current runtime context…”，它同样走
   //    user/message + plugin 来源）。它**不是一轮的触发器**，绝不能把 pending 打掉 ——
   //    真机上就是它让 turn/start 快照到 false，于是工具拒绝（用户当场看到“哑火”）。
-  fire('user/message', { source: { kind: 'plugin', plugin: 'qq-bridge' } })
+  fire('user/message', { source: { kind: 'plugin', plugin: 'qq-bridge-neko' } })
   fire('user/message', {
     source: { kind: 'plugin', plugin: '@deepseek-ai/dsh-system-prompt' },
     message: { id: 'ctx-1', content: [{ type: 'text', text: 'Current runtime context. This snapshot supersedes…' }] },
@@ -833,7 +833,7 @@ function sawSentText(s) {
     source: { kind: 'user' },
     message: {
       id: 'm-qq-1',
-      content: [{ type: 'text', text: '[QQ · 某群] 某人：在吗\n（回 QQ：用 qq_bridge_send 工具）' }],
+      content: [{ type: 'text', text: '[QQ · 某群] 某人：在吗\n（回 QQ：用 qq_bridge_neko_send 工具）' }],
     },
   })
   start()
@@ -843,7 +843,7 @@ function sawSentText(s) {
 
   // issue #1 端到端：同一条 QQ 轮里，模型分两个 step 写出同一个块。
   // 正文按 step 累积，拼接后会出现两块相同的话；出站必须只发一次。
-  fire('user/message', { source: { kind: 'plugin', plugin: 'qq-bridge' } })
+  fire('user/message', { source: { kind: 'plugin', plugin: 'qq-bridge-neko' } })
   start()
   reply('先看一眼接口再说\n[QQ]在的[/QQ]')
   reply('[QQ]在的[/QQ]')
@@ -851,7 +851,7 @@ function sawSentText(s) {
   check('端到端：两个 step 写同一个块，QQ 只收到一次', lastSentText() === '在的', JSON.stringify(sentTexts()))
 
   // 标记块出站：先去 Markdown，再把 [笑哭] 拆成 face。未知方括号仍是文字。
-  fire('user/message', { source: { kind: 'plugin', plugin: 'qq-bridge' } })
+  fire('user/message', { source: { kind: 'plugin', plugin: 'qq-bridge-neko' } })
   start()
   reply('[QQ]**哈哈**[笑哭][没这表情][/QQ]')
   await endA()
@@ -919,14 +919,14 @@ function sawSentText(s) {
   )
   check(
     '用法说明：监听模式用法（开窗 / 上限 / 关窗 / 别无脑常开）',
-    p.includes('qq_bridge_listen') && p.includes('off: true') && p.includes('60 分钟') && p.includes('别无脑常开'),
+    p.includes('qq_bridge_neko_listen') && p.includes('off: true') && p.includes('60 分钟') && p.includes('别无脑常开'),
   )
   check(
     '用法说明：超长阈值跟着 replyMaxChars 走，且写明不会发出',
     p.includes('1200 字') && p.includes('不会发出') && p.includes('缩短后重发'),
     p.slice(0, 80),
   )
-  check('用法说明：明确「回群只用标记块，别拿 send 工具当回复通道」', p.includes('qq_bridge_send') && p.includes('别拿它当回复通道'))
+  check('用法说明：明确「回群只用标记块，别拿 send 工具当回复通道」', p.includes('qq_bridge_neko_send') && p.includes('别拿它当回复通道'))
   check('用法说明：说明被戳会显示成「[戳一戳]（戳的是我）」', p.includes('[戳一戳]') && p.includes('戳的是我'))
   check('用法说明：发了表情包不要解释（人自己看得懂）', p.includes('不要解释') && p.includes('表情包'))
   check(
@@ -938,10 +938,10 @@ function sawSentText(s) {
       !p.includes('笑哭') &&
       !p.includes('挥手'),
   )
-  const sendCopy = registered.find((t) => t.name === 'qq_bridge_send')
+  const sendCopy = registered.find((t) => t.name === 'qq_bridge_neko_send')
   const sendText = [sendCopy?.description, sendCopy?.parameters?.properties?.text?.description].join('\n')
   check(
-    'qq_bridge_send：说明只讲 [表情名] / [表情数字]，不点名笑哭或挥手',
+    'qq_bridge_neko_send：说明只讲 [表情名] / [表情数字]，不点名笑哭或挥手',
     sendText.includes('[表情名]') &&
       sendText.includes('[表情数字]') &&
       sendText.includes('认不出的方括号') &&
@@ -960,8 +960,8 @@ function sawSentText(s) {
     p.includes('[表情包#') && p.includes('普通图片') && p.includes('mface') && p.includes('仍是图片'),
   )
   check(
-    '用法说明：教用 qq_bridge_sticker（list / send / save）',
-    p.includes('qq_bridge_sticker') && p.includes('`list`') && p.includes('`send`') && p.includes('`save`'),
+    '用法说明：教用 qq_bridge_neko_sticker（list / send / save）',
+    p.includes('qq_bridge_neko_sticker') && p.includes('`list`') && p.includes('`send`') && p.includes('`save`'),
   )
   check('用法说明：登记过的图不再花多模态调用', p.includes('命中登记表') && p.includes('多模态调用'))
 }
@@ -995,11 +995,11 @@ function sawSentText(s) {
   const lastText = (a) => String(a[a.length - 1]?.text ?? '')
   const sawText = (a, s) => a.some((o) => String(o.text ?? '').includes(s))
   const start = () => fire('turn/start', { turn: 1 })
-  const sendTool = registered.find((t) => t.name === 'qq_bridge_send')
+  const sendTool = registered.find((t) => t.name === 'qq_bridge_neko_send')
 
   // 切到 tool 模式：标记块这条路被关掉
   resolvedSettings.replyMode = 'tool'
-  fire('user/message', { source: { kind: 'plugin', plugin: 'qq-bridge' } })
+  fire('user/message', { source: { kind: 'plugin', plugin: 'qq-bridge-neko' } })
   start()
   fire('assistant/message', { message: { content: [{ type: 'text', text: '[QQ]tool 模式下标记块应该无效[/QQ]' }] } })
   fire('turn/end', { reason: { kind: 'completed' } })
@@ -1039,7 +1039,7 @@ function sawSentText(s) {
   fire('turn/end', { reason: { kind: 'completed' } })
 
   // 工具在 QQ 轮里走通，并记 outbox（via: tool）
-  fire('user/message', { source: { kind: 'plugin', plugin: 'qq-bridge' } })
+  fire('user/message', { source: { kind: 'plugin', plugin: 'qq-bridge-neko' } })
   start()
   const sent = JSON.parse(await sendTool.execute({ text: '工具发出去的话' }))
   const ob = await outbox()
@@ -1056,7 +1056,7 @@ function sawSentText(s) {
   const byId = JSON.parse(await sendTool.execute({ text: '[表情182]' }))
   const byIdSegs = contentSegments(lastSendFrame())
   check(
-    'qq_bridge_send：[表情182] 是 face 段',
+    'qq_bridge_neko_send：[表情182] 是 face 段',
     byId.sent === 1 && byIdSegs.length === 1 && byIdSegs[0]?.type === 'face' && byIdSegs[0]?.data?.id === '182',
     JSON.stringify({ byId, byIdSegs }),
   )
@@ -1071,9 +1071,9 @@ function sawSentText(s) {
   let settingsHandlerOk = true
   try {
     resolvedSettings.replyMode = 'tool'
-    handlers['settings/updated']?.('qq-bridge')
+    handlers['settings/updated']?.('qq-bridge-neko')
     resolvedSettings.replyMode = 'marker'
-    handlers['settings/updated']?.('qq-bridge')
+    handlers['settings/updated']?.('qq-bridge-neko')
   } catch (e) {
     settingsHandlerOk = false
     console.log('  settings/updated 抛错：', String(e?.message ?? e))
@@ -1089,7 +1089,7 @@ function sawSentText(s) {
   const outbox = async () => JSON.parse(await status.execute({})).recentOutbox
   const lastText = (a) => String(a[a.length - 1]?.text ?? '')
   const gate = async () => JSON.parse(await status.execute({})).gate
-  const sendTool = registered.find((t) => t.name === 'qq_bridge_send')
+  const sendTool = registered.find((t) => t.name === 'qq_bridge_neko_send')
 
   fire('turn/end', { reason: { kind: 'completed' } }) // 清掉前一块可能残留的轮
   resolvedSettings.replyMode = 'tool'
@@ -1336,7 +1336,7 @@ function sawSentText(s) {
     check('投递失败：残留归属没让非 QQ 轮误发', !sawSentText('不该发出去的残留归属'), JSON.stringify(sentTexts()))
 
     // ⑤ 失败之后按正常时序走一轮 QQ 轮，必须真的发得出去。
-    fire('user/message', { source: { kind: 'plugin', plugin: 'qq-bridge' } })
+    fire('user/message', { source: { kind: 'plugin', plugin: 'qq-bridge-neko' } })
     fire('turn/start', { turn: 1 })
     fire('assistant/message', { message: { content: [{ type: 'text', text: '[QQ]失败之后这一轮照发[/QQ]' }] } })
     fire('turn/end', { reason: { kind: 'completed' } })
@@ -1358,7 +1358,7 @@ function sawSentText(s) {
 // M3：settings Schema 直接生成设置界面上的表单 —— 每个键都必须有说明，否则界面里只剩裸键名
 {
   const reg = registeredSettings[0]
-  check('注册了 settings 命名空间 qq-bridge', registeredSettings.length === 1 && reg?.ns === 'qq-bridge', String(reg?.ns))
+  check('注册了 settings 命名空间 qq-bridge-neko', registeredSettings.length === 1 && reg?.ns === 'qq-bridge-neko', String(reg?.ns))
   const dict = reg?.schema?.dict ?? {}
   const keys = Object.keys(dict)
   // 用下限而不是写死 ===：新增设置键是家常便饭，写死精确数字每加一个键就要改测试。
@@ -1551,9 +1551,9 @@ function sawSentText(s) {
     check('卡片默认展开', stateInits.includes(true), JSON.stringify(stateInits))
 
     // ★ 第三个变化轴（2026-10-01 桌面端真机）：**可写设置域的 key 也换了**。
-    //   0.1.5 用 settings 命名空间 `qq-bridge`；0.2.0 用 profile entry id `include:qq-bridge`
+    //   0.1.5 用 settings 命名空间 `qq-bridge-neko`；0.2.0 用 profile entry id `include:qq-bridge-neko`
     //   （宿主 Config 投影出来的是后者）。只绑前者 → 0.2.0 上永远 unavailable，
-    //   用户看到“这个部署没有为 qq-bridge 提供可写的设置服务”。
+    //   用户看到“这个部署没有为 qq-bridge-neko 提供可写的设置服务”。
     {
       const bindSettings = mod.__test?.bindSettings
       check('bindSettings 已导出（便于测两代 key）', typeof bindSettings === 'function')
@@ -1568,15 +1568,15 @@ function sawSentText(s) {
             set: async () => {},
           }),
         })
-        const legacy = bindSettings(serviceReadyFor('qq-bridge'))
+        const legacy = bindSettings(serviceReadyFor('qq-bridge-neko'))
         check(
-          '老宿主：绑 qq-bridge 拿到 ready',
+          '老宿主：绑 qq-bridge-neko 拿到 ready',
           legacy.getSnapshot().status === 'ready',
           JSON.stringify(legacy.namespaces),
         )
-        const modern = bindSettings(serviceReadyFor('include:qq-bridge'))
+        const modern = bindSettings(serviceReadyFor('include:qq-bridge-neko'))
         check(
-          '0.2.0：自动改用 include:qq-bridge（entry id）',
+          '0.2.0：自动改用 include:qq-bridge-neko（entry id）',
           modern.getSnapshot().status === 'ready',
           JSON.stringify(modern.namespaces),
         )
@@ -1584,7 +1584,7 @@ function sawSentText(s) {
         check('两代都拿不到时不炸、如实报 unavailable', none.getSnapshot().status === 'unavailable')
         check(
           '诊断信息列出试过的 key 与各自状态（真机排障用）',
-          typeof none.detail === 'function' && none.detail().includes('qq-bridge=unavailable'),
+          typeof none.detail === 'function' && none.detail().includes('qq-bridge-neko=unavailable'),
           typeof none.detail === 'function' ? none.detail() : 'no detail',
         )
 
@@ -1623,8 +1623,8 @@ function sawSentText(s) {
           check('via() 报 api', apiScope.via() === 'api')
           await apiScope.set('nicknames', ['y'])
           check(
-            'set 走 POST 到 /api/qq-bridge/settings',
-            calls.some((c) => c.method === 'POST' && c.url.includes('/api/qq-bridge/settings')),
+            'set 走 POST 到 /api/qq-bridge-neko/settings',
+            calls.some((c) => c.method === 'POST' && c.url.includes('/api/qq-bridge-neko/settings')),
             JSON.stringify(calls),
           )
           // M1：卡片的“撤销覆盖”必须真的把 unset 发给设置接口。
@@ -1633,7 +1633,7 @@ function sawSentText(s) {
           check(
             'M1：卡片侧的 unset 发 { unset: ["nicknames"] } 到设置接口',
             unsetCall?.method === 'POST' &&
-              unsetCall.url.includes('/api/qq-bridge/settings') &&
+              unsetCall.url.includes('/api/qq-bridge-neko/settings') &&
               String(unsetCall.body) === JSON.stringify({ unset: ['nicknames'] }),
             JSON.stringify(unsetCall),
           )
@@ -1721,11 +1721,11 @@ function sawSentText(s) {
         detail.cell({ subject: { kind: 'bundle', pkg: { name: 'other-plugin' } } }) == null,
       )
       check(
-        '插件详情：本包和旧包名、以及 qq-bridge 这个 id 才显示',
-        Boolean(detail.cell({ subject: { kind: 'bundle', pkg: { name: '@fengye_nobug/dsh-qq-bot' } } })) &&
-          Boolean(detail.cell({ subject: { kind: 'bundle', pkg: { name: 'dsh-qq-bot' } } })) &&
+        '插件详情：本包和旧包名、以及 qq-bridge-neko 这个 id 才显示',
+        Boolean(detail.cell({ subject: { kind: 'bundle', pkg: { name: '@fengye_nobug/dsh-qq-bridge-neko' } } })) &&
+          Boolean(detail.cell({ subject: { kind: 'bundle', pkg: { name: 'dsh-qq-bridge-neko' } } })) &&
           Boolean(detail.cell({ subject: { kind: 'bundle', pkg: { name: 'dsh-qq-bridge' } } })) &&
-          Boolean(detail.cell({ subject: { kind: 'item', id: 'qq-bridge' } })),
+          Boolean(detail.cell({ subject: { kind: 'item', id: 'qq-bridge-neko' } })),
       )
       check(
         '没有设置服务时仍注入插件页 slot',
@@ -1756,7 +1756,7 @@ function sawSentText(s) {
         updateField?.label === '启动时检查一次' && /不会自动安装/.test(String(updateField?.hint ?? '')),
         JSON.stringify(updateField),
       )
-      check('检查更新按钮不在浏览器里直接打 GitHub', src.includes('检查更新') && src.includes('/api/qq-bridge/update') && !src.includes('api.github.com') && !src.includes('codeload.github.com'))
+      check('检查更新按钮不在浏览器里直接打 GitHub', src.includes('检查更新') && src.includes('/api/qq-bridge-neko/update') && !src.includes('api.github.com') && !src.includes('codeload.github.com'))
       check(
         '有新版本才出现更新按钮；检查只检查，不把长说明铺在卡片上',
         src.includes('更新到 ') &&
@@ -1832,7 +1832,7 @@ function sawSentText(s) {
       )
       check(
         '卡片向本机接口要群资料，保存仍走设置接口',
-        src.includes("const GROUP_META_API = '/api/qq-bridge/groups'") && src.includes('await scope.set(key, value)'),
+        src.includes("const GROUP_META_API = '/api/qq-bridge-neko/groups'") && src.includes('await scope.set(key, value)'),
       )
       check('群头像加载失败就藏起来，不挡住群号', src.includes('onError') && src.includes("el.style.display = 'none'"))
       const replyModeField = (mod.__test?.fields ?? []).find((x) => x.key === 'replyMode')
@@ -1883,7 +1883,7 @@ function sawSentText(s) {
 
   // status 要能回答“浏览器半到底装上没有”—— 界面里不显示时全靠这一条排障
   const st = JSON.parse(await status.execute({}))
-  check('qq_bridge_status 报告浏览器半状态', st.clientHalf && typeof st.clientHalf === 'object', JSON.stringify(st.clientHalf))
+  check('qq_bridge_neko_status 报告浏览器半状态', st.clientHalf && typeof st.clientHalf === 'object', JSON.stringify(st.clientHalf))
 }
 
 // 商城详情页截图：仓库根目录的 screenshots.json（路径相对于它自己，1–8 张）
@@ -2082,7 +2082,7 @@ function sawSentText(s) {
   check('0.1.5 注入 source 用老的 plugin 包装', injectedMessageSource(true).kind === 'plugin')
   check(
     '0.2.0 注入 source 用 producer-owned（plugin:包名）',
-    injectedMessageSource(false).kind === 'plugin:dsh-qq-bot',
+    injectedMessageSource(false).kind === 'plugin:dsh-qq-bridge-neko',
     JSON.stringify(injectedMessageSource(false)),
   )
   check('0.2.0 的 source.kind 不是已废弃的 plugin', injectedMessageSource(false).kind !== 'plugin')
@@ -2119,8 +2119,8 @@ function sawSentText(s) {
   apiCtx.inject = (_deps, cb) => cb(apiCtx)
   apply(apiCtx, config)
 
-  const route = apiRoutes.find((r) => r.path === '/api/qq-bridge/settings')
-  check('非 legacy 宿主：挂上 /api/qq-bridge/settings（exact）', route?.kind === 'exact' && typeof route.handler === 'function')
+  const route = apiRoutes.find((r) => r.path === '/api/qq-bridge-neko/settings')
+  check('非 legacy 宿主：挂上 /api/qq-bridge-neko/settings（exact）', route?.kind === 'exact' && typeof route.handler === 'function')
 
   const makeRes = () => {
     const out = { status: 0, body: '' }
@@ -2133,7 +2133,7 @@ function sawSentText(s) {
     const raw = body === undefined ? null : JSON.stringify(body)
     return {
       method,
-      url: '/api/qq-bridge/settings',
+      url: '/api/qq-bridge-neko/settings',
       socket: { remoteAddress: addr },
       headers: {
         ...(ct ? { 'content-type': ct } : {}),
@@ -2222,7 +2222,7 @@ function sawSentText(s) {
     // ── S1：本机接口的准入判定（对端地址 + 来源 + POST 的 content-type）────────
     // 威胁模型：用户浏览器里的任意网页都能用无预检的 fetch 打到 127.0.0.1；
     // 响应读不到，但改设置 / 启动 NapCat 这类副作用照发生。
-    const settingsFilePath = join(dirname(statePath), 'qq-bridge-settings.json')
+    const settingsFilePath = join(dirname(statePath), 'qq-bridge-neko-settings.json')
     const fileValues = () => {
       try {
         return JSON.parse(readFileSync(settingsFilePath, 'utf8')).values ?? {}
@@ -2307,7 +2307,7 @@ function sawSentText(s) {
       await route.handler(
         {
           method: 'POST',
-          url: '/api/qq-bridge/settings',
+          url: '/api/qq-bridge-neko/settings',
           socket: { remoteAddress: '127.0.0.1' },
           headers: {},
           async *[Symbol.asyncIterator]() {},
@@ -2324,7 +2324,7 @@ function sawSentText(s) {
       await route.handler(
         {
           method: 'POST',
-          url: '/api/qq-bridge/settings',
+          url: '/api/qq-bridge-neko/settings',
           socket: { remoteAddress: '127.0.0.1' },
           headers: { 'transfer-encoding': 'chunked' },
           async *[Symbol.asyncIterator]() {},
@@ -2343,7 +2343,7 @@ function sawSentText(s) {
       await route.handler(
         {
           method: 'POST',
-          url: '/api/qq-bridge/settings',
+          url: '/api/qq-bridge-neko/settings',
           socket: { remoteAddress: '127.0.0.1' },
           headers: { origin: 'https://evil.example' },
           async *[Symbol.asyncIterator]() {},
@@ -2522,7 +2522,7 @@ function sawSentText(s) {
       await route.handler(
         {
           method: 'POST',
-          url: '/api/qq-bridge/settings',
+          url: '/api/qq-bridge-neko/settings',
           socket: { remoteAddress: '127.0.0.1' },
           headers: { 'content-type': 'application/json' },
           async *[Symbol.asyncIterator]() {
@@ -2662,7 +2662,7 @@ function sawSentText(s) {
 
 // M6：卡片上的三个操作按钮 —— 宿主接口。造一份真的 webui.json，直接调路由处理函数。
 {
-  const installDir = mkdtempSync(join(tmpdir(), 'qq-bridge-webui-'))
+  const installDir = mkdtempSync(join(tmpdir(), 'qq-bridge-neko-webui-'))
   mkdirSync(join(installDir, 'config'), { recursive: true })
   writeFileSync(
     join(installDir, 'config', 'webui.json'),
@@ -2681,7 +2681,7 @@ function sawSentText(s) {
   // statePath 单独一个：设置文件也跟着落在另一个路径，napcatInstallDir 必定从 config 回落。
   apply(napcatCtx, {
     ...config,
-    statePath: process.env.TEMP + '/qq-bridge-smoke-buttons.json',
+    statePath: process.env.TEMP + '/qq-bridge-neko-smoke-buttons.json',
     napcatInstallDir: installDir,
   })
 
@@ -2714,9 +2714,9 @@ function sawSentText(s) {
     }
   }
 
-  const napcatGet = handlerFor('/api/qq-bridge/napcat')
+  const napcatGet = handlerFor('/api/qq-bridge-neko/napcat')
   const res1 = makeRes()
-  await napcatGet(req('GET', { url: '/api/qq-bridge/napcat' }), res1)
+  await napcatGet(req('GET', { url: '/api/qq-bridge-neko/napcat' }), res1)
   const got = JSON.parse(res1.out.body)
   check(
     'GET /napcat：读到 webui.json，URL 带 token，端口与 hasToken 都对',
@@ -2755,34 +2755,34 @@ function sawSentText(s) {
   )
 
   const res2 = makeRes()
-  await napcatGet(req('GET', { addr: '10.0.0.9', url: '/api/qq-bridge/napcat' }), res2)
+  await napcatGet(req('GET', { addr: '10.0.0.9', url: '/api/qq-bridge-neko/napcat' }), res2)
   check('GET /napcat：非本机请求 403', res2.out.status === 403, String(res2.out.status))
 
-  const napcatLaunchRoute = handlerFor('/api/qq-bridge/napcat/launch')
+  const napcatLaunchRoute = handlerFor('/api/qq-bridge-neko/napcat/launch')
   const res3 = makeRes()
-  await napcatLaunchRoute(req('POST', { addr: '10.0.0.9', url: '/api/qq-bridge/napcat/launch' }), res3)
+  await napcatLaunchRoute(req('POST', { addr: '10.0.0.9', url: '/api/qq-bridge-neko/napcat/launch' }), res3)
   check('POST /napcat/launch：非本机请求 403', res3.out.status === 403, String(res3.out.status))
 
   // ── S1：三个 NapCat 路由走同一道准入闸门 ─────────────────────────────────
   // 这组接口能启动进程、打开文件管理器 —— 站外页面一律挡住，且**不能走到动作**。
   const resEvilOrigin = makeRes()
   await napcatLaunchRoute(
-    req('POST', { url: '/api/qq-bridge/napcat/launch', headers: { origin: 'https://evil.example' } }),
+    req('POST', { url: '/api/qq-bridge-neko/napcat/launch', headers: { origin: 'https://evil.example' } }),
     resEvilOrigin,
   )
   check('S1：POST /napcat/launch 带站外 Origin → 403', resEvilOrigin.out.status === 403, `${resEvilOrigin.out.status} ${errOf(resEvilOrigin)}`)
   check('S1：POST /napcat/launch 的拒绝文案是中文', /[\u4e00-\u9fa5]/.test(errOf(resEvilOrigin)), errOf(resEvilOrigin))
 
   const resNapcatGet = makeRes()
-  await napcatGet(req('GET', { url: '/api/qq-bridge/napcat', headers: { origin: 'https://evil.example' } }), resNapcatGet)
+  await napcatGet(req('GET', { url: '/api/qq-bridge-neko/napcat', headers: { origin: 'https://evil.example' } }), resNapcatGet)
   check('S1：GET /napcat 带站外 Origin → 403', resNapcatGet.out.status === 403, `${resNapcatGet.out.status} ${errOf(resNapcatGet)}`)
 
   // /reveal 的**通过**路径会真的调 explorer / open —— 这里只测拒绝路径，
   // 否则测试机上的文件管理器会被弹出来。
-  const napcatRevealRoute = handlerFor('/api/qq-bridge/napcat/reveal')
+  const napcatRevealRoute = handlerFor('/api/qq-bridge-neko/napcat/reveal')
   const resRevealEvil = makeRes()
   await napcatRevealRoute(
-    req('POST', { url: '/api/qq-bridge/napcat/reveal', headers: { origin: 'https://evil.example' } }),
+    req('POST', { url: '/api/qq-bridge-neko/napcat/reveal', headers: { origin: 'https://evil.example' } }),
     resRevealEvil,
   )
   check('S1：POST /napcat/reveal 带站外 Origin → 403（没走到动作）', resRevealEvil.out.status === 403, `${resRevealEvil.out.status} ${errOf(resRevealEvil)}`)
@@ -2790,7 +2790,7 @@ function sawSentText(s) {
   // content-type 只在**带请求体**时要求 JSON。三个动作本身没有体，
   // 所以空体 POST 放行到动作层 —— 但来源判定照样生效（见上面的 403 用例）。
   const resNoCt = makeRes()
-  await napcatLaunchRoute(req('POST', { url: '/api/qq-bridge/napcat/launch', contentType: null }), resNoCt)
+  await napcatLaunchRoute(req('POST', { url: '/api/qq-bridge-neko/napcat/launch', contentType: null }), resNoCt)
   let emptyBody = null
   try {
     emptyBody = JSON.parse(resNoCt.out.body)
@@ -2806,7 +2806,7 @@ function sawSentText(s) {
   // 空体 + 站外 Origin → 仍然 403：这是放宽 content-type 之后的安全底线。
   const resEmptyEvil = makeRes()
   await napcatLaunchRoute(
-    req('POST', { url: '/api/qq-bridge/napcat/launch', contentType: null, headers: { origin: 'https://evil.example' } }),
+    req('POST', { url: '/api/qq-bridge-neko/napcat/launch', contentType: null, headers: { origin: 'https://evil.example' } }),
     resEmptyEvil,
   )
   check(
@@ -2818,7 +2818,7 @@ function sawSentText(s) {
   // 带请求体时：text/plain（跨站无预检时唯一可用的那类）→ 403；application/json → 放行。
   const resBodyText = makeRes()
   await napcatLaunchRoute(
-    req('POST', { url: '/api/qq-bridge/napcat/launch', contentType: 'text/plain', contentLength: 11 }),
+    req('POST', { url: '/api/qq-bridge-neko/napcat/launch', contentType: 'text/plain', contentLength: 11 }),
     resBodyText,
   )
   check(
@@ -2828,7 +2828,7 @@ function sawSentText(s) {
   )
   const resBodyJson = makeRes()
   await napcatLaunchRoute(
-    req('POST', { url: '/api/qq-bridge/napcat/launch', contentLength: 11 }),
+    req('POST', { url: '/api/qq-bridge-neko/napcat/launch', contentLength: 11 }),
     resBodyJson,
   )
   let bodyJson = null
@@ -2846,7 +2846,7 @@ function sawSentText(s) {
   // 卡片同源 + JSON content-type → 放行到动作层（这台机器没装 NapCat，动作本身 ok:false）。
   const resLaunchOk = makeRes()
   await napcatLaunchRoute(
-    req('POST', { url: '/api/qq-bridge/napcat/launch', headers: { origin: 'http://127.0.0.1:3080' } }),
+    req('POST', { url: '/api/qq-bridge-neko/napcat/launch', headers: { origin: 'http://127.0.0.1:3080' } }),
     resLaunchOk,
   )
   let launchBody = null
@@ -2862,7 +2862,7 @@ function sawSentText(s) {
   )
 
   const resMethodMiss = makeRes()
-  await napcatLaunchRoute(req('GET', { url: '/api/qq-bridge/napcat/launch' }), resMethodMiss)
+  await napcatLaunchRoute(req('GET', { url: '/api/qq-bridge-neko/napcat/launch' }), resMethodMiss)
   check(
     'S1：方法与路由不符 → 405 且文案是中文',
     resMethodMiss.out.status === 405 && /[\u4e00-\u9fa5]/.test(errOf(resMethodMiss)),
@@ -2880,14 +2880,14 @@ function sawSentText(s) {
     localCtx.inject = (_deps, cb) => cb(localCtx)
     apply(localCtx, {
       ...config,
-      statePath: process.env.TEMP + `/qq-bridge-smoke-webui-${extra.napcatWebuiUrl.length}.json`,
+      statePath: process.env.TEMP + `/qq-bridge-neko-smoke-webui-${extra.napcatWebuiUrl.length}.json`,
       napcatInstallDir: installDir,
       napcatWebuiUrl: extra.napcatWebuiUrl,
     })
-    return localRoutes.find((r) => r.path === '/api/qq-bridge/napcat')?.handler
+    return localRoutes.find((r) => r.path === '/api/qq-bridge-neko/napcat')?.handler
   }
   const resPublic = makeRes()
-  await mountNapcat({ napcatWebuiUrl: 'https://example.invalid/webui' })(req('GET', { url: '/api/qq-bridge/napcat' }), resPublic)
+  await mountNapcat({ napcatWebuiUrl: 'https://example.invalid/webui' })(req('GET', { url: '/api/qq-bridge-neko/napcat' }), resPublic)
   const pub = JSON.parse(resPublic.out.body)
   check(
     'GET /napcat：填写了网页管理地址就用它，并补上 webui.json 里的 token',
@@ -2900,7 +2900,7 @@ function sawSentText(s) {
   )
   const resKept = makeRes()
   await mountNapcat({ napcatWebuiUrl: 'https://example.invalid/webui?token=keep-me' })(
-    req('GET', { url: '/api/qq-bridge/napcat' }),
+    req('GET', { url: '/api/qq-bridge-neko/napcat' }),
     resKept,
   )
   const kept = JSON.parse(resKept.out.body)
@@ -2913,11 +2913,11 @@ function sawSentText(s) {
   // launch / reveal 在测试机上必然失败（没有 NapCat，也不该真去开文件管理器），
   // 但必须**回 JSON 而不是抛** —— 抛出去会让宿主那条请求挂死。
   // 这里用 legacy 那份路由：它的 installDir 是不存在的目录，所以 reveal 不会真的启动进程。
-  const legacyReveal = capturedRoutes.find((r) => r.path === '/api/qq-bridge/napcat/reveal')?.handler
-  const legacyLaunch = capturedRoutes.find((r) => r.path === '/api/qq-bridge/napcat/launch')?.handler
+  const legacyReveal = capturedRoutes.find((r) => r.path === '/api/qq-bridge-neko/napcat/reveal')?.handler
+  const legacyLaunch = capturedRoutes.find((r) => r.path === '/api/qq-bridge-neko/napcat/launch')?.handler
   for (const [label, handler] of [['reveal', legacyReveal], ['launch', legacyLaunch]]) {
     const res = makeRes()
-    await handler(req('POST', { url: `/api/qq-bridge/napcat/${label}` }), res)
+    await handler(req('POST', { url: `/api/qq-bridge-neko/napcat/${label}` }), res)
     let body = null
     try {
       body = JSON.parse(res.out.body)
@@ -2931,9 +2931,9 @@ function sawSentText(s) {
     )
   }
 
-  const legacyGet = capturedRoutes.find((r) => r.path === '/api/qq-bridge/napcat')?.handler
+  const legacyGet = capturedRoutes.find((r) => r.path === '/api/qq-bridge-neko/napcat')?.handler
   const resMissing = makeRes()
-  await legacyGet(req('GET', { url: '/api/qq-bridge/napcat' }), resMissing)
+  await legacyGet(req('GET', { url: '/api/qq-bridge-neko/napcat' }), resMissing)
   const missing = JSON.parse(resMissing.out.body)
   check(
     'GET /napcat：安装目录不存在时说明自己部署要另填路径',
@@ -2943,7 +2943,7 @@ function sawSentText(s) {
     String(missing.installDirMissingHint),
   )
   const resRevealMissing = makeRes()
-  await legacyReveal(req('POST', { url: '/api/qq-bridge/napcat/reveal' }), resRevealMissing)
+  await legacyReveal(req('POST', { url: '/api/qq-bridge-neko/napcat/reveal' }), resRevealMissing)
   const revealMissing = JSON.parse(resRevealMissing.out.body)
   check(
     'POST /napcat/reveal：目录不存在时说明原因，且不打开文件管理器',
@@ -2961,7 +2961,7 @@ function sawSentText(s) {
 //   独立 ctx（自己的 handler map、自己的 statePath、假 WebSocket）—— 与前面的用例完全隔离，
 //   也正因为隔离，这里可以真跑一遍“发送成功”的路径。
 {
-  const dir = mkdtempSync(join(tmpdir(), 'qq-bridge-sticker-tool-'))
+  const dir = mkdtempSync(join(tmpdir(), 'qq-bridge-neko-sticker-tool-'))
   const statePathS = join(dir, 'state.json')
   const png = Buffer.from('89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c489', 'hex')
   const hash = hashOfBuffer(png)
@@ -3013,7 +3013,7 @@ function sawSentText(s) {
       this.onclose?.({ code: 1000 })
     }
   }
-  // 图片缓存目录也跟着落到临时目录：否则 listImageCache / findSourceByHash 会去扫用户真实的 qq-bridge-images。
+  // 图片缓存目录也跟着落到临时目录：否则 listImageCache / findSourceByHash 会去扫用户真实的 qq-bridge-neko-images。
   process.env.DSH_HOME = join(dir, 'home')
 
   const stickerHandlers = {}
@@ -3060,8 +3060,8 @@ function sawSentText(s) {
   })
   await new Promise((r) => setTimeout(r, 20))
 
-  const stickerTool = registered2.find((t) => t.name === 'qq_bridge_sticker')
-  const status2 = registered2.find((t) => t.name === 'qq_bridge_status')
+  const stickerTool = registered2.find((t) => t.name === 'qq_bridge_neko_sticker')
+  const status2 = registered2.find((t) => t.name === 'qq_bridge_neko_status')
   check('表情包工具在独立 ctx 里也注册', !!stickerTool && !!status2, registered2.map((t) => t.name).join(','))
 
   // 空表：list 给一句提示（不是空白，也不是报错）
@@ -3070,7 +3070,7 @@ function sawSentText(s) {
     check('list：没有登记时给一句提示', out.count === 0 && String(out.note).includes('save'), JSON.stringify(out))
   }
 
-  // 闸门：与 qq_bridge_send 同一道 —— 非 QQ 轮第一次调用只回确认
+  // 闸门：与 qq_bridge_neko_send 同一道 —— 非 QQ 轮第一次调用只回确认
   {
     stickerHandlers['session/event']({ id: 'session-sticker' }, { type: 'user/message', data: { source: { kind: 'user' } } })
     stickerHandlers['session/event']({ id: 'session-sticker' }, { type: 'turn/start', data: { turn: 1 } })
@@ -3083,9 +3083,9 @@ function sawSentText(s) {
   {
     const out = JSON.parse(await stickerTool.execute({ action: 'save', fromLast: true, mood: '无语', description: '一只无语的猫' }))
     check('save：fromLast 登记成功', out.ok === true && out.hash === shortHash(hash), JSON.stringify(out))
-    check('save：图片本体复制进 qq-bridge-stickers/', existsSync(join(dir, 'qq-bridge-stickers', `${hash}.png`)))
-    check('save：file 是相对 statePath 的路径', out.file === `qq-bridge-stickers/${hash}.png`, String(out.file))
-    const onDisk = loadStickers(join(dir, 'qq-bridge-stickers.json'))
+    check('save：图片本体复制进 qq-bridge-neko-stickers/', existsSync(join(dir, 'qq-bridge-neko-stickers', `${hash}.png`)))
+    check('save：file 是相对 statePath 的路径', out.file === `qq-bridge-neko-stickers/${hash}.png`, String(out.file))
+    const onDisk = loadStickers(join(dir, 'qq-bridge-neko-stickers.json'))
     check(
       'save：登记表已落盘（source 记了群号）',
       onDisk.stickers[hash]?.source === 'group:12345678' && onDisk.stickers[hash]?.mood === '无语',
@@ -3119,7 +3119,7 @@ function sawSentText(s) {
 
   // send：真发一张（base64 出站，不走本地路径）
   {
-    stickerHandlers['session/event']({ id: 'session-sticker' }, { type: 'user/message', data: { source: { kind: 'plugin', plugin: 'qq-bridge' } } })
+    stickerHandlers['session/event']({ id: 'session-sticker' }, { type: 'user/message', data: { source: { kind: 'plugin', plugin: 'qq-bridge-neko' } } })
     stickerHandlers['session/event']({ id: 'session-sticker' }, { type: 'turn/start', data: { turn: 1 } })
 
     const noDest = JSON.parse(await stickerTool.execute({ action: 'send', hash }))
@@ -3151,7 +3151,7 @@ function sawSentText(s) {
     )
     check('send：base64 解出来就是原图', Buffer.from(file.slice('base64://'.length), 'base64').equals(png))
 
-    const after = loadStickers(join(dir, 'qq-bridge-stickers.json'))
+    const after = loadStickers(join(dir, 'qq-bridge-neko-stickers.json'))
     check(
       'send：更新 sentCount / lastSentAt',
       after.stickers[hash]?.sentCount === 1 && typeof after.stickers[hash]?.lastSentAt === 'number',
@@ -3170,12 +3170,12 @@ function sawSentText(s) {
     const second = socket?.sent.filter((m) => m.action === 'send_private_msg').pop()
     check('send：私聊走 send_private_msg', String(second?.params?.user_id) === '1001', JSON.stringify(second?.action))
 
-    // 商城表情：图片缓存在 $DSH_HOME/qq-bridge-images，字段在旁边的 <hash>.mface.json。
+    // 商城表情：图片缓存在 $DSH_HOME/qq-bridge-neko-images，字段在旁边的 <hash>.mface.json。
     // 唤醒之后缓冲会被清掉，save 靠的就是这份旁路文件，而不是缓冲区里的那张图。
     {
       const pngM = Buffer.from('89504e470d0a1a0a0000000d4948445200000002000000020806000000', 'hex')
       const hashM = hashOfBuffer(pngM)
-      const cacheDir = join(process.env.DSH_HOME, 'qq-bridge-images')
+      const cacheDir = join(process.env.DSH_HOME, 'qq-bridge-neko-images')
       mkdirSync(cacheDir, { recursive: true })
       writeFileSync(join(cacheDir, `${hashM}.png`), pngM)
       writeFileSync(
@@ -3189,7 +3189,7 @@ function sawSentText(s) {
         description: '商城表情',
       }))
       check('save：旁路文件里的商城表情写进登记表', savedM.ok === true && savedM.kind === 'mface' && savedM.summary === '[好]', JSON.stringify(savedM))
-      const diskM = loadStickers(join(dir, 'qq-bridge-stickers.json')).stickers[hashM]
+      const diskM = loadStickers(join(dir, 'qq-bridge-neko-stickers.json')).stickers[hashM]
       check(
         'save：mface 四字段落盘，package id 是数字',
         diskM?.mface?.emoji_id === 'e1' && diskM?.mface?.emoji_package_id === 203 && diskM?.mface?.key === 'k1' && diskM?.mface?.summary === '[好]',
@@ -3209,10 +3209,10 @@ function sawSentText(s) {
           segM?.data?.file === undefined,
         JSON.stringify(segM),
       )
-      rmSync(join(dir, 'qq-bridge-stickers', `${hashM}.png`), { force: true })
+      rmSync(join(dir, 'qq-bridge-neko-stickers', `${hashM}.png`), { force: true })
       const sentMissing = JSON.parse(await stickerTool.execute({ action: 'send', hash: hashM, userId: '1001' }))
       check('send：原生表情不依赖本地图片文件', sentMissing.ok === true && sentMissing.as === 'mface', JSON.stringify(sentMissing))
-      const kept = loadStickers(join(dir, 'qq-bridge-stickers.json')).stickers[hashM]
+      const kept = loadStickers(join(dir, 'qq-bridge-neko-stickers.json')).stickers[hashM]
       check(
         'send：更新发送次数时不抹掉 mface',
         kept?.mface?.key === 'k1' && kept?.sentCount >= 1,
@@ -3256,8 +3256,8 @@ function sawSentText(s) {
   // ★ 超长出站：一条都不发（不再分段），并且**不碰 transport**。
   //   QQ 不该发长消息 —— 超长直接拒绝，让模型缩短后重发。
   {
-    const sendTool2 = registered2.find((t) => t.name === 'qq_bridge_send')
-    const sim2 = registered2.find((t) => t.name === 'qq_bridge_simulate')
+    const sendTool2 = registered2.find((t) => t.name === 'qq_bridge_neko_send')
+    const sim2 = registered2.find((t) => t.name === 'qq_bridge_neko_simulate')
     // 先记一个目的地：这条消息走 record 分支（不进白名单外的群），不会注入会话。
     await sim2.execute({ text: '记一下目的地', userId: 'test-user' })
     stickerHandlers['session/event']({ id: 'session-sticker' }, { type: 'turn/start', data: { turn: 2 } })
@@ -3447,7 +3447,7 @@ function sawSentText(s) {
       }
     }
     const qqTurn = (turn, text) => {
-      stickerHandlers['session/event']({ id: 'session-sticker' }, { type: 'user/message', data: { source: { kind: 'plugin', plugin: 'qq-bridge' } } })
+      stickerHandlers['session/event']({ id: 'session-sticker' }, { type: 'user/message', data: { source: { kind: 'plugin', plugin: 'qq-bridge-neko' } } })
       stickerHandlers['session/event']({ id: 'session-sticker' }, { type: 'turn/start', data: { turn } })
       stickerHandlers['session/event'](
         { id: 'session-sticker' },
@@ -3574,8 +3574,8 @@ function sawSentText(s) {
     }
     apply(ctx3, { targetSessionId: 'session-x', statePath: join(dir, 'state-nodebug.json'), debugTools: false, onebotUrl: '' })
     check(
-      'qq_bridge_sticker 不受 debugTools 限制',
-      registered3.some((t) => t.name === 'qq_bridge_sticker') && !registered3.some((t) => t.name === 'qq_bridge_status'),
+      'qq_bridge_neko_sticker 不受 debugTools 限制',
+      registered3.some((t) => t.name === 'qq_bridge_neko_sticker') && !registered3.some((t) => t.name === 'qq_bridge_neko_status'),
       registered3.map((t) => t.name).join(','),
     )
   }
@@ -3600,7 +3600,7 @@ function sawSentText(s) {
 //   3. 值没变就命中缓存，**不再枚举**模型列表（`listModels` 的调用次数就是观测点）。
 //   独立 ctx + 独立 statePath：与前面的用例完全隔离，也不碰共享的 `resolvedSettings` / `config`。
 {
-  const dir = mkdtempSync(join(tmpdir(), 'qq-bridge-vision-'))
+  const dir = mkdtempSync(join(tmpdir(), 'qq-bridge-neko-vision-'))
   const statePathV = join(dir, 'state.json')
   // 一张**没有登记**过的图：describeImage 会真的走到多模态模型那条路。
   const pngV = Buffer.from('89504e470d0a1a0a0000000d4948445200000002000000020806000000', 'hex')
@@ -3679,7 +3679,7 @@ function sawSentText(s) {
   ctxV.inject = (_deps, cb) => cb(ctxV)
   // 起始设置：显式写死 `provider/model` —— 这条路径解析时**不枚举**模型列表。
   writeFileSync(
-    join(dir, 'qq-bridge-settings.json'),
+    join(dir, 'qq-bridge-neko-settings.json'),
     `${JSON.stringify({ version: 1, values: { visionModel: 'prov-a/explicit-a' } })}\n`,
     'utf8',
   )
@@ -3695,9 +3695,9 @@ function sawSentText(s) {
     napcatInstallDir: join(dir, 'no-napcat'),
   })
 
-  const statusV = toolsV.find((t) => t.name === 'qq_bridge_status')
-  const simV = toolsV.find((t) => t.name === 'qq_bridge_simulate')
-  const routeV = routesV.find((r) => r.path === '/api/qq-bridge/settings')
+  const statusV = toolsV.find((t) => t.name === 'qq_bridge_neko_status')
+  const simV = toolsV.find((t) => t.name === 'qq_bridge_neko_simulate')
+  const routeV = routesV.find((r) => r.path === '/api/qq-bridge-neko/settings')
   check('视觉模型：独立 ctx 挂上了状态工具与设置路由', !!statusV && !!simV && !!routeV)
 
   // 用设置接口改值 —— 与真机上卡片的路径一致（写文件后调 applySettingChanges）。
@@ -3707,7 +3707,7 @@ function sawSentText(s) {
     await routeV.handler(
       {
         method: 'POST',
-        url: '/api/qq-bridge/settings',
+        url: '/api/qq-bridge-neko/settings',
         socket: { remoteAddress: '127.0.0.1' },
         headers: { 'content-type': 'application/json' },
         async *[Symbol.asyncIterator]() { yield Buffer.from(JSON.stringify({ set })) },
@@ -3786,7 +3786,7 @@ function sawSentText(s) {
     )
     check(
       '视觉模型：0.2.0 的描述请求用 producer-owned source',
-      visionSources.at(-1)?.kind === 'plugin:dsh-qq-bot',
+      visionSources.at(-1)?.kind === 'plugin:dsh-qq-bridge-neko',
       JSON.stringify(visionSources.at(-1)),
     )
     const textV = String(injectedV?.content?.[0]?.text ?? '')
@@ -3860,7 +3860,7 @@ function sawSentText(s) {
 //   字数预算装不下的窗口内条目同样计入。
 //   独立 ctx + 独立 statePath：与前面的用例完全隔离，也不碰共享的 `resolvedSettings` / `config`。
 {
-  const dirA = mkdtempSync(join(tmpdir(), 'qq-bridge-digest-'))
+  const dirA = mkdtempSync(join(tmpdir(), 'qq-bridge-neko-digest-'))
   const statePathA = join(dirA, 'state.json')
   writeFileSync(statePathA, `${JSON.stringify({ buffer: [] })}\n`, 'utf8')
 
@@ -3903,7 +3903,7 @@ function sawSentText(s) {
     napcatInstallDir: join(dirA, 'no-napcat'),
   }
   apply(ctxA, configA)
-  const simA = toolsA.find((t) => t.name === 'qq_bridge_simulate')
+  const simA = toolsA.find((t) => t.name === 'qq_bridge_neko_simulate')
 
   // 只记录：wakeProbability=0，正文里也没有昵称 → record（进缓冲）。
   const recordA = async () => { await simA.execute({ text: 'aaaa', userId: 'test-user', nickname: '甲' }) }
@@ -4045,7 +4045,7 @@ function sawSentText(s) {
     fakeAgent = null
     delete resolvedSettings.delivery
     fire('turn/end', { reason: { kind: 'completed' } })
-    fire('user/message', { source: { kind: 'plugin', plugin: 'qq-bridge' } })
+    fire('user/message', { source: { kind: 'plugin', plugin: 'qq-bridge-neko' } })
     fire('turn/start', { turn: 12 })
     fire('assistant/message', { message: { content: [{ type: 'text', text: '[QQ]异步失败之后照发[/QQ]' }] } })
     fire('turn/end', { reason: { kind: 'completed' } })
@@ -4069,7 +4069,7 @@ function sawSentText(s) {
 //   正文是挂载那一刻的快照，里面内嵌了出站字数上限 —— 签名少一项就是同一类 bug：
 //   把上限从 1500 改成 300 却不重挂，常驻提示仍写 1500，模型写 600 字会被 too-long 丢掉。
 {
-  const dir = mkdtempSync(join(tmpdir(), 'qq-bridge-usage-'))
+  const dir = mkdtempSync(join(tmpdir(), 'qq-bridge-neko-usage-'))
   const statePathU = join(dir, 'state.json')
   writeFileSync(statePathU, `${JSON.stringify({ buffer: [] })}\n`, 'utf8')
 
@@ -4138,7 +4138,7 @@ function sawSentText(s) {
       replyMaxChars: 1500,
       napcatInstallDir: join(dir, 'no-napcat'),
     })
-    const simU = toolsU.find((t) => t.name === 'qq_bridge_simulate')
+    const simU = toolsU.find((t) => t.name === 'qq_bridge_neko_simulate')
     check('S2：独立 ctx 挂上了模拟工具', !!simU)
 
     // 唤醒一次 → ensureTargetAgent 命中活 agent → 挂上用法说明。
@@ -4154,13 +4154,13 @@ function sawSentText(s) {
 
     // 改一个提示词**不依赖**的设置 → 不重挂（否则改昵称也要白挂一次）。
     resolvedU.nicknames = ['244', '小助手']
-    handlersU['settings/updated']?.('qq-bridge')
+    handlersU['settings/updated']?.('qq-bridge-neko')
     check('S2：改 nicknames（提示词不依赖）→ 不重挂', sectionsU.length === 1, String(sectionsU.length))
     check('S2：不重挂时没有卸载过旧片段', unmountedU.length === 0, JSON.stringify(unmountedU))
 
     // 改 replyMaxChars → 必须重挂，且新提示词里的上限跟着变。
     resolvedU.replyMaxChars = 300
-    handlersU['settings/updated']?.('qq-bridge')
+    handlersU['settings/updated']?.('qq-bridge-neko')
     check(
       'S2：改 replyMaxChars → 确实重挂（并卸掉旧片段）',
       sectionsU.length === 2 && unmountedU.length === 1,
@@ -4171,7 +4171,7 @@ function sawSentText(s) {
 
     // 改 replyMode → 同样重挂（原有行为不能退化）。
     resolvedU.replyMode = 'tool'
-    handlersU['settings/updated']?.('qq-bridge')
+    handlersU['settings/updated']?.('qq-bridge-neko')
     check(
       'S2：改 replyMode → 仍然重挂',
       sectionsU.length === 3 && unmountedU.length === 2,
@@ -4194,7 +4194,7 @@ function sawSentText(s) {
 //   命中死句柄时每次唤醒都投给已销毁的 agent，`resume` 永不再执行，
 //   台账逐条记 `wake-failed`，事后查不出句柄已死。
 {
-  const dir = mkdtempSync(join(tmpdir(), 'qq-bridge-handles-'))
+  const dir = mkdtempSync(join(tmpdir(), 'qq-bridge-neko-handles-'))
   const statePathH = join(dir, 'state.json')
   writeFileSync(statePathH, `${JSON.stringify({ buffer: [] })}\n`, 'utf8')
 
@@ -4247,8 +4247,8 @@ function sawSentText(s) {
       groupWhitelist: [],
       napcatInstallDir: join(dir, 'no-napcat'),
     })
-    const simH = toolsH.find((t) => t.name === 'qq_bridge_simulate')
-    const statusH = toolsH.find((t) => t.name === 'qq_bridge_status')
+    const simH = toolsH.find((t) => t.name === 'qq_bridge_neko_simulate')
+    const statusH = toolsH.find((t) => t.name === 'qq_bridge_neko_status')
     const handlesOf = async () => JSON.parse(await statusH.execute({})).resumedHandles
     const wakeH = () => simH.execute({ text: '244 你好', userId: 'h-user', nickname: '群友' })
 
@@ -4375,7 +4375,7 @@ function sawSentText(s) {
 
 // perGroup：每个群、每个私聊各建一条会话，并记在 sessionByDest。超长会话会请求压缩。
 {
-  const dir = mkdtempSync(join(tmpdir(), 'qq-bridge-scope-'))
+  const dir = mkdtempSync(join(tmpdir(), 'qq-bridge-neko-scope-'))
   const stateFile = join(dir, 'state.json')
   const created = []
   const agents = new Map()
@@ -4469,7 +4469,7 @@ function sawSentText(s) {
     groupWhitelist: [],
     napcatInstallDir: join(dir, 'no-napcat'),
   })
-  const sim = tools.find((t) => t.name === 'qq_bridge_simulate')
+  const sim = tools.find((t) => t.name === 'qq_bridge_neko_simulate')
   const wake = (groupId) => sim.execute({ text: '小助手在吗', userId: '10000002', groupId, nickname: '甲' })
   const first = JSON.parse(await wake('12345678'))
   const again = JSON.parse(await wake('12345678'))
@@ -4521,7 +4521,7 @@ function sawSentText(s) {
   }
   fireScoped(
     { id: first.decision.sessionId },
-    { type: 'user/message', data: { source: { kind: 'plugin', plugin: 'qq-bridge' }, content: [{ type: 'text', text: '[QQ · 群] 甲：又来' }] } },
+    { type: 'user/message', data: { source: { kind: 'plugin', plugin: 'qq-bridge-neko' }, content: [{ type: 'text', text: '[QQ · 群] 甲：又来' }] } },
   )
   fireScoped({ id: first.decision.sessionId }, { type: 'turn/start', data: { turn: 2 } })
   fireScoped({ id: first.decision.sessionId }, { type: 'turn/end', data: { reason: { kind: 'completed' } } })
@@ -4544,7 +4544,7 @@ function sawSentText(s) {
 // 人设没有时再看会话作用域，最后看宿主。超限却找不到、或 compactNow 返回空，都要留下警告。
 {
   async function driveTrim(spec) {
-    const dir = mkdtempSync(join(tmpdir(), 'qq-bridge-trim-'))
+    const dir = mkdtempSync(join(tmpdir(), 'qq-bridge-neko-trim-'))
     const stateFile = join(dir, 'state.json')
     const warns = []
     const calls = []
@@ -4650,7 +4650,7 @@ function sawSentText(s) {
       groupWhitelist: [],
       napcatInstallDir: join(dir, 'no-napcat'),
     })
-    const sim = tools.find((t) => t.name === 'qq_bridge_simulate')
+    const sim = tools.find((t) => t.name === 'qq_bridge_neko_simulate')
     const first = JSON.parse(await sim.execute({ text: '小助手在吗', userId: '10000002', groupId: '12345678', nickname: '甲' }))
     const sessionId = first?.decision?.sessionId
     const fire = (event) => {
@@ -4773,7 +4773,7 @@ function sawSentText(s) {
 // perGroup 新建会话必须带绝对 cwd，并写上标题。
 // 没有 cwd 时面板打开报 session/not-found；标题只打日志的话列表一直是「未命名」。
 {
-  const dir = mkdtempSync(join(tmpdir(), 'qq-bridge-dest-session-'))
+  const dir = mkdtempSync(join(tmpdir(), 'qq-bridge-neko-dest-session-'))
   const workspace = join(dir, 'workspace')
   mkdirSync(workspace)
   const stateFile = join(dir, 'state.json')
@@ -4887,7 +4887,7 @@ function sawSentText(s) {
     agentPreset: '',
     napcatInstallDir: join(dir, 'no-napcat'),
   })
-  const sim = tools.find((t) => t.name === 'qq_bridge_simulate')
+  const sim = tools.find((t) => t.name === 'qq_bridge_neko_simulate')
   const wake = (extra) => sim.execute({ text: '小助手在吗', userId: '10000002', nickname: '甲', ...extra })
   const lastOpts = () => createdOpts.at(-1)
 
@@ -5012,7 +5012,7 @@ function sawSentText(s) {
 
 // 会话句柄：死的丢掉；同时握着超过 48 个时放开最久没用的，映射还在，下次再恢复。
 {
-  const dir = mkdtempSync(join(tmpdir(), 'qq-bridge-handles-'))
+  const dir = mkdtempSync(join(tmpdir(), 'qq-bridge-neko-handles-'))
   const stateFile = join(dir, 'state.json')
   const agents = new Map()
   const created = []
@@ -5095,8 +5095,8 @@ function sawSentText(s) {
     groupWhitelist: groupIds,
     napcatInstallDir: join(dir, 'no-napcat'),
   })
-  const sim = tools.find((t) => t.name === 'qq_bridge_simulate')
-  const statusTool = tools.find((t) => t.name === 'qq_bridge_status')
+  const sim = tools.find((t) => t.name === 'qq_bridge_neko_simulate')
+  const statusTool = tools.find((t) => t.name === 'qq_bridge_neko_status')
   for (const groupId of groupIds) {
     await sim.execute({ text: '小助手在吗', userId: '1', groupId, nickname: '甲' })
   }
@@ -5118,7 +5118,7 @@ function sawSentText(s) {
 
 // 两路会话同时在跑：缓冲、闸门、标记块、跟随窗口都不能串。
 {
-  const dir = mkdtempSync(join(tmpdir(), 'qq-bridge-overlap-'))
+  const dir = mkdtempSync(join(tmpdir(), 'qq-bridge-neko-overlap-'))
   const stateFile = join(dir, 'state.json')
   const agents = new Map()
   const injectedBySession = new Map()
@@ -5190,10 +5190,10 @@ function sawSentText(s) {
     napcatInstallDir: join(dir, 'no-napcat'),
   })
   await new Promise((resolve) => setTimeout(resolve, 30))
-  const sim = tools.find((t) => t.name === 'qq_bridge_simulate')
-  const listen = tools.find((t) => t.name === 'qq_bridge_listen')
-  const sendTool = tools.find((t) => t.name === 'qq_bridge_send')
-  const statusTool = tools.find((t) => t.name === 'qq_bridge_status')
+  const sim = tools.find((t) => t.name === 'qq_bridge_neko_simulate')
+  const listen = tools.find((t) => t.name === 'qq_bridge_neko_listen')
+  const sendTool = tools.find((t) => t.name === 'qq_bridge_neko_send')
+  const statusTool = tools.find((t) => t.name === 'qq_bridge_neko_status')
   const readState = () => JSON.parse(readFileSync(stateFile, 'utf8'))
   const gateOfSession = async (id) => (JSON.parse(await statusTool.execute({}))).sessionGates?.[id]
   const frameText = (frame) => {
@@ -5320,8 +5320,8 @@ function sawSentText(s) {
   const prevQuote = resolvedSettings.replyWithQuote
   const prevDelivery = resolvedSettings.delivery
   const prevAgent = fakeAgent
-  const listen = registered.find((t) => t.name === 'qq_bridge_listen')
-  const sendTool = registered.find((t) => t.name === 'qq_bridge_send')
+  const listen = registered.find((t) => t.name === 'qq_bridge_neko_listen')
+  const sendTool = registered.find((t) => t.name === 'qq_bridge_neko_send')
   const framesWith = (needle) => {
     const hits = []
     for (const socket of qqSockets) {
@@ -5342,7 +5342,7 @@ function sawSentText(s) {
     resolvedSettings.delivery = 'followup'
     mainSessionHandler({ id: 'session-smoke' }, { type: 'turn/end', data: { reason: { kind: 'completed' } } })
     await new Promise((r) => setTimeout(r, 20))
-    const transport = registered.find((t) => t.name === 'qq_bridge_transport')
+    const transport = registered.find((t) => t.name === 'qq_bridge_neko_transport')
     if (JSON.parse(await transport.execute({})).transport.state !== 'open') {
       await transport.execute({ action: 'reconnect' })
       await new Promise((r) => setTimeout(r, 30))
@@ -5448,14 +5448,14 @@ function sawSentText(s) {
 
 // 检查更新：比较逻辑在 test-updates.mjs。这里只钉住设置页那条路由（准入、白话、不把英文堆栈回出去）。
 {
-  const handler = capturedRoutes.find((r) => r.path === '/api/qq-bridge/update')?.handler
+  const handler = capturedRoutes.find((r) => r.path === '/api/qq-bridge-neko/update')?.handler
   const makeRes = () => {
     const out = { status: 0, body: '' }
     return { out, writeHead: (status) => { out.status = status }, end: (body) => { out.body = String(body ?? '') } }
   }
   const req = (method, { addr = '127.0.0.1', headers = {}, body = '{}' } = {}) => ({
     method,
-    url: '/api/qq-bridge/update',
+    url: '/api/qq-bridge-neko/update',
     socket: { remoteAddress: addr },
     headers: {
       ...(method === 'POST'
@@ -5536,7 +5536,7 @@ function sawSentText(s) {
           draft: false,
           prerelease: false,
           body: '商城表情可以再发一次',
-          html_url: 'https://github.com/yunfengnobug/dsh-qq-bot/releases/tag/v9.9.9',
+          html_url: 'https://github.com/SmilessNEKO/dsh_qq_onebot_neko/releases/tag/v9.9.9',
         },
       ],
     })
@@ -5552,8 +5552,8 @@ function sawSentText(s) {
         String(newer.summary).includes('商城表情可以再发一次') &&
         !String(newer.message).includes('商城表情可以再发一次') &&
         !String(newer.message).includes('升级命令') &&
-        newer.install === 'github:yunfengnobug/dsh-qq-bot#v9.9.9' &&
-        String(newer.command).includes('dsh plugin --profile web add github:yunfengnobug/dsh-qq-bot#v9.9.9'),
+        newer.install === 'github:SmilessNEKO/dsh_qq_onebot_neko#v9.9.9' &&
+        String(newer.command).includes('dsh plugin --profile web add github:SmilessNEKO/dsh_qq_onebot_neko#v9.9.9'),
       JSON.stringify(newer).slice(0, 240),
     )
 
@@ -5587,7 +5587,7 @@ function sawSentText(s) {
             draft: false,
             prerelease: false,
             body: '',
-            html_url: `https://github.com/yunfengnobug/dsh-qq-bot/releases/tag/v${PLUGIN_VERSION}`,
+            html_url: `https://github.com/SmilessNEKO/dsh_qq_onebot_neko/releases/tag/v${PLUGIN_VERSION}`,
           },
         ],
       }
@@ -5645,7 +5645,7 @@ function sawSentText(s) {
       ],
     }
   }
-  const dir = mkdtempSync(join(tmpdir(), 'qq-bridge-update-start-'))
+  const dir = mkdtempSync(join(tmpdir(), 'qq-bridge-neko-update-start-'))
   const localCtx = {
     ...ctx,
     logger: { info: (m) => logs.push(String(m)), warn: () => {} },
@@ -5704,9 +5704,9 @@ function sawSentText(s) {
 }
 
 {
-  const dir = mkdtempSync(join(tmpdir(), 'qq-bridge-admin-'))
+  const dir = mkdtempSync(join(tmpdir(), 'qq-bridge-neko-admin-'))
   const statePathA = join(dir, 'state.json')
-  const settingsFile = join(dir, 'qq-bridge-settings.json')
+  const settingsFile = join(dir, 'qq-bridge-neko-settings.json')
   const savedHome = process.env.DSH_HOME
   const savedWebSocket = globalThis.WebSocket
   const sockets = []
@@ -5895,14 +5895,14 @@ function sawSentText(s) {
       nonOwnerListed.texts.every((t) => !t.includes('已移出')) && fileValues().groupWhitelist.join(',') === '12345678,87654321',
     )
 
-    const route = routes.find((r) => r.path === '/api/qq-bridge/settings')
+    const route = routes.find((r) => r.path === '/api/qq-bridge-neko/settings')
     const post = async (body) => {
       const raw = JSON.stringify(body)
       const res = { status: 0, body: '' }
       await route.handler(
         {
           method: 'POST',
-          url: '/api/qq-bridge/settings',
+          url: '/api/qq-bridge-neko/settings',
           socket: { remoteAddress: '127.0.0.1' },
           headers: { 'content-type': 'application/json', 'content-length': String(Buffer.byteLength(raw)) },
           async *[Symbol.asyncIterator]() {
@@ -5923,7 +5923,7 @@ function sawSentText(s) {
 
     await post({ set: { ownerWhitelist: ['100000001'] } })
     cfg.atOnlyInGroup = false
-    const sim = toolsA.find((t) => t.name === 'qq_bridge_simulate')
+    const sim = toolsA.find((t) => t.name === 'qq_bridge_neko_simulate')
     const simulated = JSON.parse(await sim.execute({ text: '白名单 加 11112222', userId: '100000001', groupId: '12345678' }))
     check(
       '调试工具模拟不会改白名单',
@@ -5983,7 +5983,7 @@ function sawSentText(s) {
       ownerWhitelist: [],
       atOnlyInGroup: false,
     })
-    const simB = toolsB.find((t) => t.name === 'qq_bridge_simulate')
+    const simB = toolsB.find((t) => t.name === 'qq_bridge_neko_simulate')
     const preview = JSON.parse(await simB.execute({ text: '你好', userId: '200000002', groupId: '12345678', dryRun: true }))
     check('重启后仍认设置文件里的群白名单', preview.allowed === true, JSON.stringify(preview))
   } finally {
@@ -5998,7 +5998,7 @@ function sawSentText(s) {
 }
 
 {
-  const dir = mkdtempSync(join(tmpdir(), 'qq-bridge-admin-legacy-'))
+  const dir = mkdtempSync(join(tmpdir(), 'qq-bridge-neko-admin-legacy-'))
   const savedWebSocket = globalThis.WebSocket
   const sockets = []
   globalThis.WebSocket = class {
@@ -6084,9 +6084,9 @@ function sawSentText(s) {
     for (let i = 0; i < 40 && before() === n0; i++) await new Promise((r) => setTimeout(r, 15))
     check(
       '旧设置服务：命令调用 update，并把群号写进用户层',
-      updates.some((u) => u.ns === 'qq-bridge' && u.patch?.groupWhitelist?.includes('12345678')) &&
+      updates.some((u) => u.ns === 'qq-bridge-neko' && u.patch?.groupWhitelist?.includes('12345678')) &&
         resolved.groupWhitelist?.includes('12345678') &&
-        !existsSync(join(dir, 'qq-bridge-settings.json')),
+        !existsSync(join(dir, 'qq-bridge-neko-settings.json')),
       JSON.stringify(updates),
     )
     failUpdate = true
@@ -6192,7 +6192,7 @@ function sawSentText(s) {
 
   // 离线真跑 apply：假 subprocess 记录 spawn，临时目录里造一个官方 launcher 脚本。
   async function runAutoStart({ enabled, delayMs, installed, closeDuringWait, disposeNow }) {
-    const dir = mkdtempSync(join(tmpdir(), 'qq-bridge-autostart-'))
+    const dir = mkdtempSync(join(tmpdir(), 'qq-bridge-neko-autostart-'))
     if (installed) writeFileSync(join(dir, 'launcher-win10.bat'), '@echo off\r\n')
     const spawnCalls = []
     const warnCalls = []
