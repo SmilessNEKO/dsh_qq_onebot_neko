@@ -27,3 +27,6 @@ docs/audit-*.md
 *.log
 Thumbs.db
 .DS_Store
+
+# Locally built release tarballs (npm pack). Keep them on disk, never commit.
+*.tgz
