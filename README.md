@@ -17,7 +17,7 @@ Cordis 插件 id 是 `qq-bridge`。npm 包名是 `@fengye_nobug/dsh-qq-bot`。�
 - 被 @、命中昵称、被戳一定叫醒。其余按 `wakeProbability`（默认 `0.05`）抽样，没抽中只记录。
 - 发回 QQ 的内容由 `replyMode` 决定。在 DSH 界面里聊同一个会话时，正文不会进群。
 - 图片先落盘，叫醒时写成文字。表情包可以登记后再发。半角方括号里的 `[表情名]` 会变成 QQ 系统表情。
-- 识图按大小分档：`imageDescribeSafeBytes`（默认 1.5MB）以内直接识图；介于它与 `imageDescribeMaxBytes`（默认 6MB）之间的先压到约 700KB 再识图；更大的默认不识别，正文只留 `[图片#短哈希]` 位置标记。一次唤醒的所有图片原始字节合计还受 `imageWakeTotalBytes`（默认 12MB）约束，超出部分同样只留占位。`describeImages` 关掉则完全不识图、只留占位——适合会话模型自己能看图时省调用。
+- 图片先落盘，叫醒时一律交给识图模型读成一句话，不再按体积分档（`imageDescribeSafeBytes` / `imageDescribeMaxBytes` / `imageWakeTotalBytes` 三项从此不再生效，保留只为兼容旧配置）。一次唤醒最多识别 3 张，其余留 `[图片#短哈希]` 占位。识图被 token 上限截断会自动翻倍预算重试（最多三次），三次都不行就在正文写「描述失败」。`describeImages` 关掉则完全不识图、只留占位——适合会话模型自己能看图时省调用。
 - perGroup 下会话会自动轮换：聊到 `rotateMaxTurns`（默认 300 轮）或上下文占用达到 `rotatePressureRatio`（默认 `0.75`）时就新建一条会话接着聊，旧会话留在面板里可查、不会被删。`rotateEnabled` 置 false 可关掉。目的是不让长群聊撞上模型窗口上限后每轮都失败。
 - 新建的 QQ 会话会挂到「QQ 桥接」工作区，面板里按目录分组显示，不散落在最近会话里。
 - 设置卡片在 **设置 → 插件 → 插件配置 → QQ 桥接**。可以检查更新；有新正式版时一键安装，并重启面板。

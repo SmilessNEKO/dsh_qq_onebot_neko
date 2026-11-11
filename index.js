@@ -216,9 +216,9 @@ const BridgeSettings = Schema.object({
   delivery: Schema.string().default('auto').description('忙的时候怎么插话：auto = 能插就插，不能就排队（推荐）；followup = 一律新开一轮；steer = 不管忙不忙都插。'),
   visionModel: Schema.string().default('').description('用来看图的模型，写成 provider/model。留空 = 自动找一个能看图的。'),
   describeImages: Schema.boolean().default(true).description('收到图片时先叫一个模型把图读成一句话。关掉的话正文里只留图片位置标记，图本身照样作为附件交给会话（会话模型支持看图时才建议关）。'),
-  imageDescribeSafeBytes: Schema.number().default(1572864).description('图片不超过这个字节数就直接识图（默认 1.5MB）。'),
-  imageDescribeMaxBytes: Schema.number().default(6291456).description('图片超过这个字节数就默认不识别，只留位置标记（默认 6MB）。介于两档之间的会先压缩再识图。'),
-  imageWakeTotalBytes: Schema.number().default(12582912).description('一次唤醒里所有图片的原始字节总和上限（默认 12MB），超出部分只留位置标记，避免请求体撞网关上限。'),
+  imageDescribeSafeBytes: Schema.number().default(1572864).description('已不再生效：识图不再按体积分档，图片一律直接交给识图模型。保留这一项只为兼容旧配置。'),
+  imageDescribeMaxBytes: Schema.number().default(6291456).description('已不再生效：不再有「太大就不识别」这一档。保留这一项只为兼容旧配置。'),
+  imageWakeTotalBytes: Schema.number().default(12582912).description('已不再生效：不再按总字节数裁剪图片来源。一次唤醒最多识别 3 张。'),
   rotateEnabled: Schema.boolean().default(true).description('perGroup 下聊得太久或上下文快满时，自动新建一条会话接着聊（旧的留着可查，不会删）。'),
   rotateMaxTurns: Schema.number().default(300).description('同一个群/私聊聊到这么多轮就换新会话（默认 300，填 0 = 只按上下文压力判断）。'),
   rotatePressureRatio: Schema.number().default(0.75).description('上下文占用达到这个比例就换新会话（默认 0.75，填 0 = 只按轮数判断）。'),
@@ -419,34 +419,6 @@ export function planImageBudget(items, options = {}) {
     out.push(single)
   }
   return out
-}
-
-/**
- * 把一张图压到目标字节以内，供识图用。
- *
- * 走宿主的 `attachments.readImageRequest(ref, target)` —— 它会按 target 的长边像素
- * 与 `maxBytes` 真做缩放+重编码，并且结果会缓存在 request-images 下，重复的图不再压第二次。
- * 这条路比"自己找 sharp"稳：sharp 不在插件依赖里，宿主却一定带。
- * 任何一步失败都返回 null，由调用方降级成 `skip`（绝不抛错、绝不影响文本）。
- *
- * @returns {Promise<{data: Buffer, mediaType: string} | null>}
- */
-async function compressForDescribe(attachments, ref, targetBytes = IMAGE_DESCRIBE_TARGET_BYTES) {
-  try {
-    if (!attachments || !ref) return null
-    if (typeof attachments.readImageRequest !== 'function') return null
-    // 长边 1024 对识图足够（文字仍可辨认），配合 maxBytes 一起压。
-    const target = { width: 1024, height: 1024, maxBytes: targetBytes }
-    const out = await attachments.readImageRequest(ref, target)
-    if (!out?.data) return null
-    const data = Buffer.from(out.data)
-    if (data.byteLength === 0) return null
-    logger.info(`图片已压缩到 ${Math.round(data.byteLength / 1024)}KB 供识图`)
-    return { data, mediaType: out.mediaType ?? 'image/jpeg' }
-  } catch (error) {
-    logger.warn(`图片压缩失败（将跳过识图）：${error?.message ?? error}`)
-    return null
-  }
 }
 
 /**
@@ -2515,6 +2487,14 @@ export function apply(ctx, config) {
   const MAX_DESCRIBE_PER_WAKE = 3
   /** 单张图的描述最多试几次（1 次 + 2 次重试）—— 多模态调用有几率偶发失败。 */
   const VISION_ATTEMPTS = 3
+  /**
+   * 识图请求的 token 预算。
+   * reasoning 模型（如 nemotron-3.5-super-vl:free）会先输出思考再给正文，
+   * 实测量一张 365KB 的图 reasoning 就吃掉 798 token；给 600 时正文一个字都没有。
+   * 起始给 2048，若 finish=length（思考烧光预算）则下一次翻倍，上限 8192。
+   */
+  const VISION_MAX_TOKENS = 2048
+  const VISION_MAX_TOKENS_CAP = 8192
 
   /**
    * 视觉模型解析结果的缓存。
@@ -2632,11 +2612,14 @@ export function apply(ctx, config) {
       let lastReason = '未知原因'
       // 多模态调用**有几率失败**（网络/限流/偶发空回复），一次失败就不发描述太亏了 ——
       // 用户报过“识图还是有几率调用失败”。所以：1 次 + 2 次重试，退避 300/600ms。
+      // 另外：reasoning 模型可能把预算全烧在思考上（finish=length、正文为空），
+      // 这种情况**不是真失败**，下一次重试就给更大的预算，别拿同一个上限硬撞三遍。
+      let tokenBudget = VISION_MAX_TOKENS
       for (let attempt = 1; attempt <= VISION_ATTEMPTS; attempt++) {
         try {
           let out = ''
           let finish = ''
-          for await (const chunk of llm.stream({ provider: conf.provider, model: conf.model, messages: [message], maxTokens: 600 })) {
+          for await (const chunk of llm.stream({ provider: conf.provider, model: conf.model, messages: [message], maxTokens: tokenBudget })) {
             if (chunk.type === 'text-delta') out += chunk.text
             if (chunk.type === 'finish') {
               finish = chunk.reason?.kind ?? ''
@@ -2648,7 +2631,14 @@ export function apply(ctx, config) {
           }
           const text = out.trim()
           if (text) return { ok: true, text }
-          lastReason = `模型返回空内容（finish=${finish || '?'}）`
+          // 被 token 上限截断（reasoning 吃光了预算）：下一次翻倍再来。
+          // DSH 的 kind 叫 max-tokens；length 是适配器转换前的名字，两个都要认。
+          if (finish === 'length' || finish === 'max-tokens') {
+            lastReason = `模型只输出了思考、正文被截断（finish=${finish}，预算 ${tokenBudget}）`
+            tokenBudget = Math.min(tokenBudget * 2, VISION_MAX_TOKENS_CAP)
+          } else {
+            lastReason = `模型返回空内容（finish=${finish || '?'}，预算 ${tokenBudget}）`
+          }
         } catch (error) {
           lastReason = error?.message ?? String(error)
         }
@@ -2827,6 +2817,10 @@ export function apply(ctx, config) {
   /**
    * 把缓存里的图片读出来交给附件服务，返回可直接放进消息里的 image 内容块。
    * **任何一步失败都只是少一张图**，绝不影响文本与策略判定。
+   *
+   * ⚠️ 2026-11-11 起**不再被调用**：肉包要求还原成默认的「纯描述」模式 ——
+   * 图片只走 visionModel 识图、把描述填回 [图片] 占位符，不作为附件塞给会话。
+   * 想恢复附件模式，在唤醒流程里重新调本函数并把 blocks 传给 makeMessage 即可。
    */
   async function loadImageBlocks(cached) {
     const list = Array.isArray(cached) ? cached : []
@@ -3075,69 +3069,28 @@ export function apply(ctx, config) {
     const digest = renderDigest(s, bufferSnapshot)
     // 图片：缓冲里攒下的 + 本条消息的，一起下载成真正的附件。
 
-    // 失败就只留 [图片] 占位符，但把**失败原因**附在正文里 —— 否则“看不见图”对模型完全不可观测。
+    // 还原成插件的默认方式（2026-11-11，肉包要求）：
+    //   图片**不再作为附件**塞给 DSH 会话，只走「指定 visionModel 识图 → 把描述就地填回 [图片] 占位符」。
+    //   这样目标会话是纯文本模型也没关系，且请求体不会被图片撑大。
+    //
+    // 做法：不做附件登记（不再调 loadImageBlocks），失败时只留 [图片] 占位符并在正文附上原因
+    // —— 否则“看不见图”对模型完全不可观测。
+    // 占位符里仍带短哈希，模型才能指着一张具体的图去 save / send 表情包。
     const allImages = [...digest.images, ...cachedImages]
-    const { blocks: imageBlocks, failures } = await loadImageBlocks(allImages)
-    // 目标模型多半看不了图（deepseek-v4-flash 就是纯文本，附件会被系统剥成 “image omitted”）
-    // —— 所以先用多模态模型把图读成一句描述，然后**就地填回 [图片] 占位符**。
-    // （描述另起一段附在末尾是错的：模型会读成“这张图没解析出来、后面又来了一张”。）
-    // 占位符里同时带上短哈希，模型才能指着一张具体的图去 save / send 表情包。
-    //
-    // `describeImages` 关掉时**一次模型调用都不花**：noteById 里只留空 text，
-    // 占位符退化成纯位置标记 `[图片#短哈希]`，图本身仍然作为附件交给会话
-    // （loadImageBlocks 在上一步已经把 blocks 组好了）。
-    // 商城表情的 summary 是元数据、不花钱，关掉描述也照样保留。
-    //
-    // 分级（用户 2026-11-10 定的方案，见 classifyImageForDescribe / planImageBudget）：
-    //   小图 → 直接识图；中等图 → 压到 IMAGE_DESCRIBE_TARGET_BYTES 再识图；
-    //   特别大的图 → 默认不识别，只留位置标记。一次唤醒还有总量预算，
-    //   免得历史越攒越多把请求体顶到网关的 50MB 上限。
+    const imageBlocks = []
+    const failures = []
+    // 逐张直接送识图：撤销 2026-11-10 的三档分级（小图直识 / 中图压缩 / 大图跳过）。
     const noteById = new Map()
-    if (s.describeImages !== false) {
-      const plan = planImageBudget(
-        allImages.map((img) => ({ bytes: img?.bytes })),
-        {
-          safeBytes: s.imageDescribeSafeBytes,
-          maxBytes: s.imageDescribeMaxBytes,
-          totalBytes: s.imageWakeTotalBytes,
-        },
-      )
-      // 只有前 MAX_DESCRIBE_PER_WAKE 张会真的去调模型，其余留空占位（省调用）。
-      let described = 0
-      for (const [i, img] of allImages.entries()) {
-        const step = plan[i] ?? { action: 'skip', reason: '超出本轮预算' }
-        const allowed = described < MAX_DESCRIBE_PER_WAKE
-        if (step.action === 'skip' || !allowed) {
-          noteById.set(img, { text: '', hash: img.hash })
-          if (step.action === 'skip') logger.info(`图片跳过识图：${step.reason}`)
-          continue
-        }
-        let r
-        if (step.action === 'compress') {
-          const attachments = ctx.get('attachments')
-          // 压缩需要附件的 ref：先把原图登记一次，再按目标尺寸重编码。
-          const ref = await attachments?.saveImage?.({
-            data: readFileSync(img.path),
-            mediaType: img.mediaType,
-            name: img.name || undefined,
-          }).catch(() => null)
-          const shrunk = await compressForDescribe(attachments, ref)
-          if (shrunk) {
-            r = await describeImage({ ...img, path: null, data: shrunk.data, mediaType: shrunk.mediaType })
-          } else {
-            // 压不动就不硬塞，宁可只留占位。
-            noteById.set(img, { text: '', hash: img.hash })
-            logger.info('图片压缩失败，跳过识图')
-            continue
-          }
-        } else {
-          r = await describeImage(img)
-        }
-        described += 1
-        noteById.set(img, { text: r.ok ? r.text : `（描述失败：${r.reason}）`, hash: img.hash })
+    let described = 0
+    for (const img of allImages) {
+      // 仍然只给前 MAX_DESCRIBE_PER_WAKE 张花钱，其余留位置标记（原版也这么做）。
+      if (described >= MAX_DESCRIBE_PER_WAKE) {
+        noteById.set(img, { text: '', hash: img.hash })
+        continue
       }
-    } else {
-      for (const img of allImages) noteById.set(img, { text: '', hash: img.hash })
+      const r = await describeImage(img)
+      described += 1
+      noteById.set(img, { text: r.ok ? r.text : `（描述失败：${r.reason}）`, hash: img.hash })
     }
 
     let text =
