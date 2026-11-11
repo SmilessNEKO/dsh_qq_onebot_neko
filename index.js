@@ -3692,8 +3692,12 @@ export function apply(ctx, config) {
 
       // 默认（replyMode='marker'）**只发 [QQ]…[/QQ] 里的内容**：整轮的技术说明、
       // 思考过程、给 DSH 看的报告都不该倒进群里。没有标记块就一个字都不发。
-      const text = s.replyMode === 'always' ? raw : extractQQReply(raw)
-      if (!text) {
+      //
+      // **按块分别发出**（不是拼成一条）：人格卡要求「真人是分几条说的」，
+      // 一轮里写 2–3 个块就该连发 2–3 条短消息。早先 join('\n\n') 成一条，
+      // QQ 里显示成「一句、一行空白、又一句」，用户报过「一句加一行空格」。
+      const blocks = s.replyMode === 'always' ? [raw] : extractQQBlocks(raw)
+      if (blocks.length === 0) {
         logger.info('本轮没有 [QQ] 块，未发往 QQ')
         return
       }
@@ -3703,38 +3707,48 @@ export function apply(ctx, config) {
       // 被拒的结果记进独立的丢弃台账。
       const via = s.replyMode === 'always' ? 'always' : 'marker'
       const outboundDest = turnDest || state.lastDestination
-      sendToQQ(text, outboundDest, { quoteMessageId: turnMsgId || null })
-        .then((result) => {
-          if (result?.dropped) {
-            const detail = result.reason === 'too-long' ? `（${result.length} 字 > 上限 ${result.limit} 字）` : ''
-            logger.warn(`标记块未发出：reason=${result.reason}${detail}`)
-            // 被拒的出站**不写 outbox**（那是假账），改记独立的丢弃台账。
-            recordDropped({
-              via,
-              reason: result.reason,
-              limit: result.limit ?? null,
-              length: result.length ?? null,
-              destination: outboundDest,
-              sessionId: session.id,
+      // 串行发、每条之间留一点间隔：分条发出要保证顺序，也让群里看起来像人连发。
+      // 引用只挂在**第一条**上，避免每条都引同一句。
+      ;(async () => {
+        for (let i = 0; i < blocks.length; i++) {
+          const piece = blocks[i]
+          try {
+            const result = await sendToQQ(piece, outboundDest, {
+              quoteMessageId: i === 0 ? (turnMsgId || null) : null,
             })
-            // 回注会话：标记块模式下模型收不到任何反馈，会以为已经回复了。
-            notifyDropToSession(session.id, {
-              via,
-              reason: result.reason,
-              limit: result.limit ?? null,
-              length: result.length ?? null,
-              error: result.error ?? null,
-            })
-            return
+            if (result?.dropped) {
+              const detail = result.reason === 'too-long' ? `（${result.length} 字 > 上限 ${result.limit} 字）` : ''
+              logger.warn(`标记块未发出：reason=${result.reason}${detail}`)
+              recordDropped({
+                via,
+                reason: result.reason,
+                limit: result.limit ?? null,
+                length: result.length ?? null,
+                destination: outboundDest,
+                sessionId: session.id,
+              })
+              // 回注会话：标记块模式下模型收不到任何反馈，会以为已经回复了。
+              notifyDropToSession(session.id, {
+                via,
+                reason: result.reason,
+                limit: result.limit ?? null,
+                length: result.length ?? null,
+                error: result.error ?? null,
+              })
+            } else {
+              recordOutbox({
+                sessionId: session.id,
+                via,
+                endReason: kind,
+                text: piece,
+              })
+            }
+          } catch (e) {
+            logger.warn(`sendToQQ failed: ${e?.message ?? e}`)
           }
-          recordOutbox({
-            sessionId: session.id,
-            via,
-            endReason: kind,
-            text,
-          })
-        })
-        .catch((e) => logger.warn(`sendToQQ failed: ${e?.message ?? e}`))
+          if (i < blocks.length - 1) await new Promise((r) => setTimeout(r, 420))
+        }
+      })()
     }
   }))
 
@@ -5188,13 +5202,18 @@ export function buildUsagePrompt(s = {}) {
 }
 
 /**
- * 从整轮回复里抽出**要发到 QQ** 的内容：所有 `[QQ]…[/QQ]` 块，按出现顺序拼接。
+ * 从整轮回复里抽出**要发到 QQ** 的每一个块，**分开返回**（不拼接）。
  *
- * 没有块就返回空串 —— 默认什么都不发。这是刻意的：DSH 会话里大量内容
+ * 为什么要分开：人格卡要求「真人是分几条说的」——一轮里写 2–3 个 `[QQ]` 块，
+ * 期望它们像真人那样**连发几条短消息**。早先把所有块 join('\n\n') 成一条，
+ * QQ 里就变成「一句、一行空白、又一句」，用户报过「一句加一行空格」。
+ * 分块发出才对得上这个期待。
+ *
+ * 没有块就返回空数组 —— 默认什么都不发。这是刻意的：DSH 会话里大量内容
  * （技术说明、路径、思考过程）不该出现在 QQ 群里，宁可沉默也不要刷屏。
  * 导出是为了可测试。
  */
-export function extractQQReply(text) {
+export function extractQQBlocks(text) {
   const out = []
   // ⚠️ **开标记必须位于行首**（允许行首空白）。
   //
@@ -5213,7 +5232,15 @@ export function extractQQReply(text) {
     if (out.length > 0 && out[out.length - 1] === piece) continue
     out.push(piece)
   }
-  return out.join('\n\n')
+  return out
+}
+
+/**
+ * 兼容旧调用：把所有块拼成一条（单换行，不再用空行）。
+ * 导出是为了可测试。出站主路径请用 `extractQQBlocks` 分块发。
+ */
+export function extractQQReply(text) {
+  return extractQQBlocks(text).join('\n')
 }
 
 /**
