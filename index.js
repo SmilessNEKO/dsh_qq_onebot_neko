@@ -198,6 +198,7 @@ const BridgeSettings = Schema.object({
   targetSessionId: Schema.string().default('').description('接到哪个会话。single 时留空 = 不接到任何会话。perGroup 时可以留空，新建会话用宿主当前的默认模型。'),
   nicknames: Schema.array(Schema.string()).default(['244']).description('听到这些名字就回应。用逗号分开，例如 244, 小助手。'),
   wakeProbability: Schema.number().default(0.05).description('没点名时的回应概率（0 到 1）。默认 0.05。'),
+  alwaysWakePrivate: Schema.boolean().default(true).description('主人的私聊必回：ownerWhitelist 里的号发来的私聊一律唤醒、不参与概率抽签。默认开。'),
   whitelist: Schema.array(Schema.string()).default([]).description('哪些私聊可以叫醒。留空 = 任何私聊都不叫醒。'),
   groupWhitelist: Schema.array(Schema.string()).default([]).description('哪些群可以叫醒。留空 = 任何群都不叫醒。'),
   ownerWhitelist: Schema.array(Schema.string()).default([]).description('主人 QQ。这些号才能在 QQ 里用「白名单」命令。留空 = 谁都不能用。'),
@@ -1817,6 +1818,11 @@ export function apply(ctx, config) {
     // 会话跟随：模型开着窗口时，同一目的地的普通消息也唤醒（放在 @ 闸门**之前**，
     // 否则群里 atOnlyInGroup 会把线性对话直接掐断）。
     if (listeningActive(msg)) return { action: 'wake', reason: 'listening' }
+    // 私聊必回（alwaysWakePrivate，默认开）：**只对主人**生效 —— ownerWhitelist 里的号发来的
+    // 私聊不参与抽签、一律唤醒；别人的私聊仍按原规则（昵称 / 戳一戳 / 概率）。群里完全不受影响。
+    if (!msg.groupId && s.alwaysWakePrivate !== false && s.ownerWhitelist.includes(String(msg.userId))) {
+      return { action: 'wake', reason: 'private-owner' }
+    }
     // M2：群里的额外闸门 —— 没被 @ 就完全不处理（比概率唤醒更严）。
     if (msg.groupId && s.atOnlyInGroup && msg.atSelf !== true) return { action: 'drop', reason: 'group-not-at' }
     // 戳一戳（notice 事件合成的入站）：戳的是我 = 和“@ 我”同级，必唤醒；
