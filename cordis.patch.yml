@@ -39,8 +39,9 @@
         heartbeatTimeoutMs: 90000
 
         # ── M5：NapCat 自助托管（“一键包”体验，但不真打包）─────────────────────
-        # 注意：这些只是**参数**。插件加载时绝不会去下载或执行任何东西，
-        # 一切动作都要靠显式调用 qq_bridge_napcat 工具触发。
+        # 注意：这些只是**参数**。下载 / 安装 / 写配置一律由显式调用 qq_bridge_napcat 触发，
+        # 插件加载时绝不自作主张下载或安装。唯一例外是 autoStartNapcat：打开后 DSH 启动延迟
+        # 若干秒只「启动已经装好的」NapCat（需先手动装好并登录过一次），不碰下载 / 安装。
         # NapCat 安装目录；留空 = $DSH_HOME/napcat
         napcatInstallDir: ''
         # 对外可打开的 NapCat WebUI。留空 = 读 webui.json（通常是 127.0.0.1，只在跑 NapCat 的机器上打得开）。
@@ -54,6 +55,10 @@
         onebotPort: 3001
         # 快速登录用的 QQ 号（需先用 QQ 手动成功登录过一次）
         qqNumber: ''
+        # DSH 启动后自动拉起已装好的 NapCat。默认 false；只启动，不下载 / 安装 / 写配置。
+        autoStartNapcat: false
+        # 自动启动前的等待毫秒数，默认 20000（20 秒），范围 0–600000；填 0 = 起来就立刻尝试。
+        autoStartNapcatDelayMs: 20000
 
         # 会话怎么分：single = 所有群共用 targetSessionId；perGroup = 每个群/私聊各一条。
         sessionScope: single

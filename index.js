@@ -147,6 +147,35 @@ const MAX_SESSION_HANDLES = 48
 /** `list` 里每条描述截断到多少字（紧凑列表，别把上下文吃掉）。 */
 const MAX_STICKER_DESC = 40
 
+/** 每次回复之间的间隔默认值（毫秒）。与出站分条节奏共用。 */
+const DEFAULT_REPLY_GAP_MIN_MS = 1200
+const DEFAULT_REPLY_GAP_MAX_MS = 2800
+/** 跟随监听的空闲失效默认值：这么久没有新消息就停止跟随。 */
+const DEFAULT_LISTEN_IDLE_MS = 120000
+/** 模型链默认容错次数：同一个模型连续报错这么多次就换下一个。 */
+const DEFAULT_MODEL_CHAIN_FAILURES = 5
+/** DSH 启动后自动拉起 NapCat 的默认延迟：20 秒。 */
+const DEFAULT_AUTO_START_NAPCAT_DELAY_MS = 20000
+
+/**
+ * 单个 QQ 目的地的个性化档案（群或私聊）。
+ *
+ * `target` 与 `destinationKeyOf()` 同一套写法：`group:<群号>` / `private:<QQ号>`。
+ * 用户要求的三件事都在这里：
+ * - 群可以设休眠时段（默认不看消息，只记账，不唤醒）；
+ * - 主人的私聊 / 指定私聊可以设「24 小时实时回复」，不受休眠时段约束；
+ * - 对方连着发消息时可以先等一会儿（`burstWaitMs`），没人接着说了再回；
+ *   几分钟没新消息就停止跟随（`idlePauseMs`）。
+ */
+const DestinationProfile = Schema.object({
+  target: Schema.string().default('').description('group:群号 或 private:QQ号。留空的行会被忽略。'),
+  label: Schema.string().default('').description('备注名，只用来在卡片上认人。'),
+  quietHours: Schema.string().default('').description('休眠时段，例如 23:00-08:00。留空 = 不休眠。休眠期间只记账、不回复。'),
+  alwaysReply: Schema.boolean().default(false).description('这个目的地 24 小时实时回复，不受休眠时段限制。主人的私聊想随叫随到就给它打开。'),
+  burstWaitMs: Schema.number().default(0).description('对方连着发消息时，先等这么多毫秒没人再说才回复。0 = 立刻回复（默认）。'),
+  idlePauseMs: Schema.number().default(DEFAULT_LISTEN_IDLE_MS).description('跟随监听期间，这么久没有新消息就自动停听。默认 120000（2 分钟）。'),
+})
+
 export const Config = Schema.object({
   targetSessionId: Schema.string().default('').description('接到哪个会话。single 时留空 = 不接到任何会话。perGroup 时可以留空，新建会话用宿主当前的默认模型。'),
   agentPreset: Schema.string().default('').description('人设预设。留空 = 沿用会话自己记着的。'),
@@ -161,12 +190,14 @@ export const Config = Schema.object({
   stripMarkdown: Schema.boolean().default(true).description('去掉 Markdown 记号。QQ 不会渲染它们。'),
   replyMode: Schema.string().default('marker').description('群里发出去的是哪一段：marker = 只发「发给群」里的那段；tool = 用发消息工具；always = 整段回答都进群（慎用）。'),
   delivery: Schema.string().default('auto').description('忙的时候怎么插话：auto = 能插就插，不能就排队（推荐）；followup = 一律新开一轮；steer = 不管忙不忙都插。'),
-  visionModel: Schema.string().default('').description('用来看图的模型，写成 provider/model。留空 = 自动找一个能看图的。'),
   describeImages: Schema.boolean().default(true).description('收到图片时先叫一个模型把图读成一句话。关掉的话正文里只留图片位置标记，图本身照样作为附件交给会话（会话模型支持看图时才建议关）。'),
   heartbeatTimeoutMs: Schema.number().default(90000).description('多久没收到连接数据就判定断线并重连。'),
   // ── M5：NapCat 自助托管 ───────────────────────────────────────────────────
-  // 注意：这些只是**参数**；插件加载时绝不下载或执行任何东西，
-  // 一切都要靠显式调用 qq_bridge_napcat 工具。
+  // 注意：下载 / 安装 / 写配置这些动作默认绝不自动做，一切都要靠显式调用
+  // qq_bridge_napcat 工具。唯一的例外是下面这个 autoStartNapcat 开关：打开后
+  // 只在 DSH 启动后延迟「启动已经装好的 NapCat」，仍然不下载、不安装。
+  autoStartNapcat: Schema.boolean().default(false).description('DSH 启动后自动拉起 NapCat。需要 NapCat 已经装好、配置好并登录过一次；插件只负责启动，绝不自动下载或安装。默认关。'),
+  autoStartNapcatDelayMs: Schema.number().default(DEFAULT_AUTO_START_NAPCAT_DELAY_MS).description('自动启动 NapCat 前的等待毫秒数，给 DSH 和 QQ 一点先起来的时间。默认 20000（20 秒）。'),
   napcatInstallDir: Schema.string().default('').description('NapCat 安装目录。留空 = $DSH_HOME/napcat。自己装的或 Docker 里的不在这个位置时，填实际目录。'),
   napcatWebuiUrl: Schema.string().default('').description('NapCat 网页管理地址。留空 = 读安装目录里的 webui.json。那边通常是 127.0.0.1，只有跑着 NapCat 的那台机器能打开。远程使用时填一个外面打得开的地址。'),
   napcatVersion: Schema.string().default('').description('要下载的 NapCat 版本，例如 v4.18.28。留空 = 最新。'),
@@ -179,6 +210,29 @@ export const Config = Schema.object({
     Schema.const('perGroup'),
   ]).default('single').description('会话怎么分：single = 所有群共用一个会话；perGroup = 每个群、每个私聊各记各的。'),
   maxRecentTurns: Schema.number().default(40).description('每个会话最多留几轮。默认 40。更早的内容会尽量压缩掉。填 0 表示不限制。'),
+  // ── 识图来源 ──────────────────────────────────────────────────────────────
+  visionModel: Schema.string().default('').description('识图模型的备用写法（provider/model）。一般用下面的 visionMode + visionProvider 就够了。'),
+  visionMode: Schema.union([
+    Schema.const('auto'),
+    Schema.const('session'),
+    Schema.const('fixed'),
+  ]).default('auto').description('识图用哪个模型：auto = 自动找一个支持图片输入的；session = 用会话当前的模型；fixed = 用下面选的那个模型。'),
+  visionProvider: Schema.string().default('').description('视觉得 fixed 时：从 DSH 已配置的模型提供商里选一个。'),
+  visionProviderModel: Schema.string().default('').description('视觉得 fixed 时：用这个提供商下的哪个模型。'),
+  // ── 模型优先级链 ──────────────────────────────────────────────────────────
+  modelChain: Schema.array(Schema.string()).default([]).description('对话模型的优先级顺序（provider/model）。前一个连续报错达到 modelChainFailures 次就自动换下一个。留空 = 不启用。'),
+  modelChainFailures: Schema.number().default(DEFAULT_MODEL_CHAIN_FAILURES).description('同一个模型连续报错几次就换下一个。默认 5。'),
+  // ── 新建 QQ 会话的默认值 ──────────────────────────────────────────────────
+  newSessionDir: Schema.string().default('').description('perGroup 新建会话放在哪个目录。留空 = 用宿主的默认工作目录。'),
+  newSessionModel: Schema.string().default('').description('新建 QQ 会话默认用哪个模型（provider/model）。留空 = 用宿主默认模型或 MODEL_CHAIN 的第一个。'),
+  newSessionPreset: Schema.string().default('').description('新建 QQ 会话默认用哪个人设预设。留空 = 不挂载预设。'),
+  // ── 回复节奏 ──────────────────────────────────────────────────────────────
+  replyGapMinMs: Schema.number().default(DEFAULT_REPLY_GAP_MIN_MS).description('一轮里分条发出时，两条之间最少隔多少毫秒。默认 1200。'),
+  replyGapMaxMs: Schema.number().default(DEFAULT_REPLY_GAP_MAX_MS).description('一轮里分条发出时，两条之间最多隔多少毫秒。默认 2800。'),
+  burstWaitMs: Schema.number().default(0).description('对方还在连着发消息时，先等这么多毫秒没人再说才回复。0 = 不等待。每个目的地可以在下面单独覆盖。'),
+  listenIdleMs: Schema.number().default(DEFAULT_LISTEN_IDLE_MS).description('会话跟随期间，这么久没有新消息就自动停听。默认 120000（2 分钟）。'),
+  // ── 每个 QQ 目的地的个性化 ────────────────────────────────────────────────
+  destinationProfiles: Schema.array(DestinationProfile).default([]).description('按群 / 私聊分别设置休眠时段、24 小时实时回复、等待合并与停听时间。'),
   // 以下是 settings 命名空间的 composition base（装好的默认值）：
   // 设置界面里的用户层会覆盖它们。
   nicknames: Schema.array(Schema.string()).default(['244']).description('听到这些名字就回应。'),
@@ -215,7 +269,11 @@ const BridgeSettings = Schema.object({
   stripMarkdown: Schema.boolean().default(true).description('去掉 Markdown 记号。QQ 不会渲染它们。'),
   replyMode: Schema.string().default('marker').description('群里发出去的是哪一段：marker = 只发「发给群」里的那段；tool = 用发消息工具；always = 整段回答都进群（慎用）。'),
   delivery: Schema.string().default('auto').description('忙的时候怎么插话：auto = 能插就插，不能就排队（推荐）；followup = 一律新开一轮；steer = 不管忙不忙都插。'),
-  visionModel: Schema.string().default('').description('用来看图的模型，写成 provider/model。留空 = 自动找一个能看图的。'),
+  // ↓ 这四个是**旧配置的兼容键**：识图现在用 visionMode + visionProvider + visionProviderModel
+  //   的下拉，不再让人手写 provider/model；体积分档也早已不生效。
+  //   仍然留在 Schema 里，是为了老 settings.yaml 里的值能被读到、也能被「撤销覆盖」清掉，
+  //   而不是悄悄丢掉。卡片上刻意不给它们输入框（见 client/client.js 的 FIELDS）。
+  visionModel: Schema.string().default('').description('旧写法：把识图模型写成 provider/model。新装请改用「识图用哪个模型」的下拉；这一项只在没配新选项时兜底。'),
   describeImages: Schema.boolean().default(true).description('收到图片时先叫一个模型把图读成一句话。关掉的话正文里只留图片位置标记，图本身照样作为附件交给会话（会话模型支持看图时才建议关）。'),
   imageDescribeSafeBytes: Schema.number().default(1572864).description('已不再生效：识图不再按体积分档，图片一律直接交给识图模型。保留这一项只为兼容旧配置。'),
   imageDescribeMaxBytes: Schema.number().default(6291456).description('已不再生效：不再有「太大就不识别」这一档。保留这一项只为兼容旧配置。'),
@@ -225,6 +283,8 @@ const BridgeSettings = Schema.object({
   rotatePressureRatio: Schema.number().default(0.75).description('上下文占用达到这个比例就换新会话（默认 0.75，填 0 = 只按轮数判断）。'),
   agentPreset: Schema.string().default('').description('人设预设。留空 = 沿用会话自己记着的。'),
   // M5
+  autoStartNapcat: Schema.boolean().default(false).description('DSH 启动后自动拉起 NapCat。需要 NapCat 已经装好、配置好并登录过一次；插件只负责启动，绝不自动下载或安装。默认关。'),
+  autoStartNapcatDelayMs: Schema.number().default(DEFAULT_AUTO_START_NAPCAT_DELAY_MS).description('自动启动 NapCat 前的等待毫秒数，给 DSH 和 QQ 一点先起来的时间。默认 20000（20 秒）。'),
   napcatInstallDir: Schema.string().default('').description('NapCat 安装目录。留空 = $DSH_HOME/napcat。自己装的或 Docker 里的不在这个位置时，填实际目录。'),
   napcatWebuiUrl: Schema.string().default('').description('NapCat 网页管理地址。留空 = 读安装目录里的 webui.json。那边通常是 127.0.0.1，只有跑着 NapCat 的那台机器能打开。远程使用时填一个外面打得开的地址。'),
   napcatVersion: Schema.string().default('').description('要下载的 NapCat 版本，例如 v4.18.28。留空 = 最新。'),
@@ -236,6 +296,28 @@ const BridgeSettings = Schema.object({
     Schema.const('perGroup'),
   ]).default('single').description('会话怎么分：single = 所有群共用一个会话；perGroup = 每个群、每个私聊各记各的，互不串上下文。'),
   maxRecentTurns: Schema.number().default(40).description('每个会话最多留几轮对话。默认 40。更早的内容会尽量压缩掉，好让回复更快。填 0 表示不限制。'),
+  // ── 识图来源（卡片上是下拉，不用手写 provider/model）──────────────────────
+  visionMode: Schema.union([
+    Schema.const('auto'),
+    Schema.const('session'),
+    Schema.const('fixed'),
+  ]).default('auto').description('识图用哪个模型：auto = 自动找一个支持图片输入的；session = 用会话当前的模型；fixed = 用下面选的那个模型。'),
+  visionProvider: Schema.string().default('').description('识图选 fixed 时：从 DSH 已配置的模型提供商里选一个。'),
+  visionProviderModel: Schema.string().default('').description('识图选 fixed 时：用这个提供商下的哪个模型。'),
+  // ── 模型优先级链 ──────────────────────────────────────────────────────────
+  modelChain: Schema.array(Schema.string()).default([]).description('对话模型的优先级顺序（provider/model）。前一个连续报错达到 modelChainFailures 次就自动换下一个。留空 = 不启用。'),
+  modelChainFailures: Schema.number().default(DEFAULT_MODEL_CHAIN_FAILURES).description('同一个模型连续报错几次就换下一个。默认 5。'),
+  // ── 新建 QQ 会话的默认值 ──────────────────────────────────────────────────
+  newSessionDir: Schema.string().default('').description('perGroup 新建会话放在哪个目录。留空 = 用宿主的默认工作目录。'),
+  newSessionModel: Schema.string().default('').description('新建 QQ 会话默认用哪个模型（provider/model）。留空 = 用宿主默认模型或模型优先级链的第一个。'),
+  newSessionPreset: Schema.string().default('').description('新建 QQ 会话默认用哪个人设预设。留空 = 不挂载预设。'),
+  // ── 回复节奏 ──────────────────────────────────────────────────────────────
+  replyGapMinMs: Schema.number().default(DEFAULT_REPLY_GAP_MIN_MS).description('分条发出时两条之间最少隔多少毫秒。默认 1200。'),
+  replyGapMaxMs: Schema.number().default(DEFAULT_REPLY_GAP_MAX_MS).description('分条发出时两条之间最多隔多少毫秒。默认 2800。'),
+  burstWaitMs: Schema.number().default(0).description('对方还在连着发消息时，先等这么多毫秒没人再说才回复。0 = 不等待。'),
+  listenIdleMs: Schema.number().default(DEFAULT_LISTEN_IDLE_MS).description('会话跟随期间，这么久没有新消息就自动停听。默认 120000（2 分钟）。'),
+  // ── 每个 QQ 目的地的个性化 ────────────────────────────────────────────────
+  destinationProfiles: Schema.array(DestinationProfile).default([]).description('按群 / 私聊分别设置休眠时段、24 小时实时回复、等待合并与停听时间。'),
 })
 
 /** OneBot 非文本消息段 → 可读占位符。
@@ -1052,6 +1134,8 @@ export function apply(ctx, config) {
         stripMarkdown: config.stripMarkdown !== false,
         replyMode: normalizeReplyMode(config.replyMode),
         delivery: normalizeDelivery(config.delivery),
+        autoStartNapcat: config.autoStartNapcat === true,
+        autoStartNapcatDelayMs: normalizeAutoStartDelayMs(config.autoStartNapcatDelayMs),
         napcatInstallDir: config.napcatInstallDir ?? '',
         napcatWebuiUrl: config.napcatWebuiUrl ?? '',
         napcatVersion: config.napcatVersion ?? '',
@@ -1107,6 +1191,19 @@ export function apply(ctx, config) {
       delivery: normalizeDelivery(s.delivery ?? config.delivery),
       visionModel: String(s.visionModel ?? config.visionModel ?? '').trim(),
       describeImages: (s.describeImages ?? config.describeImages) !== false,
+      visionMode: normalizeVisionMode(s.visionMode ?? config.visionMode),
+      visionProvider: String(s.visionProvider ?? config.visionProvider ?? '').trim(),
+      visionProviderModel: String(s.visionProviderModel ?? config.visionProviderModel ?? '').trim(),
+      modelChain: normalizeModelChain(s.modelChain ?? config.modelChain),
+      modelChainFailures: clampInt(s.modelChainFailures ?? config.modelChainFailures, 1, 50, DEFAULT_MODEL_CHAIN_FAILURES),
+      newSessionDir: String(s.newSessionDir ?? config.newSessionDir ?? '').trim(),
+      newSessionModel: String(s.newSessionModel ?? config.newSessionModel ?? '').trim(),
+      newSessionPreset: String(s.newSessionPreset ?? config.newSessionPreset ?? '').trim(),
+      replyGapMinMs: clampInt(s.replyGapMinMs ?? config.replyGapMinMs, 0, 60000, DEFAULT_REPLY_GAP_MIN_MS),
+      replyGapMaxMs: clampInt(s.replyGapMaxMs ?? config.replyGapMaxMs, 0, 60000, DEFAULT_REPLY_GAP_MAX_MS),
+      burstWaitMs: clampInt(s.burstWaitMs ?? config.burstWaitMs, 0, 60000, 0),
+      listenIdleMs: clampInt(s.listenIdleMs ?? config.listenIdleMs, 10000, 24 * 60 * 60 * 1000, DEFAULT_LISTEN_IDLE_MS),
+      destinationProfiles: normalizeDestinationProfiles(s.destinationProfiles ?? config.destinationProfiles),
       imageDescribeSafeBytes: Math.max(1, Number(s.imageDescribeSafeBytes ?? config.imageDescribeSafeBytes ?? IMAGE_DESCRIBE_SAFE_BYTES)),
       imageDescribeMaxBytes: Math.max(1, Number(s.imageDescribeMaxBytes ?? config.imageDescribeMaxBytes ?? IMAGE_DESCRIBE_MAX_BYTES)),
       imageWakeTotalBytes: Math.max(1, Number(s.imageWakeTotalBytes ?? config.imageWakeTotalBytes ?? IMAGE_WAKE_TOTAL_BYTES)),
@@ -1115,6 +1212,8 @@ export function apply(ctx, config) {
       rotatePressureRatio: Math.min(1, Math.max(0, Number(s.rotatePressureRatio ?? config.rotatePressureRatio ?? 0.75))),
       agentPreset: String(s.agentPreset ?? config.agentPreset ?? '').trim(),
       heartbeatTimeoutMs: Math.max(10000, Number(config.heartbeatTimeoutMs ?? 90000)),
+      autoStartNapcat: (s.autoStartNapcat ?? config.autoStartNapcat) === true,
+      autoStartNapcatDelayMs: normalizeAutoStartDelayMs(s.autoStartNapcatDelayMs ?? config.autoStartNapcatDelayMs),
       napcatInstallDir: String(s.napcatInstallDir ?? config.napcatInstallDir ?? '').trim(),
       napcatWebuiUrl: String(s.napcatWebuiUrl ?? config.napcatWebuiUrl ?? '').trim(),
       napcatVersion: String(s.napcatVersion ?? config.napcatVersion ?? '').trim(),
@@ -1806,7 +1905,13 @@ export function apply(ctx, config) {
     if (!key) return null
     const w = state.listeningByDest[key]
     if (!w?.until) return null
-    if (Date.now() > Number(w.until)) return null
+    const now = Date.now()
+    if (now > Number(w.until)) return null
+    // 空闲停听：对方几分钟没再说话就自动收尾，不用等窗口自然到期。
+    // `lastAt` 由每次入站刷新；老状态文件没有它时退回 `setAt`。
+    const idle = Number(w.idleMs) > 0 ? Number(w.idleMs) : readSettings().listenIdleMs
+    const lastAt = Number(w.lastAt ?? w.setAt)
+    if (Number.isFinite(lastAt) && idle > 0 && now - lastAt > idle) return null
     return w
   }
 
@@ -1815,11 +1920,150 @@ export function apply(ctx, config) {
   }
 
   /**
+   * 这个目的地要等多久（毫秒）才回复。0 = 不等待。
+   *
+   * 优先级：目的地档案的 `burstWaitMs` > 全局 `burstWaitMs`。
+   * 对方连着发消息时，插件会把整批攒起来，停手这么久之后再一次性交给模型 ——
+   * 这样看见的是完整的一段话，而不是拆成七八条各回一句。
+   */
+  function burstWaitFor(msgOrDest, s = readSettings()) {
+    const profile = profileFor(msgOrDest, s)
+    if (profile) return clampInt(profile.burstWaitMs, 0, 60000, 0)
+    return clampInt(s?.burstWaitMs ?? 0, 0, 60000, 0)
+  }
+
+  /** destKey → { msgs: [], timer, at }。同目的地同一时刻只有一份待回批次。 */
+  const burstQueue = new Map()
+
+  /**
+   * 把一条唤醒消息压进待回批次，并重置等待计时器。
+   *
+   * 为什么用「重置计时器」而不是固定窗口：用户要的语义就是「等对方说完」。
+   * 每来一条就重新计时，最后一条之后的安静期才是回复时机。
+   */
+  function queueBurst(key, msg, waitMs) {
+    const now = Date.now()
+    let entry = burstQueue.get(key)
+    if (!entry) {
+      entry = { msgs: [], timer: null, at: now }
+      burstQueue.set(key, entry)
+    }
+    if (entry.timer) clearTimeout(entry.timer)
+    entry.msgs.push(msg)
+    entry.at = now
+    // 上限：一次最多攒 50 条，防止有人刷屏把内存吃满；超了就丢掉最早的。
+    if (entry.msgs.length > 50) entry.msgs = entry.msgs.slice(-50)
+    entry.timer = setTimeout(() => {
+      burstQueue.delete(key)
+      flushBurst(key, entry.msgs)
+    }, Math.max(50, waitMs))
+    // 定时器不该阻止进程退出（宿主关停时立刻放行）。
+    if (entry.timer && typeof entry.timer.unref === 'function') entry.timer.unref()
+  }
+
+  /**
+   * 到点了：把攒下的消息按顺序回放。
+   *
+   * 只把**最后一条**当唤醒（其余当同一批上下文），这样模型看到的是完整一段，
+   * 也不会因为一批里 5 条消息被唤醒 5 次。回放走同一个 handleInbound，
+   * 白名单、休眠、出站闸门全部复用 —— 只是带上 `__burst` 标记跳过等待。
+   */
+  function flushBurst(key, msgs) {
+    Promise.resolve()
+      .then(() => flushBurstNow(key, msgs))
+      .catch((error) => logger.warn(`burst flush 失败（${key}）：${error?.message ?? error}`))
+  }
+
+  async function flushBurstNow(key, msgs) {
+    const list = Array.isArray(msgs) ? msgs.filter((m) => m && typeof m === 'object') : []
+    if (list.length === 0) return
+    const last = list[list.length - 1]
+    const earlier = list.slice(0, -1)
+    // 把同批更早的消息塞进缓冲：它们不是唤醒理由，但必须是上下文。
+    // 图片在这里就地落盘（与正常入站同一条缓存路径），避免 URL 过期后描述不出来。
+    const bucket = bufferFor(bufferKeyOf(last))
+    for (const m of earlier) {
+      const images = []
+      if (Array.isArray(m.images)) {
+        for (const item of m.images.slice(0, MAX_BUFFER_IMAGES_PER_ITEM)) {
+          const cached = await cacheImage(item)
+          if (cached?.path) images.push(cached)
+        }
+      }
+      bucket.push({
+        at: Date.now(),
+        userId: m.userId ?? null,
+        nickname: m.nickname ?? null,
+        groupId: m.groupId ?? null,
+        groupName: m.groupName ?? null,
+        text: truncateText(m.text, MAX_BUFFER_ITEM_CHARS),
+        images,
+      })
+    }
+    if (bucket.length > MAX_BUFFER) state.buffers[bufferKeyOf(last)] = bucket.slice(-MAX_BUFFER)
+    saveState()
+    await handleInbound({ ...last, __burst: true })
+  }
+
+  /** 关停时把还在等待的批次立刻放掉，别让消息悬着。 */
+  function drainBursts() {
+    for (const [key, entry] of [...burstQueue]) {
+      if (entry?.timer) clearTimeout(entry.timer)
+      burstQueue.delete(key)
+      flushBurst(key, entry?.msgs ?? [])
+    }
+  }
+
+  /**
+   * 跟随监听续期：收到新消息就把「最后一次活动」推到现在。
+   *
+   * 只在窗口仍有效时续 —— 窗口已经过期说明这一轮对话结束了，
+   * 不该因为有人又说了句话就自动续上（那和永不停止没区别）。
+   */
+  function refreshListening(msg) {
+    const key = destinationKeyOf(msg)
+    if (!key) return
+    const w = state.listeningByDest[key]
+    if (!w?.until) return
+    const now = Date.now()
+    if (now > Number(w.until)) return
+    const idle = Number(w.idleMs) > 0 ? Number(w.idleMs) : readSettings().listenIdleMs
+    const lastAt = Number(w.lastAt ?? w.setAt)
+    if (Number.isFinite(lastAt) && idle > 0 && now - lastAt > idle) return
+    w.lastAt = now
+    // 空闲停听生效后，窗口到期时间也跟着往后推，免得被 `until` 先掐掉。
+    if (idle > 0) w.until = Math.max(Number(w.until), now + idle)
+    saveState()
+  }
+
+  /**
+   * 这个目的地有没有自己的个性化档案（没有就 null）。
+   *
+   * `target` 与 `destinationKeyOf()` 同一套写法，所以一条 QQ 消息直接就能对上。
+   */
+  function profileFor(msgOrDest, s) {
+    const key = destinationKeyOf(msgOrDest)
+    if (!key) return null
+    const list = Array.isArray(s?.destinationProfiles) ? s.destinationProfiles : []
+    return list.find((row) => row?.target === key) ?? null
+  }
+
+  /** 这条消息现在是不是在休眠时段里（`alwaysReply` 的目的地永远不算）。 */
+  function quietNow(msgOrDest, s, at = Date.now()) {
+    const profile = profileFor(msgOrDest, s)
+    if (!profile || profile.alwaysReply) return null
+    return inQuietHours(profile.quietHours, at) ? profile : null
+  }
+
+  /**
    * 纯函数式决策，便于测试：返回 {action:'drop'|'wake'|'record', reason}
    * random 注入以便复现。
    */
   function decide(msg, s, random = Math.random) {
     if (!isAllowed(msg, s)) return { action: 'drop', reason: 'not-allowlisted' }
+    // 休眠时段：默认「不看消息」，但只记账不回复 —— 醒来之后这些闲聊仍是上下文。
+    // 目的地设了「24 小时实时回复」(alwaysReply) 时整段跳过，主人的私聊就是这样随叫随到。
+    if (quietNow(msg, s)) return { action: 'record', reason: 'quiet-hours' }
     // 会话跟随：模型开着窗口时，同一目的地的普通消息也唤醒（放在 @ 闸门**之前**，
     // 否则群里 atOnlyInGroup 会把线性对话直接掐断）。
     if (listeningActive(msg)) return { action: 'wake', reason: 'listening' }
@@ -2054,6 +2298,107 @@ export function apply(ctx, config) {
   }
 
   /**
+   * 读一个 agent 当前的模型选择（`{ provider, model }`），读不到返回 undefined。
+   *
+   * 三条路都试：`agent.model.current()`（宿主公开的读法）→ `agent.options`（创建时的路由）
+   * → 部署默认。识图来源选 `session`、以及模型链切换都要用它。
+   */
+  function modelSelectionOf(agent) {
+    if (!agent) return undefined
+    try {
+      const current = agent.model?.current?.()
+      if (current?.provider && current?.model) return { provider: current.provider, model: current.model }
+    } catch {
+      // 没有这个读法就往下退
+    }
+    const options = agent.options
+    if (options?.provider && options?.model) return { provider: options.provider, model: options.model }
+    try {
+      const sel = ctx.get('agentDefaultModel')?.currentSelection?.()
+      if (sel?.provider && sel?.model) return { provider: sel.provider, model: sel.model }
+    } catch {
+      // 取不到就是取不到
+    }
+    return undefined
+  }
+
+  /**
+   * 模型优先级链的运行时状态。
+   *
+   * `index` 是当前用链上第几个；`failures` 是当前模型连续失败的次数。
+   * 只放内存：链本身在设置里，状态跨重启重置是对的 —— 重启后先试第一个模型。
+   */
+  const modelChainState = { index: 0, failures: 0, lastSwitchAt: 0 }
+
+  /** 链上当前该用的那个模型；链为空或第 index 条非法时返回 null。 */
+  function chainTarget(s = readSettings()) {
+    const chain = Array.isArray(s.modelChain) ? s.modelChain : []
+    if (chain.length === 0) return null
+    const idx = modelChainState.index % chain.length
+    const resolved = splitModelRef(chain[idx])
+    return resolved ? { ...resolved, ref: chain[idx], index: idx } : null
+  }
+
+  /**
+   * 这一轮失败了：记一次；连续失败达到 `modelChainFailures` 就切到链上下一个模型。
+   *
+   * 切换用 `agent.model.select()`（宿主的公开接口）：它会把 `model/selection` 写进会话，
+   * 下一轮就用新模型 —— 不需要重建会话、也不丢上下文。
+   */
+  function noteModelFailure(sessionId, reason, kind) {
+    const s = readSettings()
+    if (!Array.isArray(s.modelChain) || s.modelChain.length === 0) return
+    modelChainState.failures += 1
+    const threshold = clampInt(s.modelChainFailures, 1, 50, DEFAULT_MODEL_CHAIN_FAILURES)
+    const detail = String(reason?.error?.message ?? reason?.error ?? kind ?? '').slice(0, 200)
+    if (modelChainState.failures < threshold) {
+      logger.warn(`模型失败 ${modelChainState.failures}/${threshold}（${detail || '无详情'}），暂不切换`)
+      return
+    }
+    const prev = chainTarget(s)
+    modelChainState.index = (modelChainState.index + 1) % s.modelChain.length
+    modelChainState.failures = 0
+    modelChainState.lastSwitchAt = Date.now()
+    const next = chainTarget(s)
+    if (!next) {
+      logger.warn('模型链上没有合法的 provider/model，无法切换')
+      return
+    }
+    const agent = sessionId && typeof ctx.agents?.get === 'function' ? ctx.agents.get(sessionId) : undefined
+    if (!agent) {
+      logger.warn(`模型链已切到 ${next.ref}，但会话 ${sessionId || '(未知)'} 没活着，下一轮新建时生效`)
+      return
+    }
+    try {
+      if (typeof agent.model?.select === 'function') {
+        agent.model.select({ provider: next.provider, model: next.model })
+        logger.warn(`模型连续失败 ${threshold} 次，已从 ${prev?.ref ?? '(未知)'} 切到 ${next.ref}`)
+        pushLog({ kind: 'model-chain', action: 'switch', from: prev?.ref ?? null, to: next.ref, reason: detail })
+      } else {
+        logger.warn(`这个宿主没有 agent.model.select，模型链切不过去（目标 ${next.ref}）`)
+      }
+    } catch (error) {
+      logger.warn(`模型链切换失败：${error?.message ?? error}`)
+    }
+  }
+
+  /** 这一轮正常结束了：当前模型的连续失败次数清零。 */
+  function noteModelSuccess() {
+    if (modelChainState.failures !== 0) modelChainState.failures = 0
+  }
+
+  /**
+   * 新建 QQ 会话的默认模型：`newSessionModel` > 模型链第一个 > null。
+   * 拿到 null 时调用方再回落到宿主默认（见 createDestSession）。
+   */
+  function newSessionModelOptions(s = readSettings()) {
+    const explicit = splitModelRef(s.newSessionModel)
+    if (explicit) return explicit
+    const chain = Array.isArray(s.modelChain) ? s.modelChain : []
+    return splitModelRef(chain[0])
+  }
+
+  /**
    * 插件内的轮换判断入口（转发到模块顶层的纯函数）。
    * 逻辑在 rotateSessionVerdict 里，这里只保持调用点就近可读。
    */
@@ -2121,7 +2466,10 @@ export function apply(ctx, config) {
    * 这项服务不在插件 inject 里，不能读 `ctx.workingDirectory`。没有、不是绝对路径、或读取失败时，
    * 用进程当前工作目录（与宿主这项服务自己的默认一致）。
    */
-  function destSessionCwd() {
+  function destSessionCwd(s = readSettings()) {
+    // 用户在设置里指定了新建会话目录就用它 —— 必须是绝对路径，相对路径没法在面板里打开。
+    const configured = String(s?.newSessionDir ?? '').trim()
+    if (configured !== '' && isAbsolute(configured)) return configured
     try {
       const directory = typeof ctx.get === 'function' ? ctx.get('workingDirectory')?.defaultDirectory : undefined
       if (typeof directory === 'string' && isAbsolute(directory.trim())) return directory.trim()
@@ -2178,19 +2526,24 @@ export function apply(ctx, config) {
       throw new Error('这个宿主没有 agents.create，无法为每个群单独开会话')
     }
     const sessionId = `qq-${randomUUID().replace(/-/g, '').slice(0, 12)}`
+    // 模型来源优先级：显式 targetSessionId 的模型 > 新建会话默认模型 / 模型链第一个 > 宿主默认。
+    // 这样「新建会话默认用什么模型」在设置卡片上就配得出来，不必去改宿主全局默认。
     const agentOptions =
       (s.targetSessionId ? await resolveResumeAgentOptions(s.targetSessionId) : null) ||
+      newSessionModelOptions(s) ||
       (await resolveDefaultAgentOptions())
+    // 预设优先用「新建会话默认」，没配才回落到全局 agentPreset。
+    const preset = s.newSessionPreset || s.agentPreset
     const label = msg.groupId
       ? `QQ群 ${msg.groupName || msg.groupId}`
       : `QQ私聊 ${msg.nickname || msg.userId}`
     const handle = await ctx.agents.create({
       sessionId,
       ...(agentOptions ? { agentOptions } : {}),
-      ...(s.agentPreset ? { setup: mountPreset } : {}),
+      ...(preset ? { setup: mountPreset } : {}),
       meta: {
-        cwd: destSessionCwd(),
-        ...(s.agentPreset ? { agentPreset: s.agentPreset } : {}),
+        cwd: destSessionCwd(s),
+        ...(preset ? { agentPreset: preset } : {}),
       },
     })
     state.sessionByDest[key] = sessionId
@@ -2402,8 +2755,17 @@ export function apply(ctx, config) {
     await presets.mount(agentCtx, preset)
   }
 
+  // DSH 启动后延迟自动拉起 NapCat 的定时器句柄（默认关，见文件末尾的 ready 段）。
+  // 插件卸载 / DSH 退出时由下面的 effect 清掉，绝不留一个野 timer 在后台把 NapCat 拉起来。
+  let autoStartTimer = null
+
   ctx.effect(() => () => {
     flushState()
+    drainBursts()
+    if (autoStartTimer !== null) {
+      clearTimeout(autoStartTimer)
+      autoStartTimer = null
+    }
     for (const handle of handles.values()) {
       Promise.resolve(handle.dispose()).catch(() => {})
     }
@@ -2509,31 +2871,57 @@ export function apply(ctx, config) {
 
   /**
    * 视觉模型解析结果的缓存。
-   * 签名取与解析结果相关的设置值（当前只有 `visionModel`）；签名不同就重新解析。
-   * 解析失败时缓存的 `model` 是 `null`，这条缓存同样带签名 —— 设置一改自然失效。
+   * 签名取与解析结果相关的设置值（识图来源三件套 + 老的单值写法）；
+   * 签名不同就重新解析。解析失败时缓存的 `model` 是 `null`，这条缓存同样带签名。
    */
   let visionModelCache = { signature: null, model: null }
 
   /** 与视觉模型解析结果相关的设置值拼成的签名。 */
   function visionModelSignature(s = readSettings()) {
-    return `visionModel=${s.visionModel}`
+    return `mode=${s.visionMode}|p=${s.visionProvider}|m=${s.visionProviderModel}|legacy=${s.visionModel}`
   }
 
   /**
    * 找一个**支持图片输入**的模型（`inputModalities` 含 `'image'`）。
-   * 设置里显式给了 `visionModel`（`provider/model`）就优先用它。
+   *
+   * 来源由 `visionMode` 决定（设置卡片上是下拉，用户不用手写 model id）：
+   *   - `fixed`  ：用 `visionProvider` / `visionProviderModel` 明确指定的一对；
+   *   - `session`：用当前会话自己的模型（消息支持看图就够了，SDK 会自己剥图）；
+   *   - `auto`   ：扫所有 provider，优先名字带 vision 的；
+   * `visionModel`（`provider/model`）是更早的单值写法，三档都没给时才用。
+   *
    * 结果按签名缓存在内存：设置没变就不重复枚举模型列表。
+   *
+   * @param {{provider?:string, model?:string} | null} [sessionModel] 会话当前模型，供 session 档使用。
    */
-  async function findVisionModel() {
-    const signature = visionModelSignature()
-    if (visionModelCache.signature === signature) return visionModelCache.model
+  async function findVisionModel(sessionModel) {
+    const s = readSettings()
+    const signature = visionModelSignature(s)
+    if (visionModelCache.signature === signature) {
+      const cached = visionModelCache.model
+      // session 档跟着会话走：缓存里不带会话，所以每次都要按当前会话补一次。
+      if (s.visionMode === 'session') return sessionModel ?? cached
+      return cached
+    }
     // 先写入带签名的 null：解析失败时这就是本次结果，并发调用也不会重复枚举。
     visionModelCache = { signature, model: null }
+
+    const explicitFixed = s.visionProvider !== '' && s.visionProviderModel !== ''
+    if (s.visionMode === 'fixed' && explicitFixed) {
+      const resolved = { provider: s.visionProvider, model: s.visionProviderModel }
+      visionModelCache.model = resolved
+      return resolved
+    }
+    if (s.visionMode === 'session' && sessionModel?.provider && sessionModel?.model) {
+      const resolved = { provider: sessionModel.provider, model: sessionModel.model }
+      visionModelCache.model = resolved
+      return resolved
+    }
 
     const llm = ctx.get('llm')
     if (!llm) return null
 
-    const explicit = readSettings().visionModel
+    const explicit = s.visionModel
     if (explicit && explicit.includes('/')) {
       const idx = explicit.indexOf('/')
       const resolved = { provider: explicit.slice(0, idx), model: explicit.slice(idx + 1) }
@@ -2578,9 +2966,11 @@ export function apply(ctx, config) {
    *
    * 先查表情包登记表：登记过的图直接返回登记的描述，**一次模型调用都不花**。
    * 这也是登记表的第二个用处 —— 反复出现的图只描述一次。
+   * @param {{ path?: string, data?: Buffer, mediaType?: string, name?: string, hash?: string }} cached 缓存图。
+   * @param {{provider?:string, model?:string} | null} [sessionModel] 会话当前模型（识图来源选 session 时用）。
    * @returns {Promise<string | null>}
    */
-  async function describeImage(cached) {
+  async function describeImage(cached, sessionModel) {
     // 命中登记表 = 这张图已经被看过并写好了描述，别再花一次多模态调用。
     const hit = cached?.hash ? findSticker(loadStickerStore(), { hash: cached.hash }) : null
     if (hit?.description) {
@@ -2603,7 +2993,7 @@ export function apply(ctx, config) {
         bytes = readFileSync(cached.path)
       }
       if (!bytes || bytes.byteLength === 0) return { ok: false, reason: '图片数据为空' }
-      const conf = await findVisionModel()
+      const conf = await findVisionModel(sessionModel)
       if (!conf) return { ok: false, reason: '没找到支持图片输入的模型' }
       const ref = await attachments.saveImage({
         data: bytes,
@@ -2991,6 +3381,18 @@ export function apply(ctx, config) {
       }
     }
     const d = decide(msg, s)
+    // 突发合并：对方还在连着发消息就先攒着，停手 `burstWaitMs` 之后一起回。
+    // 回放的那一批带 `__burst` 标记，不会再被攒一次（否则永远回不出去）。
+    if (d.action === 'wake' && msg?.__burst !== true) {
+      const key = destinationKeyOf(msg)
+      const waitMs = burstWaitFor(msg, s)
+      if (key && waitMs > 0) {
+        queueBurst(key, msg, waitMs)
+        return { action: 'burst-wait', reason: 'burst-wait', delivered: false, waitMs }
+      }
+    }
+    // 跟随监听里每来一条消息就续一次命：空闲 `idlePauseMs` 之后才真正停听。
+    refreshListening(msg)
     // 保留引用：唤醒失败时把这一条就地改成 `wake-failed`。修之前失败也写着 `wake`，事后查不出问题。
     const inboundLog = pushLog({ kind: 'inbound', decision: d.action, reason: d.reason, who: msg.userId, group: msg.groupId ?? null, text: String(msg.text ?? '').slice(0, 200) })
 
@@ -3061,6 +3463,10 @@ export function apply(ctx, config) {
           else sessionPins.delete(sid)
           if (gateBeforeWake.queuedHad) sessionPinQueued.set(sid, gateBeforeWake.queuedSnap)
           else sessionPinQueued.delete(sid)
+          // 投递没成功就没有真正起来的轮：落盘的归属兜底必须回滚，否则 turn/end
+          // 会拿这份陈旧记录把下一条非 QQ 轮误判成 QQ 轮，消息就会发进群里。
+          if (gateBeforeWake.pendingHad) state.pendingReplies[sid] = gateBeforeWake.pendingSnap
+          else delete state.pendingReplies[sid]
         }
       }
       inboundLog.decision = 'wake-failed'
@@ -3090,6 +3496,9 @@ export function apply(ctx, config) {
     const allImages = [...digest.images, ...cachedImages]
     const imageBlocks = []
     const failures = []
+    // 识图来源选 `session` 时要用会话自己的模型：从该 agent 读当前选择，
+    // 读不到就退回 `agent.options`，再没有就交给 findVisionModel 自己兜底。
+    const visionSessionModel = s.visionMode === 'session' ? modelSelectionOf(agent) : undefined
     // 逐张直接送识图：撤销 2026-11-10 的三档分级（小图直识 / 中图压缩 / 大图跳过）。
     const noteById = new Map()
     let described = 0
@@ -3099,7 +3508,7 @@ export function apply(ctx, config) {
         noteById.set(img, { text: '', hash: img.hash })
         continue
       }
-      const r = await describeImage(img)
+      const r = await describeImage(img, visionSessionModel)
       described += 1
       noteById.set(img, { text: r.ok ? r.text : `（描述失败：${r.reason}）`, hash: img.hash })
     }
@@ -3134,6 +3543,9 @@ export function apply(ctx, config) {
     g.lastInjectedMessageId = injected?.id ?? null
     const pinHad = Boolean(wakeSessionId && sessionPins.has(wakeSessionId))
     const queuedHad = Boolean(wakeSessionId && sessionPinQueued.has(wakeSessionId))
+    // 落盘的归属兜底也一起快照：投递失败时按它回滚（见 failWake）。
+    const pendingHad = Boolean(wakeSessionId && state.pendingReplies?.[wakeSessionId])
+    const pendingSnap = pendingHad ? { ...state.pendingReplies[wakeSessionId] } : undefined
     gateBeforeWake = {
       ...snapshotGate(g),
       wakeSessionId,
@@ -3141,6 +3553,8 @@ export function apply(ctx, config) {
       pinSnap: pinHad ? cloneDestPin(sessionPins.get(wakeSessionId)) : undefined,
       queuedHad,
       queuedSnap: queuedHad ? cloneDestPin(sessionPinQueued.get(wakeSessionId)) : undefined,
+      pendingHad,
+      pendingSnap,
     }
     g.pendingFromQQ = true
     g.pendingDestination = wakeDest
@@ -3374,6 +3788,16 @@ export function apply(ctx, config) {
       .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '$1 ($2)')
       .replace(/^\s*(?:[-*_]\s*){3,}$/gm, '')
       .trim()
+  }
+
+  /** 分条间隔：在 [min, max] 里随机取一个毫秒数；配置写反了就自动换过来。 */
+  function replyGapDelay(s = readSettings()) {
+    const lo = clampInt(s?.replyGapMinMs, 0, 60000, DEFAULT_REPLY_GAP_MIN_MS)
+    const hi = clampInt(s?.replyGapMaxMs, 0, 60000, DEFAULT_REPLY_GAP_MAX_MS)
+    const min = Math.min(lo, hi)
+    const max = Math.max(lo, hi)
+    if (max <= min) return min
+    return min + Math.floor(Math.random() * (max - min + 1))
   }
 
   /**
@@ -3704,6 +4128,13 @@ export function apply(ctx, config) {
           )
         }
       }
+      // 模型优先级链：这一轮失败了就记一次，连续失败到阈值就换下一个模型。
+      // 放在出站之前 —— 没回成话的那一轮也该推进链，否则链永远停在坏模型上。
+      if (kind === 'error' || kind === 'blocked') {
+        noteModelFailure(session?.id ?? null, data?.reason, kind)
+      } else if (kind === 'completed') {
+        noteModelSuccess(session?.id ?? null)
+      }
       if (!raw) return
 
       // 闸门的第一道：**只发 QQ 唤醒的那一轮**。DSH 界面里聊出来的标记块一个字都不发。
@@ -3777,8 +4208,8 @@ export function apply(ctx, config) {
           }
           if (i < blocks.length - 1) {
             // 分条之间隔一会儿：太快会像机器人一口气刷屏（用户反馈 2026-11-11）。
-            // 1.2–2.8 秒随机，读起来像人一条一条敲出来的。
-            await new Promise((r) => setTimeout(r, 1200 + Math.floor(Math.random() * 1600)))
+            // 节奏来自设置（replyGapMinMs / replyGapMaxMs），默认 1.2–2.8 秒。
+            await new Promise((r) => setTimeout(r, replyGapDelay(s)))
           }
         }
       })()
@@ -3931,6 +4362,16 @@ export function apply(ctx, config) {
           visionModel: (await findVisionModel()) ?? '(没找到支持图片输入的模型)',
           lastDestination: state.lastDestination,
           listening: state.listeningByDest,
+          // 模型优先级链的实时位置：排查“为什么换模型了”就看这里。
+          modelChain: {
+            chain: s.modelChain,
+            threshold: s.modelChainFailures,
+            activeIndex: modelChainState.index,
+            active: chainTarget(s)?.ref ?? null,
+            consecutiveFailures: modelChainState.failures,
+            lastSwitchAt: modelChainState.lastSwitchAt || null,
+          },
+          brokenBursts: [...burstQueue.keys()],
           bufferedUnwoken: totalBuffered(),
           recentBuffer: recentBufferItems(3).map((m) => ({
             who: m.nickname || m.userId || null,
@@ -4471,8 +4912,9 @@ export function apply(ctx, config) {
 
   // ── M5：NapCat 自助托管（下载 / 配置 / 启停）───────────────────────────────
   //
-  // 安全模型：**所有动作都由显式工具调用触发**。插件加载时绝不去下载或执行任何东西——
-  // 下载并运行第三方二进制是重大决定，必须由人按下那个按钮。
+  // 安全模型：下载 / 配置这类动作**一律由显式工具调用触发**，插件默认绝不自动下载、
+  // 安装或写配置。唯一的例外是设置项 autoStartNapcat：用户主动打开后，才在 DSH 启动
+  // 延迟若干秒「启动已经装好的 NapCat」——只调用已有的启动逻辑，不碰下载/安装。
   //
   // 已知边界（不要假装能做到）：
   //   * `SubprocessStdio.stdin` 只有 'ignore' | 'pipe' | {data}，**没有 inherit**，
@@ -4537,6 +4979,11 @@ export function apply(ctx, config) {
       configuredServers: enabled.map((w) => ({ name: w.name, host: w.host, port: w.port, tokenSet: w.token !== '' })),
       configDir: paths.configDir,
       configCandidates: configDirCandidates({ installDir, qqPath: qq.primary }),
+      autoStart: {
+        enabled: s.autoStartNapcat === true,
+        delayMs: s.autoStartNapcatDelayMs,
+        pending: autoStartTimer !== null,
+      },
     }
   }
 
@@ -4945,6 +5392,129 @@ export function apply(ctx, config) {
     return sendJson(res, 200, { ok: true, groups })
   }
 
+  /**
+   * GET `/api/qq-bridge/catalog` —— 设置卡片要的「可选项」清单。
+   *
+   * 用户明确要求：识图服务商、模型优先级链、新会话默认模型都应该是**下拉选择**，
+   * 而不是让人手写 `provider/model`。清单来自宿主自己的 llm 服务（已配置的提供商 / 模型）
+   * 与 agentPresets（人设预设），插件这边只做只读投影。
+   *
+   * 返回：
+   * - `providers`：`[{ id, name, models: [{ id, name, vision }] }]`；
+   * - `presets`：`[{ id, name }]`；
+   * - `defaultModel`：宿主当前的默认模型（有的话）；
+   * - `errors`：某个 provider 列举失败的原因（不影响其它 provider）。
+   */
+  async function handleCatalogRequest(req, res) {
+    if (rejectLocalRequest(req, res)) return
+    const method = String(req?.method ?? '').toUpperCase()
+    if (method !== 'GET') {
+      return sendJson(res, 405, { ok: false, error: '这个接口只接受 GET。' })
+    }
+    const errors = []
+    const providers = []
+    const llm = ctx.get('llm')
+    if (llm && typeof llm.listProviders === 'function') {
+      for (const provider of llm.listProviders()) {
+        const id = String(provider?.id ?? '').trim()
+        if (id === '') continue
+        let models = []
+        try {
+          models = await llm.listModels(id)
+        } catch (error) {
+          errors.push(`${id}: ${error?.message ?? error}`)
+          models = []
+        }
+        providers.push({
+          id,
+          name: String(provider?.name ?? id),
+          models: (Array.isArray(models) ? models : []).map((m) => ({
+            id: String(m?.id ?? ''),
+            name: String(m?.name ?? m?.id ?? ''),
+            vision: Array.isArray(m?.inputModalities) && m.inputModalities.includes('image'),
+          })),
+        })
+      }
+    } else {
+      errors.push('这个宿主没有 llm.listProviders，模型清单读不到')
+    }
+
+    const presets = []
+    try {
+      const registry = ctx.get('agentPresets')
+      if (registry && typeof registry.list === 'function') {
+        for (const row of await registry.list()) {
+          const id = String(row?.id ?? '').trim()
+          if (id === '') continue
+          presets.push({ id, name: String(row?.name ?? id) })
+        }
+      }
+    } catch (error) {
+      errors.push(`agentPresets: ${error?.message ?? error}`)
+    }
+
+    let defaultModel = null
+    try {
+      const sel = ctx.get('agentDefaultModel')?.currentSelection?.()
+      if (sel?.provider && sel?.model) defaultModel = { provider: sel.provider, model: sel.model }
+    } catch {
+      // 没有默认模型不是错误
+    }
+
+    return sendJson(res, 200, {
+      ok: true,
+      providers,
+      presets,
+      defaultModel,
+      defaultDir: destSessionCwd(),
+      ...(errors.length > 0 ? { errors } : {}),
+    })
+  }
+
+  /**
+   * GET `/api/qq-bridge/profiles` —— 已知的 QQ 目的地清单，给「每个群/私聊单独设置」用。
+   *
+   * 来源是插件自己的状态：群名缓存、最近入站目的地、perGroup 的会话映射。
+   * 只读：值仍然通过设置接口保存。
+   */
+  function handleProfilesRequest(req, res) {
+    if (rejectLocalRequest(req, res)) return
+    const method = String(req?.method ?? '').toUpperCase()
+    if (method !== 'GET') {
+      return sendJson(res, 405, { ok: false, error: '这个接口只接受 GET。群/私聊的设置在设置接口里保存。' })
+    }
+    const s = readSettings()
+    const seen = new Map()
+    const add = (target, label, kind) => {
+      const key = String(target ?? '').trim()
+      if (!/^(group|private):\S+$/.test(key)) return
+      const prev = seen.get(key)
+      // 已经有名字的不要被空名字覆盖：群名缓存比会话映射更准。
+      if (prev && prev.label !== '' && label === '') return
+      seen.set(key, { target: key, kind, label: label || prev?.label || '', configured: seen.get(key)?.configured === true })
+    }
+    for (const [groupId, name] of groupNames) add(`group:${groupId}`, name, 'group')
+    for (const key of Object.keys(state.sessionByDest)) {
+      const value = state.sessionByDest[key]
+      if (!value) continue
+      const kind = key.startsWith('group:') ? 'group' : 'private'
+      const groupId = kind === 'group' ? key.slice('group:'.length) : ''
+      add(key, groupId ? groupNames.get(groupId) ?? '' : '', kind)
+    }
+    if (state.lastDestination?.kind) {
+      const d = state.lastDestination
+      const key = d.kind === 'group' ? `group:${d.groupId}` : `private:${d.userId}`
+      add(key, d.kind === 'group' ? groupNames.get(String(d.groupId)) ?? '' : '', d.kind)
+    }
+    for (const row of s.destinationProfiles ?? []) {
+      if (!seen.has(row.target)) add(row.target, row.label, row.target.startsWith('group:') ? 'group' : 'private')
+      const hit = seen.get(row.target)
+      if (hit) hit.configured = true
+    }
+    const items = [...seen.values()].sort((a, b) => a.target.localeCompare(b.target))
+    return sendJson(res, 200, { ok: true, targets: items, profiles: s.destinationProfiles ?? [] })
+  }
+
   // TODO: accessTokenEnv 留空时，可回退读 NapCat 的 onebot11*.json 里的 token（用户说可做可不做）。
   // 可选注入：没有 webServer 服务的部署照常工作（只是卡片上的按钮拿不到地址）。
   if (typeof ctx.inject === 'function') ctx.inject(['webServer'], (scoped) => {
@@ -4979,6 +5549,8 @@ export function apply(ctx, config) {
         ],
         ['/api/qq-bridge/update', handleUpdateRequest],
         ['/api/qq-bridge/groups', handleGroupMetaRequest],
+        ['/api/qq-bridge/catalog', handleCatalogRequest],
+        ['/api/qq-bridge/profiles', handleProfilesRequest],
       ]
       for (const [path, handler] of routes) disposes.push(server.register({ kind: 'exact', path, handler }))
       scoped.effect(() => () => {
@@ -5007,7 +5579,7 @@ export function apply(ctx, config) {
   ctx.tools.register(defineTool({
     name: 'qq_bridge_napcat',
     description:
-      '自助管理 NapCat（OneBot 实现）：查看状态、下载最新发行包并校验 sha256、解包、写 OneBot 配置、启动/停止。所有动作都由本调用显式触发，插件平时不会自己下载或执行任何东西。典型顺序：status → download →（你手动跑一次安装器）→ configure → launch。',
+      '自助管理 NapCat（OneBot 实现）：查看状态、下载最新发行包并校验 sha256、解包、写 OneBot 配置、启动/停止。下载/配置等动作都由本调用显式触发。唯一的自动行为是设置项 autoStartNapcat：打开后 DSH 启动延迟若干秒只启动已装好的 NapCat，不下载、不安装。典型顺序：status → download →（你手动跑一次安装器）→ configure → launch。',
     parameters: {
       action: {
         type: 'string',
@@ -5074,12 +5646,22 @@ export function apply(ctx, config) {
       }
       const key = dest.kind === 'group' ? `group:${dest.groupId}` : `private:${dest.userId}`
       const minutes = Math.max(1, Math.min(MAX_LISTEN_MINUTES, Number(args.minutes) || DEFAULT_LISTEN_MINUTES))
-      const window = { until: Date.now() + minutes * 60000, setAt: Date.now() }
+      const now = Date.now()
+      // 窗口有两个失效条件：到期（minutes）与空闲（listenIdleMs）。
+      // 后者是用户要的「对方 2 分钟没再说话就停止监听」—— 一句「还在聊」不会一直挂着。
+      const idleMs = clampInt(readSettings().listenIdleMs, 10000, 24 * 60 * 60 * 1000, DEFAULT_LISTEN_IDLE_MS)
+      const window = { until: now + minutes * 60000, setAt: now, lastAt: now, idleMs }
       state.listeningByDest[key] = window
       saveState()
-      pushLog({ kind: 'listen', action: 'on', key, minutes })
+      pushLog({ kind: 'listen', action: 'on', key, minutes, idleMs })
       return JSON.stringify(
-        { listening: window, minutes, key, note: `接下来 ${minutes} 分钟，${key} 里的普通消息也会唤醒你` },
+        {
+          listening: window,
+          minutes,
+          idleMs,
+          key,
+          note: `接下来 ${minutes} 分钟（空闲 ${Math.round(idleMs / 1000)} 秒就停），${key} 里的普通消息也会唤醒你`,
+        },
         null,
         2,
       )
@@ -5098,6 +5680,38 @@ export function apply(ctx, config) {
       .catch(() => {
         logger.info('启动时检查更新：连不上 GitHub，这次没有检查到更新。稍后再试。')
       })
+  }
+
+  // ── DSH 启动后延迟自动拉起 NapCat（默认关，需用户主动打开 autoStartNapcat）────
+  // 只启动「已经装好、配置好、登录过」的 NapCat：到点走的是和手动 launch 完全一样的
+  // napcatLaunch()，它自己会检查启动器是否存在、缺了就明确报错，绝不会去下载或安装。
+  // 到点会再读一次设置：这几十秒里用户把开关关掉了就不启动。已经在跑也不重复启动。
+  if (readSettings().autoStartNapcat === true) {
+    const delayMs = readSettings().autoStartNapcatDelayMs
+    autoStartTimer = setTimeout(() => {
+      autoStartTimer = null
+      try {
+        const s = readSettings()
+        if (s.autoStartNapcat !== true) {
+          logger.info('自动启动 NapCat：等待期间开关已关闭，跳过。')
+          return
+        }
+        if (napcatRunning().running) {
+          logger.info('自动启动 NapCat：NapCat 已经在运行，跳过。')
+          return
+        }
+        const info = napcatLaunch()
+        pushLog({ kind: 'auto-start-napcat', action: 'launched', delayMs, mode: info.mode })
+        logger.info(`自动启动 NapCat：已拉起（延迟 ${Math.round(delayMs / 1000)} 秒，${info.mode}）。`)
+      } catch (error) {
+        const text = String(error?.message ?? error).replace(/\s+/g, ' ').trim()
+        pushLog({ kind: 'auto-start-napcat', action: 'failed', delayMs, error: text })
+        logger.warn(`自动启动 NapCat 失败：${text}`)
+      }
+    }, delayMs)
+    // 这个定时器不该拖住进程退出；插件卸载时上面的 effect 也会清掉它。
+    if (typeof autoStartTimer?.unref === 'function') autoStartTimer.unref()
+    logger.info(`自动启动 NapCat：已排程，${Math.round(delayMs / 1000)} 秒后尝试启动已装好的 NapCat。`)
   }
 
   logger.info(`ready (target=${readSettings().targetSessionId || '未设置'}, onebot=${readSettings().onebotUrl || '未配置'}, state=${statePath})`)
@@ -5126,9 +5740,141 @@ export function normalizeDelivery(raw) {
   return raw === 'followup' || raw === 'steer' ? raw : 'auto'
 }
 
+/**
+ * 休眠时段：把 `23:00-08:00` 解析成分钟数区间。留空、写错、或起止相同都返回 null（= 不休眠）。
+ *
+ * 为什么不用 Cron 式表达式：这里只要一个「每天几点到几点」的直觉配置，
+ * 用户填 `23:30-7:00` 就应该能用 —— 冒号、连字符、`~`、`至` 全认，前后空格自己吃掉。
+ * 跨零点（start > end）是正常情况：23:00-08:00 表示夜里那段，不是空区间。
+ *
+ * @param {string} spec 形如 `23:00-08:00`。
+ * @returns {{ start: number, end: number } | null} 当天 0 点起的分钟数。
+ */
+export function parseQuietHours(spec) {
+  const text = String(spec ?? '').trim()
+  if (text === '') return null
+  const matched = text.match(
+    /^(\d{1,2})\s*[:：]\s*(\d{1,2})\s*(?:-|~|～|—|–|至|到)\s*(\d{1,2})\s*[:：]\s*(\d{1,2})$/,
+  )
+  if (!matched) return null
+  const start = Number(matched[1]) * 60 + Number(matched[2])
+  const end = Number(matched[3]) * 60 + Number(matched[4])
+  if (!Number.isFinite(start) || !Number.isFinite(end)) return null
+  if (start < 0 || start > 24 * 60 || end < 0 || end > 24 * 60) return null
+  if (start === end) return null
+  return { start, end }
+}
+
+/**
+ * 现在是不是在休眠时段里。
+ *
+ * `at` 可以是时间戳或 Date；用**本机时区**判定（用户填的就是墙上时间）。
+ * 跨零点时分成两段判断（`>= start` 或 `< end`），不跨零点才是普通区间。
+ *
+ * @param {string} spec 形如 `23:00-08:00`。
+ * @param {number | Date} [at] 判定时刻，默认现在。
+ * @returns {boolean} 解析不出来时返回 false（= 不休眠，宁可多回话）。
+ */
+export function inQuietHours(spec, at = Date.now()) {
+  const span = parseQuietHours(spec)
+  if (!span) return false
+  const date = at instanceof Date ? at : new Date(Number(at))
+  const minutes = date.getHours() * 60 + date.getMinutes()
+  if (span.start < span.end) return minutes >= span.start && minutes < span.end
+  return minutes >= span.start || minutes < span.end
+}
+
+/**
+ * 模型优先级链的归一化：只留 `provider/model` 形式的条目，去重，最多 8 条。
+ *
+ * 为什么限制 8 条：链路是「一个崩了换下一个」，一排十个以上说明配错了；
+ * 而且设置卡片的编辑区排不下，太长的链反而不好核对。
+ *
+ * @param {unknown} raw 设置里的原始值（可能是数组、逗号串、或垃圾）。
+ * @returns {string[]} 归一化后的链，空数组表示不用优先级链。
+ */
+export function normalizeModelChain(raw) {
+  const list = Array.isArray(raw)
+    ? raw
+    : typeof raw === 'string'
+      ? raw.split(/[,，\n]+/)
+      : []
+  const out = []
+  for (const item of list) {
+    const text = String(item ?? '').trim()
+    if (text === '') continue
+    if (!/^[^/\s]+\/[^/\s]+$/.test(text)) continue
+    if (out.includes(text)) continue
+    out.push(text)
+    if (out.length >= 8) break
+  }
+  return out
+}
+
+/** 把 `provider/model` 拆开；拆不出来返回 null。 */
+export function splitModelRef(ref) {
+  const text = String(ref ?? '').trim()
+  const idx = text.indexOf('/')
+  if (idx <= 0 || idx === text.length - 1) return null
+  const provider = text.slice(0, idx).trim()
+  const model = text.slice(idx + 1).trim()
+  if (provider === '' || model === '') return null
+  return { provider, model }
+}
+
+/** 识图来源的归一化：只认 auto | session | fixed。 */
+export function normalizeVisionMode(raw) {
+  return raw === 'session' || raw === 'fixed' ? raw : 'auto'
+}
+
 function clamp01(n) {
   if (!Number.isFinite(n)) return 0.05
   return Math.max(0, Math.min(1, n))
+}
+
+/** 整数夹取：非数字回落到 fallback，越界夹到 [min, max]。 */
+function clampInt(raw, min, max, fallback) {
+  if (raw === undefined || raw === null || raw === '') return fallback
+  const n = Number(raw)
+  if (!Number.isFinite(n)) return fallback
+  return Math.max(min, Math.min(max, Math.floor(n)))
+}
+
+/** 自动启动 NapCat 的延迟毫秒：0–600000，非法值回落 20000（20 秒）。导出以便测试。 */
+export function normalizeAutoStartDelayMs(raw) {
+  return clampInt(raw, 0, 600000, DEFAULT_AUTO_START_NAPCAT_DELAY_MS)
+}
+
+/**
+ * 目的地个性化档案的归一化。导出是为了可测试。
+ *
+ * 规则：
+ * - `target` 只认 `group:<数字>` / `private:<数字>`；认不出的行整行丢弃（写在卡片上也不会生效）；
+ * - 同一个 target 出现多次时**后者覆盖前者**，避免两份互相打架；
+ * - 数值字段越界夹取，负数当 0；
+ * - `quietHours` 写成解析不出来的样子时保留原文（用户能看见自己填错了），
+ *   判断时 `inQuietHours` 会返回 false，等于不休眠。
+ *
+ * @param {unknown} raw 设置里的原始值。
+ * @returns {Array<{target:string,label:string,quietHours:string,alwaysReply:boolean,burstWaitMs:number,idlePauseMs:number}>}
+ */
+export function normalizeDestinationProfiles(raw) {
+  const list = Array.isArray(raw) ? raw : []
+  const byTarget = new Map()
+  for (const item of list) {
+    if (!item || typeof item !== 'object') continue
+    const target = String(item.target ?? '').trim()
+    if (!/^(group|private):\S+$/.test(target)) continue
+    byTarget.set(target, {
+      target,
+      label: String(item.label ?? '').trim().slice(0, 60),
+      quietHours: String(item.quietHours ?? '').trim(),
+      alwaysReply: item.alwaysReply === true,
+      burstWaitMs: clampInt(item.burstWaitMs, 0, 60000, 0),
+      idlePauseMs: clampInt(item.idlePauseMs, 10000, 24 * 60 * 60 * 1000, DEFAULT_LISTEN_IDLE_MS),
+    })
+  }
+  return [...byTarget.values()]
 }
 
 /**

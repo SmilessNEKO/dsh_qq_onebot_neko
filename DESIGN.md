@@ -87,6 +87,17 @@ ensureTargetAgent():
 | `replyWithQuote` | boolean | `false` | 首段带 `[CQ:reply]` 引用触发消息 |
 | `atOnlyInGroup` | boolean | `false` | 群里只有被 @ 才处理 |
 | `stripMarkdown` | boolean | `true` | 出站去掉 Markdown 标记 |
+| `visionMode` | `auto`\|`session`\|`fixed` | `auto` | 识图用哪个模型：`auto` 自动找支持图片输入的、`session` 用会话当前模型、`fixed` 用下面两项选的 |
+| `visionProvider` / `visionProviderModel` | string | `''` | `fixed` 时两段联动下拉：已配置提供商 + 其模型 |
+| `modelChain` | string[] | `[]` | 模型优先级链（最多 8 条），连续报错达阈值自动切下一个 |
+| `modelChainFailures` | number | `5` | 链上切换阈值（1–50） |
+| `newSessionDir` / `newSessionModel` / `newSessionPreset` | string | `''` | 新建 QQ 会话的文件夹 / 默认模型 / 默认预设 |
+| `replyGapMinMs` / `replyGapMaxMs` | number | `1200` / `2800` | 分条间隔随机区间（毫秒，写反自动换） |
+| `burstWaitMs` | number | `0` | 连发停手多久才回（`0` = 立刻），每目的地可覆盖 |
+| `listenIdleMs` | number | `120000` | 会话跟随空闲多久自动停听（毫秒，默认 2 分钟） |
+| `destinationProfiles` | object[] | `[]` | 按 `group:<群号>` / `private:<QQ号>` 个性化：休眠时段、24h 实时、连发等待、停听 |
+| `autoStartNapcat` | boolean | `false` | DSH 启动后延迟自动拉起**已装好**的 NapCat；只启动，绝不下载 / 安装 / 写配置 |
+| `autoStartNapcatDelayMs` | number | `20000` | 自动启动前的等待毫秒数（0–600000，默认 20 秒）；填 0 = 起来就立刻尝试 |
 
 主人用整句「白名单」命令改 `groupWhitelist` 时，发生在白名单闸门之前，所以新群还没被允许也能加。不是主人、主人名单为空、或句子里夹了别的字，都不改配置。调试工具模拟的入站不执行这条命令。保存走和设置卡片相同的用户层（0.2 为 `qq-bridge-settings.json`），不改 composition config 本身。
 
@@ -100,6 +111,9 @@ Config（`cordis.patch.yml`）另有：`agentPreset`、`statePath`、`debugTools
 - **唤醒概率**：0–100% 滑块（默认 5%），旁边显示“约每 N 条醒一次”
 - **目标会话**：从会话列表选一个（显示工作区与标题），并展示“已加载/需 resume”
 - **连接状态**：QQ 网关在线/断线、最近 20 条唤醒日志（醒 / 只记录 / 丢弃原因）
+- **识图 / 模型 / 新会话 / 预设**：改成下拉而非手填。卡片展开时拉 `GET /api/qq-bridge/catalog`（已配置提供商、各提供商的模型、模型是否 `inputModalities` 含 `image`、预设列表）与 `GET /api/qq-bridge/profiles`（已接入目的地）。`visionMode=fixed` 时「识图提供商 → 识图模型」两段联动；`modelChain` 每行一个下拉（↑/↓/✕ 调顺序，上限 8）；`newSessionModel` / `agentPreset` / `newSessionPreset` 都是下拉，带「当前值不在清单里」兜底项；清单没拉到时对应控件退化成可手填输入框，拉到后自动变成选项。两个接口只读，准入与设置接口相同
+- **目的地个性化**：`destinationProfiles` 按行编辑，每行一个卡片：目的地从「已接入的群 / 私聊」下拉挑（也可手填 `group:<群号>` / `private:<QQ号>`）、备注名、休眠时段、`alwaysReply` 勾选、`burstWaitMs`、`idlePauseMs`。提供「加一个随叫随到私聊」预置 `alwaysReply: true`
+- **NapCat 自动启动**：`autoStartNapcat` 勾选 + `autoStartNapcatDelayMs` 数字框。默认关；打开后 DSH 每次启动延迟若干秒自动启动已装好的 NapCat（只启动，不下载 / 安装）。`napcatStatus` 的 `autoStart`（`enabled` / `delayMs` / `pending`）能在卡片上看到排程状态
 
 ## 7. QQ 接入方式：**B —— OneBot（NapCat，个人 QQ 号）· M2 已实现**
 
@@ -133,7 +147,7 @@ qq_bridge_napcat
   stop       → 结束该进程
 ```
 
-- **安全模型**：所有动作都由**显式工具调用**触发；插件加载时不下载、不执行任何内容。
+- **安全模型**：下载 / 安装 / 写配置一律由**显式工具调用**触发，插件加载时不下载、不安装。唯一例外是设置项 `autoStartNapcat`：用户主动打开后，DSH 启动延迟 `autoStartNapcatDelayMs`（默认 20 秒）只**启动已经装好的** NapCat，复用和手动 `launch` 相同的启动逻辑；到点重读开关、判 `napcatRunning()`、失败只记日志，绝不下载 / 安装。
 - **下载实现**：优先 `ctx.subprocess` + 系统自带 `curl.exe`（能带 `-x` 代理；本机直连 GitHub 不通），
   无 subprocess 时退回内置 `fetch`。
 - **校验**：按 GitHub Release 的 `asset.digest` 做 sha256，不符即删文件报错。
@@ -172,6 +186,8 @@ qq_bridge_napcat
   （`replyMode` 含 `'tool'`）、改模式立刻重挂提示词。见 `HANDOVER.md` §17、§17.5。
 - **M9** 🚧 **进行中**：戳一戳 —— 入站已通（戳我必唤醒），出站受 NapCat PacketBackend 限制。
   见 `HANDOVER.md` §13.2b。
+- **M10** ✅ **已完成（0.2.13）**：设置项个性化 —— 识图来源三态下拉（`visionMode` + `visionProvider`/`visionProviderModel`，从 `/api/qq-bridge/catalog` 取已配置提供商与模型）、模型优先级链（`modelChain` + `modelChainFailures`，`turn/end` 报错达阈值走 `agent.model.select` 切下一个）、新会话落点（`newSessionDir` / `newSessionModel` / `newSessionPreset`）、每目的地档案（`destinationProfiles`：休眠时段 / 24 小时实时 / 连发等待 / 停听）、可调分条间隔与连发合并 / 空闲停听（`replyGapMinMs`/`replyGapMaxMs`/`burstWaitMs`/`listenIdleMs`）、卡片补齐 rotate 三项。顺带修掉 QQ 唤醒投递失败时 `state.pendingReplies` 归属残留导致的非 QQ 轮误发。
+- **M11** ✅ **已完成（0.2.14）**：DSH 启动后延迟自动拉起 NapCat —— 新增 `autoStartNapcat`（默认 `false`）与 `autoStartNapcatDelayMs`（默认 `20000`，范围 0–600000）。`apply()` 末尾排一个 `unref()` 的 `setTimeout`，到点重读开关、判 `napcatRunning()`、只调 `napcatLaunch()` 启动已装好的 NapCat；等待期间关开关 / 卸载 / 已在跑都跳过，失败只记日志。绝不自动下载 / 安装。`napcatStatus` 增 `autoStart` 状态字段。
 
 ## 9. 安全与注意
 
@@ -286,14 +302,20 @@ npm 上已经有 `@fengye_nobug/dsh-qq-bot`（目前是 0.2.5）。无作用域�
 
 ```
 QQ 消息 ─┬─ 不在白名单 ─────────────────→ 丢弃（白名单为空则全部拒绝）
+         ├─ 命中目的地休眠时段且没开 24h 实时 ─→ 只记录（reason: quiet-hours，不回复）
          ├─ 在会话跟随窗口内 ───────────→ 唤醒（reason: listening）
+         ├─ 主人私聊且 alwaysWakePrivate ─→ 唤醒（reason: private-owner）
          ├─ 群里 + atOnlyInGroup + 没 @ ─→ 丢弃
          ├─ 被 @ / 命中昵称 / 被戳我 ───→ 唤醒
          ├─ random() < wakeProbability ──→ 唤醒（默认 5%）
          └─ 其余 ──────────────────────→ 只记录（零模型调用）
+
+唤醒之后：burstWaitMs > 0 时先攒连发，停手这么久才真正投递；
+         窗口开着但 listenIdleMs 内没新消息会自动停听。
 ```
 
 - **白名单默认全关**：`whitelist`（私聊）、`groupWhitelist`（群）为空数组时，任何来源都不能唤醒会话。
+- **休眠时段 / 24 小时实时**：`destinationProfiles` 里给某目的地写 `quietHours`（如 `23:00-08:00`，支持全角冒号、`到`/`至`/`～` 等连字符、跨零点）后，该时段内的消息只记账、不回复，排在会话跟随之前；醒来后这些闲聊仍作为上下文。给该目的地勾 `alwaysReply`（主人私聊随叫随到就这么设）= 完全跳过休眠，24 小时实时回复。解析不出来的时段按「不休眠」处理（宁可多回话）。
 
 ### 在 QQ 里改群白名单
 
@@ -339,9 +361,12 @@ QQ 消息 ─┬─ 不在白名单 ──────────────�
 - 每个目的地各有一个窗口，同时开着互不影响。给甲群开窗不会关掉乙群已经开着的窗口。
 - `qq_bridge_listen({ off: true })` 只关当前这一轮钉住的目的地，别的目的地的窗口还在。
 - 窗口只影响那个目的地，别的群 / 私聊照旧要 @ 或点名才会叫醒。
+- **空闲自动停听**：窗口记 `lastAt` 与 `idleMs`。每来一条消息刷新 `lastAt`，`now - lastAt > idleMs` 时窗口失效（检查排在 `atOnlyInGroup` 之前）。`idleMs` 取全局 `listenIdleMs`（默认 `120000` = 2 分钟，下限 10 秒、上限 24 小时）；开窗那一刻把值钉在窗口里。对方几分钟没回就自动停听，等下一条消息再续，不会一直挂着烧 token。
+- **连发合并**：`burstWaitMs`（全局，默认 `0`；或该目的地档案里的 `burstWaitMs` 覆盖）大于 0 时，唤醒的消息先不投递，进同一个目的地的去抖队列；每来一条新消息重置计时器，停手这么久才把攒下的消息一起重放（更早的消息落进最近聊天缓冲，最后一条带 `__burst` 标记重新走 `handleInbound`，白名单 / 休眠 / 闸门全部复用）。默认 5 秒可调。队列在插件卸载时 drain，不会丢消息。
+- **分条间隔**：一轮里多个 `[QQ]` 块串行发出，每条之间隔 `replyGapDelay(s)`，在 `replyGapMinMs`–`replyGapMaxMs`（默认 1200–2800 毫秒）里随机；配置写反自动换过来。
 - 警告：窗口打开时，每条消息都会唤醒，产生实际费用。默认 5 分钟、上限 60 分钟。
   这条规则已经写进注入的系统提示（“别无脑常开”）。
-- 窗口检查排在 `atOnlyInGroup` 之前。否则群里开启跟随后，消息会被“没 @ 就丢弃”掐断。
+- 窗口检查排在 `atOnlyInGroup` 之前。否则群里开启跟随后，消息会被“没 @ 就丢弃”掐断。休眠时段检查排在窗口之前。
 
 ## 接入 QQ（OneBot / NapCat）
 
@@ -411,7 +436,7 @@ QQ 路径与 `NapCatWinBootHook.dll`；此时 QQ 路径取不到会明确报错�
 
 **安全边界**：
 
-- **插件从不自动下载或执行任何内容**。所有动作都由 `qq_bridge_napcat` 的显式调用触发。
+- **下载 / 安装 / 写配置从不自动进行**，一律由 `qq_bridge_napcat` 的显式调用触发。唯一例外是 `autoStartNapcat`：用户主动打开后，DSH 启动延迟若干秒只「启动已经装好的」NapCat，复用手动 `launch` 的同一段逻辑，不碰下载 / 安装。
 - 每次下载都按 GitHub Release 自带的 `asset.digest` 做 **sha256 校验**，校验不符时删除文件并报错。
 - ZIP 用**纯 Node 实现**解包，不依赖 7z / Expand-Archive，并拒绝 `..`、绝对路径等 zip-slip 条目。
 - 默认安装位是 `$DSH_HOME/napcat`，不污染项目目录。
@@ -499,13 +524,16 @@ QQ 的“拍一拍”在 OneBot 里走的是 **notice 事件**，不是消息段
 第 2 步是必需的：**目标会话的模型通常不支持图片输入**（如 `deepseek-v4-flash` 是纯文本），
 附件会被系统剥成 `image omitted`，只有描述能让模型知道图里的内容。
 
-- 选择模型：优先使用设置里的 `visionModel`（`provider/model`）；未设置时自动查找，
-  名字带 `vision` 的优先，其次是第一个支持图片输入的模型。
+- 选择模型由 `visionMode` 决定（设置卡片上是下拉，用户不用手写 model id）：
+  - `auto`（默认）：扫 `llm.listProviders()` + `listModels(provider)` 找一个 `inputModalities` 含 `image` 的，名字带 `vision` 的优先，其次是第一个支持图片输入的；
+  - `session`：用会话当前模型（`modelSelectionOf(agent)`：依次试 `agent.model.current()`、`agent.options`、部署默认）。识图来源选它时，`describeImage` 会拿到该会话模型；缓存命中也会按会话补一次；
+  - `fixed`：直接用 `visionProvider` + `visionProviderModel` 两段联动下拉选出来的那一对（从 `GET /api/qq-bridge/catalog` 取清单，模型带「支持识图」标记）。
+  - 三档都没给出可用模型时才回落到旧单值写法 `visionModel`（`provider/model`）；它只是兼容旧配置的兜底，卡片上不再给输入框。
 - 发给视觉模型的那条消息，来源和注入 QQ 消息一样：DSH 0.2.0 用 `plugin:dsh-qq-bot`，
   0.1.5 仍用原来的 `{ kind: 'plugin', plugin: 'qq-bridge' }`。0.2.0 不接受旧的 `kind: 'plugin'`。
-- 解析结果会缓存：成功的解析按 `visionModel` 的值缓存，值没变就不再枚举模型列表。
-  自动查找失败的结果也会缓存，但只用于同一次设置内的去重 —— 设置一改就丢掉并重试，
-  所以之后补上视觉模型不必改动 `visionModel`。
+- 解析结果会缓存：签名取 `mode=…|p=…|m=…|legacy=…`（`visionModelSignature`），签名没变就不再枚举模型列表。
+  自动查找失败的结果也会缓存，但只用于同一次设置内的去重 —— 改任何一项识图设置就丢掉并重试，
+  所以之后补上视觉模型不必改动旧的单值键。
 - **单张图失败会重试 2 次**（共 3 次尝试，退避 300/600ms）；3 次都失败才记“描述失败 + 原因”。
   普通图片写成 `[图片#a1b2c3]：（描述失败：原因）`。商城表情写成 `[表情包#a1b2c3]：<表情名> （描述失败：原因）`。
 - 一次唤醒最多描述 3 张（每张 = 一次多模态调用）；描述失败不影响文本处理与策略判定。
@@ -617,8 +645,22 @@ QQ 的“拍一拍”在 OneBot 里走的是 **notice 事件**，不是消息段
 | `replyMaxChars` | `1500` | 一条最多多少字（下限 100）；**超过就不发送** |
 | `replyWithQuote` | `false` | 回复时带上原消息 |
 | `stripMarkdown` | `true` | 去掉 Markdown 记号 |
-| `visionModel` | `''` | 用来看图的模型（`provider/model`）；空 = 自动查找 |
-| `agentPreset` | `''` | 人设预设；空 = 沿用会话自己记着的 |
+| `visionMode` | `'auto'` | 识图用哪个模型（**下拉**）：`auto` 自动找支持图片输入的｜`session` 用会话当前模型｜`fixed` 用下面两项选的 |
+| `visionProvider` / `visionProviderModel` | `''` | `visionMode=fixed` 时两段联动下拉：从 `GET /api/qq-bridge/catalog` 取已配置提供商及其模型，模型带「支持识图」标记。换提供商会清空模型；`visionMode≠fixed` 时禁用 |
+| `visionModel` | `''` | **旧单值写法**（`provider/model`），只是三档都没给时的兜底。卡片上刻意不给输入框，保留只为兼容旧配置。`imageDescribeSafeBytes` / `imageDescribeMaxBytes` / `imageWakeTotalBytes` 同样是只读兼容键（识图不再按体积分档） |
+| `describeImages` | `true` | 关掉则完全不识图、图片只留 `[图片#短哈希]` 占位，适合会话模型自己能看图时省调用 |
+| `modelChain` | `[]` | 模型优先级链（**下拉**排顺序，最多 8 条，↑/↓/✕）。当前模型连续报错 / blocked 达 `modelChainFailures` 次就切下一个、循环回绕；切换走宿主 `agent.model.select`，不重建会话。日志里记 `model-chain` / `switch`，`qq_bridge_status` 能看到链实时位置 |
+| `modelChainFailures` | `5` | 链上切换阈值（1–50）。成功完成一轮就把连续失败计数清零 |
+| `newSessionDir` | `''` | 新建 QQ 会话放到哪个文件夹（绝对路径）；空 = 「QQ 桥接」工作区 |
+| `newSessionModel` | `''` | 新建会话默认模型（**下拉**）；空 = 宿主默认模型或 `modelChain` 第一个 |
+| `newSessionPreset` | `''` | 新建会话默认预设模式（**下拉**，取自 `agentPresets.list()`）；空 = 沿用 `agentPreset` |
+| `agentPreset` | `''` | 人设预设（**下拉**）；空 = 沿用会话自己记着的 |
+| `alwaysWakePrivate` | `true` | 主人私聊（`ownerWhitelist`）一律叫醒、不抽签；关掉回到按概率 |
+| `destinationProfiles` | `[]` | 按 `group:<群号>` / `private:<QQ号>` 个性化（**卡片式编辑**，目的地从 `GET /api/qq-bridge/profiles` 挑）。每条可设 `quietHours` 休眠时段、`alwaysReply`（24 小时实时、跳过休眠）、`burstWaitMs` 连发等待、`idlePauseMs` 停听。后写的同 target 覆盖先写的 |
+| `replyGapMinMs` / `replyGapMaxMs` | `1200` / `2800` | 分条发出时两条之间随机间隔的下限 / 上限（毫秒，0–60000，写反自动换过来） |
+| `burstWaitMs` | `0` | 对方连着发消息时，先等这么多毫秒没人再说才回复；`0` = 立刻回。每个目的地可在档案里单独覆盖 |
+| `listenIdleMs` | `120000` | 会话跟随期间，这么久（毫秒）没有新消息就自动停听（1 万–24 小时，默认 2 分钟）；开窗时把值钉进窗口 |
+| `rotateEnabled` / `rotateMaxTurns` / `rotatePressureRatio` | `true` / `300` / `0.75` | perGroup 会话轮数 / 上下文压力到阈值就新建一条接着聊；关掉则不轮换 |
 | `onebotUrl` | `''` | OneBot 连接地址；空 = 先不连接 |
 | `accessTokenEnv` | `''` | OneBot 令牌放在哪个环境变量（填变量名，不是令牌，也不是模型 API key） |
 | `selfId` | `''` | 机器人自己的 QQ 号。空 = 连上后自动读取；读取完成前，先用事件里的 `self_id`。想避开这段空窗就填上 |
@@ -630,6 +672,8 @@ QQ 的“拍一拍”在 OneBot 里走的是 **notice 事件**，不是消息段
 | `onebotPort` | `3001` | OneBot 端口。自己另外部署的 NapCat 要和这边一致 |
 | `qqNumber` | `''` | 快速登录用的 QQ 号（需先手动登录过一次） |
 | `checkUpdateOnStart` | `false` | 启动时检查一次。默认关。打开后，下次启动只检查有没有新版本，写在日志里，不自动安装。要装用卡片上的「更新到 vX.Y.Z」 |
+| `autoStartNapcat` | `false` | DSH 启动后自动拉起**已装好**的 NapCat。默认关；只启动，不下载 / 安装 / 写配置 |
+| `autoStartNapcatDelayMs` | `20000` | 自动启动前的等待毫秒数（0–600000，默认 20 秒，给 DSH 和 QQ 一点先起来的时间）；填 0 = 起来就立刻尝试。到点重读开关、确认没在运行才启动，失败只记日志 |
 
 这些值优先从设置界面 / `settings.yaml` 取，未设置时回落到 `cordis.patch.yml` 里的安装配置（composition base）。
 
@@ -659,6 +703,8 @@ QQ 的“拍一拍”在 OneBot 里走的是 **notice 事件**，不是消息段
 | 群聊礼仪 | 1–2 句话；默认不超过 40 字；不刷屏；不放路径、代码、日志、提交号；不汇报过程。系统表情写 `[表情名]` 或 `[表情数字]` |
 | 无人值守 | 不碰特权操作，见下一节 |
 | 会话跟随（监听模式） | 何时开窗；默认 5 分钟、上限 60 分钟；只对同一目的地生效；答完主动关 |
+
+> 空闲停听（`listenIdleMs`）、连发合并（`burstWaitMs`）、分条间隔（`replyGapMinMs`/`replyGapMaxMs`）、目的地休眠与 24 小时实时（`destinationProfiles`）都是**插件侧的运行时机制**，不写进注入的系统提示 —— 模型不必知道这些，照常决定「要不要开窗 / 要不要关」就行；窗口到没到期、要不要等对方停手，由宿主半自己判定。
 
 ## 无人值守的安全边界（不提供审批桥接）
 
@@ -750,6 +796,8 @@ node test-updates.mjs   # 检查更新和一键安装：semver、npm 正式版�
 | **M7** ✅ | 安全边界：用法说明重写为分节契约（含**无人值守不碰特权操作**）；**明确不做审批桥接** |
 | **M8** ✅ | 分得清“在 QQ 还是 DSH 里”：出站闸门按来源生效、出站方式做成开关、改模式立刻重挂提示词 |
 | **M9** 🚧 | 戳一戳（入站已通，出站受 NapCat 限制，见[已知限制](#已知限制与环境要求)） |
+| **M10** ✅ | 0.2.13 设置项个性化：识图下拉 / 模型优先级链 / 新会话落点 / 每目的地档案 / 连发合并与空闲停听 |
+| **M11** ✅ | 0.2.14 DSH 启动后延迟自动拉起 NapCat（`autoStartNapcat` + `autoStartNapcatDelayMs`，只启动不安装） |
 
 完整变更记录见 [`CHANGELOG.md`](./CHANGELOG.md)。上游发行版见 [sj244/dsh-qq-bridge Releases](https://github.com/sj244/dsh-qq-bridge/releases)。
 

@@ -1,5 +1,21 @@
 # 更新日志
 
+## v0.2.14 — 2026-11-12
+
+- **DSH 启动后延迟自动拉起 NapCat**：新增 `autoStartNapcat`（默认 `false`）与 `autoStartNapcatDelayMs`（默认 `20000`，即 20 秒，范围 0–600000）。开关打开后，插件在 `apply()` 结束时排一个 `setTimeout`（`unref()`，不拖住进程退出），到点再读一次设置：开关仍开、NapCat 没在跑、且安装目录里已有官方 launcher / 引导器时，走与手动 `launch` 完全相同的 `napcatLaunch()` 启动**已经装好的** NapCat；等待期间用户关了开关、插件被卸载（effect 清掉 timer）、或 NapCat 已在运行，都会跳过。启动失败只记一条日志，不中断插件。
+- **只启动，绝不自动下载 / 安装 / 写配置**：`qq_bridge_napcat` 的 `download` / `configure` 仍是显式调用；`napcatStatus` 新增 `autoStart`（`enabled` / `delayMs` / `pending`）便于在卡片上看到排程状态。同步修正 `index.js` / `napcat.js` / `cordis.patch.yml` / `README.md` / `DESIGN.md` 里「插件从不自动执行任何内容」这类随新开关过时的措辞。
+- 冒烟测试补 `normalizeAutoStartDelayMs` 纯函数、源码级「只走 napcatLaunch」断言，以及离线假 ctx 真跑 `apply()` 的功能测试（开关打开真的 spawn 一次、关开关 / 卸载不 spawn、默认关不排程）。
+
+## v0.2.13 — 2026-11-12
+
+- **识图服务商改成下拉选择，不用手写模型名**：新增 `visionMode`（`auto` 自动找支持图片输入的模型 / `session` 用会话当前模型 / `fixed` 指定一个，默认 `auto`）、`visionProvider`、`visionProviderModel`。选 `fixed` 时两段联动下拉，从 DSH 已配置的提供商里选一个、再选它下面的模型，模型清单带「支持识图」标记；卡片向只读的 `/api/qq-bridge/catalog` 取清单。旧的 `visionModel`（`provider/model`）只作为没配新选项时的兜底，卡片上不再给输入框。`imageDescribeSafeBytes` / `imageDescribeMaxBytes` / `imageWakeTotalBytes` 仍是只为兼容旧配置保留的空键。
+- **每个群 / 私聊可独立个性化**：新增 `destinationProfiles`（数组，按 `group:<群号>` / `private:<QQ号>`）。每条可设 `quietHours` 休眠时段（如 `23:00-08:00`，期间只记账不回复）、`alwaysReply`（给主人私聊打开 = 24 小时实时回复、不受休眠约束）、`burstWaitMs` 连发等待、`idlePauseMs` 停听时间。卡片里可从只读的 `/api/qq-bridge/profiles` 列出的已接入目的地直接挑，不用背群号；后写的同 target 条目覆盖先写的。
+- **连发等待与空闲停听**：全局 `burstWaitMs`（默认 `0` = 立刻回）让对方连着发消息时先攒着、停手这么久才回复；每个目的地可在档案里单独覆盖。`listenIdleMs`（默认 `120000` = 2 分钟，下限 10 秒、上限 24 小时）让会话跟随窗口在这么久没有新消息后自动失效、等下一条消息再续，不会一直挂着烧 token。分条间隔改成可调：`replyGapMinMs` / `replyGapMaxMs`（默认 `1200` / `2800` 毫秒，写反会自动换过来），不再写死 1.2–2.8 秒。
+- **模型优先级链**：新增 `modelChain`（从已配置提供商 / 模型里排的一串顺序，最多 8 条）与 `modelChainFailures`（默认 `5`，1–50）。`turn/end` 里连续报错 / blocked 达阈值就按顺序切到下一个模型、循环回绕，切换走宿主 `agent.model.select`（不重建会话），成功后清零计数；切换会记一条 `model-chain` 日志，`qq_bridge_status` 里能看到链的实时位置。卡片里同样用下拉排顺序。
+- **新建会话可指定落点**：`newSessionDir`（文件夹绝对路径，空 = 「QQ 桥接」工作区）、`newSessionModel`（默认模型，空 = 宿主默认或 `modelChain` 第一个）、`newSessionPreset`（默认预设模式）都能在卡片里选；预设与原 `agentPreset` 一起改成下拉。
+- **修一处归属残留**：QQ 唤醒投递失败回滚闸门时，一并回滚 / 清掉投递前落盘的 `state.pendingReplies[wakeSessionId]`，否则下一条非 QQ 轮会被误判成 QQ 轮、把正文误发进群。
+- 设置卡片补齐 `rotateEnabled` / `rotateMaxTurns` / `rotatePressureRatio` 三项（之前只能在安装配置里写）。`README.md` / `DESIGN.md` 同步补上新键的键名、默认值、效果与界面行为；冒烟测试（`test-smoke.mjs`）补齐新纯函数与卡片一致性断言。
+
 ## v0.2.12 — 2026-11-02
 
 - **QQ 回复风格不再鼓励使用 emoji**：`$DSH_HOME/.agent-presets/dsh-qq-bridge/skills/qq-session-reply-style/references/reply-style.md` 若还写着 “Emoji are welcome when they make the answer friendlier.”，插件启动时删掉这一句。「Avoid Markdown formatting. Use plain text.」以及前后其它行保持原样。不另加「默认不要带表情」或「少用某个表情」的规矩。这份文件不在插件目录里，DSH 升级时也不会改写 `.agent-presets`；它是人设安装时复制进去的。面板更新并重启后才会改到磁盘上的那一份。文件本来就不存在时不会新建，也不用删掉整个人设目录。用法说明和 `qq_bridge_send` 的说明不动。

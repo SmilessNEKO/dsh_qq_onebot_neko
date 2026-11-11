@@ -32,7 +32,9 @@ window.__ModuleLoader__.load({
     const NS = 'qq-bridge'
 
     // ── 表单描述 ──────────────────────────────────────────────────────────────
-    // 加一个设置项 = 在这里加一行。kind: text | list | group-list | number | boolean | select | session
+    // 加一个设置项 = 在这里加一行。kind:
+    //   text | list | group-list | number | boolean | select | session
+    //   vision-provider / vision-model | preset | model-chain | profiles
     const FIELDS = [
       {
         key: 'checkUpdateOnStart',
@@ -63,6 +65,29 @@ window.__ModuleLoader__.load({
         hint: '按名字选就行，不用记那串 id。选「每个群、每个私聊各记各的」时可以留空，留空就用宿主当前的默认模型；填了则新建的会话沿用这个会话的模型。',
       },
       {
+        key: 'newSessionDir',
+        label: '新建会话放在哪个文件夹',
+        kind: 'text',
+        hint: '「每个群、每个私聊各记各的」时，新会话用这个目录。填绝对路径，例如 D:\\QQ工作区。留空 = 用宿主的默认工作目录。',
+        check: (v) => {
+          const s = String(v ?? '').trim()
+          if (s === '') return null
+          return /^([A-Za-z]:[\\/]|\\\\|\/)/.test(s) ? null : '要填绝对路径（例如 D:\\QQ工作区）。相对路径面板打不开。'
+        },
+      },
+      {
+        key: 'newSessionModel',
+        label: '新建会话默认模型',
+        kind: 'model-ref',
+        hint: '新建的群/私聊会话先用这个模型。留空 = 用宿主默认模型；模型优先级链有内容时用链上第一个。',
+      },
+      {
+        key: 'newSessionPreset',
+        label: '新建会话默认预设',
+        kind: 'preset',
+        hint: '新建的群/私聊会话挂哪套人设。留空 = 不挂载。',
+      },
+      {
         key: 'nicknames',
         label: '听到这些名字就回应',
         kind: 'list',
@@ -74,6 +99,12 @@ window.__ModuleLoader__.load({
         kind: 'number',
         step: '0.01',
         hint: '没 @、也没喊名字时，按这个概率回话（0 到 1）。默认 0.05，也就是大约二十条里回一条。想少说话就调小。',
+      },
+      {
+        key: 'alwaysWakePrivate',
+        label: '主人的私聊必回',
+        kind: 'boolean',
+        hint: '打开后，「主人 QQ」里的号发来的私聊一律回话，不按概率抽签。别人的私聊和所有群不受影响。',
       },
       {
         key: 'whitelist',
@@ -98,6 +129,77 @@ window.__ModuleLoader__.load({
         label: '群里必须 @ 才理',
         kind: 'boolean',
         hint: '打开之后，群里没 @ 机器人就当没看见。比上面的概率更严。',
+      },
+      {
+        key: 'destinationProfiles',
+        label: '每个群 / 私聊单独设置',
+        kind: 'profiles',
+        hint: '在这里给某个群或某个私聊单独定：几点到几点休眠不看消息、是不是 24 小时实时回复、对方连着发消息时等多久再回、多久没新消息就停止跟随。没列出来的目的地按上面的全局设置走。',
+      },
+      {
+        key: 'burstWaitMs',
+        label: '连着发消息时先等多久',
+        kind: 'number',
+        hint: '对方还在连着发时，先攒着不回；停了这么久（毫秒）才一次性回。默认 0 = 立刻回。单个群/私聊可以在上面单独覆盖。',
+      },
+      {
+        key: 'listenIdleMs',
+        label: '多久没新消息就停止跟随',
+        kind: 'number',
+        hint: '会话跟随（模型自己开的「继续听」窗口）在对方安静这么久（毫秒）后自动收尾。默认 120000 = 2 分钟。',
+      },
+      {
+        key: 'replyGapMinMs',
+        label: '分条发送最短间隔',
+        kind: 'number',
+        hint: '一轮里分几条发时，两条之间最少隔多少毫秒。默认 1200。',
+      },
+      {
+        key: 'replyGapMaxMs',
+        label: '分条发送最长间隔',
+        kind: 'number',
+        hint: '一轮里分几条发时，两条之间最多隔多少毫秒。默认 2800。太快会像机器人在刷屏。',
+      },
+      {
+        key: 'visionMode',
+        label: '识图用哪个模型',
+        kind: 'select',
+        options: [
+          ['auto', '自动挑一个能看图的'],
+          ['session', '用会话当前的模型'],
+          ['fixed', '指定一个模型'],
+        ],
+        hint: 'auto = 从已配置的提供商里找一个支持图片输入的；session = 直接用这条会话自己的模型看图；fixed = 用下面选的那一对。',
+      },
+      {
+        key: 'visionProvider',
+        label: '识图提供商',
+        kind: 'vision-provider',
+        hint: '从 DSH 里已经配置好的模型提供商里选。只有「识图用哪个模型」选了「指定一个模型」才生效。',
+      },
+      {
+        key: 'visionProviderModel',
+        label: '识图模型',
+        kind: 'vision-model',
+        hint: '这个提供商下用哪个模型。带「支持识图」标记的才真能看图。',
+      },
+      {
+        key: 'modelChain',
+        label: '对话模型优先级',
+        kind: 'model-chain',
+        hint: '按顺序尝试：上面那个连续报错达到次数上限，就自动换下一个（会话里直接切，不丢上下文）。拖动顺序用上下箭头。留空 = 不启用。',
+      },
+      {
+        key: 'modelChainFailures',
+        label: '连续报错几次就换模型',
+        kind: 'number',
+        hint: '默认 5。同一个模型连续失败这么多次（一轮里的错误都算）就切到优先级里的下一个。',
+      },
+      {
+        key: 'describeImages',
+        label: '收到图片先读成文字',
+        kind: 'boolean',
+        hint: '打开时叫一个能看图的模型把图描述出来，正文里就能看到图里是什么。关掉只留图片位置标记。',
       },
       {
         key: 'replyMode',
@@ -151,19 +253,45 @@ window.__ModuleLoader__.load({
       },
       { key: 'selfId', label: '机器人自己的 QQ 号', kind: 'text', hint: '留空 = 连上之后自动读取。' },
       {
-        key: 'visionModel',
-        label: '用来看图的模型',
-        kind: 'text',
-        hint: '写成 provider/model。留空 = 自动找一个能看图的模型。',
-      },
-      {
         key: 'agentPreset',
         label: '人设预设',
-        kind: 'text',
-        hint: '接到会话时用哪套人设。留空 = 沿用那个会话自己记着的。',
+        kind: 'preset',
+        hint: '已有会话恢复时用哪套人设。留空 = 沿用那个会话自己记着的。新建会话用上面的「新建会话默认预设」。',
       },
       { key: 'attachRecentChat', label: '把没叫醒时的聊天一并带上', kind: 'boolean', hint: '下次叫醒时，把中间没理的那些话一起附上。' },
       { key: 'recentChatLimit', label: '附带最近几条', kind: 'number', hint: '上面那段最多带最近几条（0–200）。' },
+      {
+        key: 'rotateEnabled',
+        label: '聊太久自动换新会话',
+        kind: 'boolean',
+        hint: '「每个群、每个私聊各记各的」时，聊得太久或上下文快满就自动开一条新会话接着聊。旧会话留着能查，不会删。',
+      },
+      {
+        key: 'rotateMaxTurns',
+        label: '聊到几轮换新会话',
+        kind: 'number',
+        hint: '默认 300 轮。填 0 = 只看上下文压力，不按轮数换。',
+      },
+      {
+        key: 'rotatePressureRatio',
+        label: '上下文占用到多少换新会话',
+        kind: 'number',
+        step: '0.05',
+        hint: '默认 0.75，也就是快占满四分之三时换。填 0 = 只看轮数。',
+      },
+      {
+        key: 'autoStartNapcat',
+        label: 'DSH 启动后自动启动 NapCat',
+        kind: 'boolean',
+        hint: '默认关。打开后 DSH 起来、等下面那个延迟，就自动启动已经装好的 NapCat；插件只启动，绝不会自动下载或安装。没装好、没配置、没登录过的话会记一条日志跳过。',
+      },
+      {
+        key: 'autoStartNapcatDelayMs',
+        label: '自动启动延迟（毫秒）',
+        kind: 'number',
+        step: '1000',
+        hint: '默认 20000（20 秒），给 DSH 和 QQ 一点先起来的时间。可填 0–600000；填 0 = 起来就立刻尝试启动。',
+      },
       {
         key: 'napcatInstallDir',
         label: 'NapCat 安装目录',
@@ -189,6 +317,30 @@ window.__ModuleLoader__.load({
 
     function isIdList(kind) {
       return kind === 'list' || kind === 'group-list'
+    }
+
+    /** 结构化的字段（值是数组/对象，不是一段字符串）。 */
+    function isStructured(kind) {
+      return kind === 'model-chain' || kind === 'profiles'
+    }
+
+    /**
+     * 目标标识归一化：只认 `group:<数字>` / `private:<数字>`。
+     * 与宿主半的 `normalizeDestinationProfiles` 同一条规则；认不出返回空串。
+     */
+    function canonicalTarget(raw) {
+      const text = String(raw ?? '').trim()
+      if (!/^(group|private):\d{1,16}$/.test(text)) return ''
+      return text
+    }
+
+    /** 目标的可读名：群名 / 备注 / 私聊号。 */
+    function targetLabel(row) {
+      const target = String(row?.target ?? '')
+      const id = target.split(':')[1] ?? ''
+      const name = String(row?.label ?? '').trim()
+      if (name !== '') return `${name}（${target}）`
+      return target.startsWith('group:') ? `群 ${id}` : `私聊 ${id}`
     }
 
     function splitIdText(raw) {
@@ -241,12 +393,16 @@ window.__ModuleLoader__.load({
       if (isIdList(field.kind)) return Array.isArray(raw) ? raw.join(', ') : raw == null ? '' : String(raw)
       if (field.kind === 'boolean') return raw === true
       if (field.kind === 'number') return raw == null || raw === '' ? '' : String(raw)
+      // 结构化字段保留原值（数组），卡片按控件渲染；不要在草稿里做字符串化，
+      // 否则「改了一行别的字段」会把结构悄悄写坏成一段文本。
+      if (isStructured(field.kind)) return Array.isArray(raw) ? raw.map((x) => ({ ...x })) : []
       return raw == null ? '' : String(raw)
     }
 
     /** 表单值 → 要写进设置的 JSON；数字不合法返回 undefined（拦住保存）。 */
     function parse(field, raw) {
       if (isIdList(field.kind)) return splitIdText(raw)
+      if (isStructured(field.kind)) return Array.isArray(raw) ? raw : []
       if (field.kind === 'boolean') return raw === true
       if (field.kind === 'number') {
         const text = String(raw ?? '').trim()
@@ -404,6 +560,34 @@ window.__ModuleLoader__.load({
       groupName: { fontSize: '13px', lineHeight: 1.3 },
       groupId: { fontSize: '11px', opacity: 0.55, lineHeight: 1.3 },
       groupIdOnly: { fontSize: '13px', lineHeight: 1.3 },
+      // 结构化编辑器（模型优先级 / 每目标设置）
+      structBox: { display: 'flex', flexDirection: 'column', gap: '8px' },
+      chainRow: { display: 'flex', alignItems: 'center', gap: '6px' },
+      chainIndex: { fontSize: '11px', opacity: 0.55, width: '14px', textAlign: 'right', flex: '0 0 auto' },
+      miniBtn: {
+        padding: '2px 8px',
+        borderRadius: '5px',
+        border: BORDER,
+        background: 'transparent',
+        color: 'inherit',
+        cursor: 'pointer',
+        font: 'inherit',
+        fontSize: '12px',
+        lineHeight: 1.4,
+        flex: '0 0 auto',
+      },
+      profileCard: {
+        display: 'flex',
+        flexDirection: 'column',
+        gap: '8px',
+        padding: '10px',
+        borderRadius: '6px',
+        border: BORDER,
+      },
+      profileHead: { display: 'flex', alignItems: 'center', gap: '8px' },
+      profileName: { fontSize: '13px', fontWeight: 600, flex: '1 1 auto', overflow: 'hidden', textOverflow: 'ellipsis' },
+      profileGrid: { display: 'grid', gridTemplateColumns: 'minmax(96px, 130px) 1fr', gap: '6px 10px', alignItems: 'start' },
+      profileLabel: { fontSize: '12px', opacity: 0.7, paddingTop: '6px' },
     }
 
     function disabled(btn, off) {
@@ -436,6 +620,11 @@ window.__ModuleLoader__.load({
       const [updateIsError, setUpdateIsError] = react.useState(false)
       // 群白名单旁边的群名和头像。拿不到就空着，输入框照常能改、能保存。
       const [groupMetas, setGroupMetas] = react.useState([])
+      // 下拉用的清单：提供商 / 模型 / 预设。拿不到就退化成「手写 provider/model」。
+      const [catalog, setCatalog] = react.useState(null)
+      const [catalogNote, setCatalogNote] = react.useState('')
+      // 已知的 QQ 目的地（群 / 私聊），给「每个群/私聊单独设置」做候选。
+      const [targets, setTargets] = react.useState([])
 
       const current = react.useMemo(() => draftFrom(snap.value), [snap.value])
       const shown = draft ?? current
@@ -507,6 +696,66 @@ window.__ModuleLoader__.load({
           clearTimeout(timer)
         }
       }, [open, groupListText])
+
+      // 下拉清单（提供商/模型/预设）与已知目的地。都是只读辅助数据：
+      // 拿不到时卡片照常能编辑 —— 退化成手写 provider/model，或者只显示已有的行。
+      react.useEffect(() => {
+        if (!open || typeof fetch !== 'function') return undefined
+        let alive = true
+        const pull = () => {
+          fetch(CATALOG_API, { credentials: 'include', headers: { accept: 'application/json' } })
+            .then((res) => res.json().catch(() => null))
+            .then((body) => {
+              if (!alive) return
+              if (body && body.ok === true) {
+                setCatalog({
+                  providers: Array.isArray(body.providers) ? body.providers : [],
+                  presets: Array.isArray(body.presets) ? body.presets : [],
+                  defaultModel: body.defaultModel ?? null,
+                  defaultDir: typeof body.defaultDir === 'string' ? body.defaultDir : '',
+                })
+                const errors = Array.isArray(body.errors) ? body.errors : []
+                setCatalogNote(errors.length > 0 ? `部分清单没读到：${errors[0]}` : '')
+              } else {
+                setCatalog(null)
+                setCatalogNote('读不到模型清单，这一栏只能手写 provider/model。')
+              }
+            })
+            .catch(() => {
+              if (!alive) return
+              setCatalog(null)
+              setCatalogNote('读不到模型清单（本机接口没响应），这一栏只能手写 provider/model。')
+            })
+        }
+        pull()
+        const timer = setInterval(pull, 15000)
+        return () => {
+          alive = false
+          clearInterval(timer)
+        }
+      }, [open])
+
+      react.useEffect(() => {
+        if (!open || typeof fetch !== 'function') return undefined
+        let alive = true
+        const pull = () => {
+          fetch(PROFILES_API, { credentials: 'include', headers: { accept: 'application/json' } })
+            .then((res) => res.json().catch(() => null))
+            .then((body) => {
+              if (!alive) return
+              setTargets(body && body.ok === true && Array.isArray(body.targets) ? body.targets : [])
+            })
+            .catch(() => {
+              if (alive) setTargets([])
+            })
+        }
+        pull()
+        const timer = setInterval(pull, 20000)
+        return () => {
+          alive = false
+          clearInterval(timer)
+        }
+      }, [open])
 
       /**
        * 拉一次 NapCat 状态（WebUI 地址 + 是否在运行）。
@@ -699,6 +948,313 @@ window.__ModuleLoader__.load({
         }
       }
 
+      /** 结构化字段的统一改写：拿到新数组就整段替换。 */
+      function setStructured(key, list) {
+        const next = { ...shown }
+        next[key] = list
+        setDraft(next)
+        setNote('')
+        setError('')
+      }
+
+      /**
+       * 模型优先级链编辑器：一行一个模型，带上下移动与删除，末尾是「加一个」。
+       *
+       * 为什么不用一句话（逗号分隔）输入：顺序就是语义，拖错的代价是切错模型；
+       * 而且每个条目都得从已配置的 provider/model 里挑 —— 手写 id 一定会打错。
+       */
+      function renderModelChain(field, list) {
+        const providers = catalog?.providers ?? []
+        const options = []
+        for (const p of providers) for (const m of p.models) options.push([`${p.id}/${m.id}`, `${p.name || p.id} · ${m.name || m.id}`])
+        const rows = list.map((ref, index) => {
+          const value = String(ref ?? '')
+          const known = options.some(([v]) => v === value)
+          const move = (delta) => {
+            const target = index + delta
+            if (target < 0 || target >= list.length) return
+            const next = list.slice()
+            const [item] = next.splice(index, 1)
+            next.splice(target, 0, item)
+            setStructured(field.key, next)
+          }
+          return h(
+            'div',
+            { key: `${index}-${value}`, style: S.chainRow },
+            h('span', { style: S.chainIndex }, String(index + 1)),
+            options.length > 0
+              ? h(
+                  'select',
+                  {
+                    style: { ...S.input, flex: '1 1 auto' },
+                    value: known ? value : '',
+                    disabled: !snap.writable || busy,
+                    onChange: (event) => {
+                      const next = list.slice()
+                      next[index] = event.target.value
+                      setStructured(field.key, next)
+                    },
+                  },
+                  [
+                    h('option', { key: '(none)', value: '' }, '（选一个模型）'),
+                    ...options.map(([v, text]) => h('option', { key: v, value: v }, text)),
+                    ...(!known && value !== ''
+                      ? [h('option', { key: '__current', value }, `${value}（当前值，不在清单里）`)]
+                      : []),
+                  ],
+                )
+              : h('input', {
+                  type: 'text',
+                  style: { ...S.input, flex: '1 1 auto' },
+                  value,
+                  placeholder: 'provider/model',
+                  disabled: !snap.writable || busy,
+                  onChange: (event) => {
+                    const next = list.slice()
+                    next[index] = event.target.value
+                    setStructured(field.key, next)
+                  },
+                  spellCheck: false,
+                }),
+            h('button', {
+              type: 'button',
+              title: '往上挪',
+              style: disabled(S.miniBtn, busy || !snap.writable || index === 0),
+              disabled: busy || !snap.writable || index === 0,
+              onClick: () => move(-1),
+            }, '↑'),
+            h('button', {
+              type: 'button',
+              title: '往下挪',
+              style: disabled(S.miniBtn, busy || !snap.writable || index === list.length - 1),
+              disabled: busy || !snap.writable || index === list.length - 1,
+              onClick: () => move(1),
+            }, '↓'),
+            h('button', {
+              type: 'button',
+              title: '从优先级里去掉',
+              style: disabled(S.miniBtn, busy || !snap.writable),
+              disabled: busy || !snap.writable,
+              onClick: () => setStructured(field.key, list.filter((_x, i) => i !== index)),
+            }, '✕'),
+          )
+        })
+        const canAdd = list.length < 8
+        return h(
+          'div',
+          { style: S.structBox },
+          rows,
+          h(
+            'div',
+            { style: S.ops },
+            h(
+              'button',
+              {
+                type: 'button',
+                style: disabled(S.btn, busy || !snap.writable || !canAdd),
+                disabled: busy || !snap.writable || !canAdd,
+                onClick: () => setStructured(field.key, [...list, '']),
+              },
+              canAdd ? '加一个模型' : '最多 8 个',
+            ),
+            list.length === 0 ? h('span', { style: S.hint }, '留空 = 不启用优先级链。') : null,
+          ),
+          catalogNote ? h('div', { style: S.hint }, catalogNote) : null,
+        )
+      }
+
+      /**
+       * 每个群 / 私聊的个性化设置编辑器。
+       *
+       * 一行 = 一个目的地。用户要的四件事都在这一行里：
+       * 休眠时段、24 小时实时回复、连着发时等多久、多久没新消息就停止跟随。
+       * 目的地候选来自宿主半扫出来的已知群/私聊，也可以手填 `group:群号`。
+       */
+      function renderProfiles(field, list) {
+        const knownTargets = new Set((Array.isArray(targets) ? targets : []).map((t) => String(t.target)))
+        const update = (index, patch) => {
+          const next = list.map((row, i) => (i === index ? { ...row, ...patch } : row))
+          setStructured(field.key, next)
+        }
+        const rows = list.map((row, index) => {
+          const target = String(row?.target ?? '')
+          const candidates = (Array.isArray(targets) ? targets : []).filter(
+            (t) => t.target === target || !list.some((r) => r?.target === t.target),
+          )
+          return h(
+            'div',
+            { key: `${index}-${target}`, style: S.profileCard },
+            h(
+              'div',
+              { style: S.profileHead },
+              h('span', { style: S.profileName }, targetLabel(row)),
+              h(
+                'button',
+                {
+                  type: 'button',
+                  title: '删掉这一行',
+                  style: disabled(S.miniBtn, busy || !snap.writable),
+                  disabled: busy || !snap.writable,
+                  onClick: () => setStructured(field.key, list.filter((_x, i) => i !== index)),
+                },
+                '✕',
+              ),
+            ),
+            h(
+              'div',
+              { style: S.profileGrid },
+              h('span', { style: S.profileLabel }, '目的地'),
+              h(
+                'div',
+                null,
+                candidates.length > 0
+                  ? h(
+                      'select',
+                      {
+                        style: S.input,
+                        value: knownTargets.has(target) ? target : '',
+                        disabled: !snap.writable || busy,
+                        onChange: (event) => update(index, { target: event.target.value }),
+                      },
+                      [
+                        h('option', { key: '(none)', value: '' }, '（选一个群或私聊）'),
+                        ...candidates.map((t) =>
+                          h(
+                            'option',
+                            { key: t.target, value: t.target },
+                            `${t.target.startsWith('group:') ? '群' : '私聊'} ${t.target.split(':')[1]}${t.label ? ` · ${t.label}` : ''}`,
+                          ),
+                        ),
+                        ...(target !== '' && !knownTargets.has(target)
+                          ? [h('option', { key: '__current', value: target }, `${target}（手填，不在已知列表里）`)]
+                          : []),
+                      ],
+                    )
+                  : h('input', {
+                      type: 'text',
+                      style: S.input,
+                      value: target,
+                      placeholder: 'group:群号 或 private:QQ号',
+                      disabled: !snap.writable || busy,
+                      onChange: (event) => update(index, { target: event.target.value }),
+                      spellCheck: false,
+                    }),
+              ),
+              h('span', { style: S.profileLabel }, '备注名'),
+              h('input', {
+                type: 'text',
+                style: S.input,
+                value: String(row?.label ?? ''),
+                placeholder: '只用来认人，可以留空',
+                disabled: !snap.writable || busy,
+                onChange: (event) => update(index, { label: event.target.value }),
+                spellCheck: false,
+              }),
+              h('span', { style: S.profileLabel }, '休眠时段'),
+              h(
+                'div',
+                null,
+                h('input', {
+                  type: 'text',
+                  style: S.input,
+                  value: String(row?.quietHours ?? ''),
+                  placeholder: '23:00-08:00（留空 = 不休眠）',
+                  disabled: !snap.writable || busy || row?.alwaysReply === true,
+                  onChange: (event) => update(index, { quietHours: event.target.value }),
+                  spellCheck: false,
+                }),
+                row?.alwaysReply === true
+                  ? h('div', { style: S.hint }, '已开「24 小时实时回复」，休眠时段不生效。')
+                  : null,
+              ),
+            ),
+            h(
+              'div',
+              { style: S.ops },
+              h(
+                'label',
+                { style: S.check },
+                h('input', {
+                  type: 'checkbox',
+                  checked: row?.alwaysReply === true,
+                  disabled: !snap.writable || busy,
+                  onChange: (event) => update(index, { alwaysReply: event.target.checked }),
+                }),
+                h('span', null, '24 小时实时回复（不受休眠时段限制）'),
+              ),
+            ),
+            h(
+              'div',
+              { style: S.profileGrid },
+              h('span', { style: S.profileLabel }, '连着发时等多久'),
+              h(
+                'div',
+                null,
+                h('input', {
+                  type: 'number',
+                  style: S.input,
+                  value: String(row?.burstWaitMs ?? 0),
+                  disabled: !snap.writable || busy,
+                  onChange: (event) => update(index, { burstWaitMs: Number(event.target.value) || 0 }),
+                }),
+                h('div', { style: S.hint }, '毫秒。对方停手这么久才回，0 = 立刻回。'),
+              ),
+              h('span', { style: S.profileLabel }, '多久没消息就停止跟随'),
+              h(
+                'div',
+                null,
+                h('input', {
+                  type: 'number',
+                  style: S.input,
+                  value: String(row?.idlePauseMs ?? 120000),
+                  disabled: !snap.writable || busy,
+                  onChange: (event) => update(index, { idlePauseMs: Number(event.target.value) || 0 }),
+                }),
+                h('div', { style: S.hint }, '毫秒。默认 120000 = 2 分钟。'),
+              ),
+            ),
+          )
+        })
+        return h(
+          'div',
+          { style: S.structBox },
+          rows,
+          h(
+            'div',
+            { style: S.ops },
+            h(
+              'button',
+              {
+                type: 'button',
+                style: disabled(S.btn, busy || !snap.writable),
+                disabled: busy || !snap.writable,
+                onClick: () =>
+                  setStructured(field.key, [
+                    ...list,
+                    { target: '', label: '', quietHours: '', alwaysReply: false, burstWaitMs: 0, idlePauseMs: 120000 },
+                  ]),
+              },
+              '加一个群 / 私聊',
+            ),
+            h(
+              'button',
+              {
+                type: 'button',
+                style: disabled(S.btn, busy || !snap.writable),
+                disabled: busy || !snap.writable,
+                onClick: () =>
+                  setStructured(field.key, [
+                    ...list,
+                    { target: '', label: '', quietHours: '', alwaysReply: true, burstWaitMs: 0, idlePauseMs: 120000 },
+                  ]),
+              },
+              '加一个「随叫随到」私聊',
+            ),
+            h('span', { style: S.hint }, '没列出来的群 / 私聊按上面的全局设置走。'),
+          ),
+        )
+      }
+
       async function save() {
         setBusy(true)
         setError('')
@@ -859,6 +1415,141 @@ window.__ModuleLoader__.load({
                   ),
                 )
           control = h('div', null, groupInput, groupList)
+        } else if (f.kind === 'model-ref' || f.kind === 'vision-provider' || f.kind === 'vision-model') {
+          // 这三类都是「从已配置的提供商/模型里选」，取不到清单时退化成手写输入框。
+          const providers = catalog?.providers ?? []
+          const hasCatalog = providers.length > 0
+          if (f.kind === 'model-ref') {
+            const allRefs = []
+            for (const p of providers) for (const m of p.models) allRefs.push(`${p.id}/${m.id}`)
+            const manual = h('input', {
+              type: 'text',
+              style: S.input,
+              value: String(value ?? ''),
+              placeholder: 'provider/model',
+              disabled: !snap.writable || busy,
+              onChange: change(f.key),
+              spellCheck: false,
+            })
+            control = hasCatalog
+              ? h(
+                  'div',
+                  null,
+                  h(
+                    'select',
+                    {
+                      style: S.input,
+                      value: allRefs.includes(String(value ?? '')) ? String(value) : '',
+                      disabled: !snap.writable || busy,
+                      onChange: change(f.key),
+                    },
+                    [
+                      h('option', { key: '(blank)', value: '' }, '（留空：用宿主默认 / 优先级链第一个）'),
+                      ...providers.map((p) =>
+                        h(
+                          'optgroup',
+                          { key: p.id, label: p.name || p.id },
+                          p.models.map((m) => h('option', { key: `${p.id}/${m.id}`, value: `${p.id}/${m.id}` }, m.name || m.id)),
+                        ),
+                      ),
+                      ...(String(value ?? '') !== '' && !allRefs.includes(String(value))
+                        ? [h('option', { key: '__current', value: String(value) }, `${value}（当前值，不在清单里）`)]
+                        : []),
+                    ],
+                  ),
+                  catalogNote ? h('div', { style: S.hint }, catalogNote) : null,
+                )
+              : h(
+                  'div',
+                  null,
+                  manual,
+                  h('div', { style: S.hint }, catalogNote || '读不到模型清单，只能手写 provider/model。'),
+                )
+          } else {
+            // vision-provider / vision-model：两段联动下拉。
+            const providerId = String(shown.visionProvider ?? '')
+            const picked = providers.find((p) => p.id === providerId)
+            const modelList = picked?.models ?? []
+            if (f.kind === 'vision-provider') {
+              control = h(
+                'select',
+                {
+                  style: S.input,
+                  value: providers.some((p) => p.id === providerId) ? providerId : '',
+                  disabled: !snap.writable || busy || f.kind !== 'vision-provider' || shown.visionMode !== 'fixed',
+                  onChange: (event) => {
+                    const next = { ...shown }
+                    next.visionProvider = event.target.value
+                    // 换提供商时清掉旧的模型：两个 provider 的 model id 不通用。
+                    next.visionProviderModel = ''
+                    setDraft(next)
+                    setNote('')
+                    setError('')
+                  },
+                },
+                [
+                  h('option', { key: '(none)', value: '' }, '（没选）'),
+                  ...providers.map((p) => h('option', { key: p.id, value: p.id }, p.name || p.id)),
+                  ...(providerId !== '' && !providers.some((p) => p.id === providerId)
+                    ? [h('option', { key: '__current', value: providerId }, `${providerId}（当前值，不在清单里）`)]
+                    : []),
+                ],
+              )
+            } else {
+              const modelId = String(shown.visionProviderModel ?? '')
+              control = h(
+                'select',
+                {
+                  style: S.input,
+                  value: modelList.some((m) => m.id === modelId) ? modelId : '',
+                  disabled: !snap.writable || busy || shown.visionMode !== 'fixed' || providerId === '',
+                  onChange: change(f.key),
+                },
+                [
+                  h('option', { key: '(none)', value: '' }, providerId === '' ? '（先选提供商）' : '（没选）'),
+                  ...modelList.map((m) =>
+                    h('option', { key: m.id, value: m.id }, `${m.name || m.id}${m.vision ? ' · 支持识图' : ''}`),
+                  ),
+                  ...(modelId !== '' && !modelList.some((m) => m.id === modelId)
+                    ? [h('option', { key: '__current', value: modelId }, `${modelId}（当前值，不在清单里）`)]
+                    : []),
+                ],
+              )
+            }
+            control = h(
+              'div',
+              null,
+              control,
+              shown.visionMode !== 'fixed'
+                ? h('div', { style: S.hint }, '「识图用哪个模型」选了「指定一个模型」才生效。')
+                : catalogNote
+                  ? h('div', { style: S.hint }, catalogNote)
+                  : null,
+            )
+          }
+        } else if (f.kind === 'preset') {
+          const presets = catalog?.presets ?? []
+          const cur = String(value ?? '')
+          control = h(
+            'select',
+            {
+              style: S.input,
+              value: presets.some((p) => p.id === cur) ? cur : '',
+              disabled: !snap.writable || busy,
+              onChange: change(f.key),
+            },
+            [
+              h('option', { key: '(none)', value: '' }, '（不挂载预设）'),
+              ...presets.map((p) => h('option', { key: p.id, value: p.id }, p.name || p.id)),
+              ...(cur !== '' && !presets.some((p) => p.id === cur)
+                ? [h('option', { key: '__current', value: cur }, `${cur}（当前值，不在清单里）`)]
+                : []),
+            ],
+          )
+        } else if (f.kind === 'model-chain') {
+          control = renderModelChain(f, Array.isArray(value) ? value : [])
+        } else if (f.kind === 'profiles') {
+          control = renderProfiles(f, Array.isArray(value) ? value : [])
         } else {
           control = h('input', {
             type: f.kind === 'number' ? 'number' : 'text',
@@ -1086,6 +1777,10 @@ window.__ModuleLoader__.load({
     const UPDATE_API = '/api/qq-bridge/update'
     /** 群白名单的群名和头像。只读；保存仍走设置接口。 */
     const GROUP_META_API = '/api/qq-bridge/groups'
+    /** 可选项清单：已配置的提供商 / 模型 / 人设预设。只读，用来做下拉。 */
+    const CATALOG_API = '/api/qq-bridge/catalog'
+    /** 已知的 QQ 目的地（群 / 私聊），给「单独设置」那栏用。只读。 */
+    const PROFILES_API = '/api/qq-bridge/profiles'
     /** 稳定引用：useSyncExternalStore 的 getSnapshot 每次返回新对象会死循环。 */
     const LOADING_SNAPSHOT = { status: 'loading' }
     const UNAVAILABLE_SNAPSHOT = { status: 'unavailable' }

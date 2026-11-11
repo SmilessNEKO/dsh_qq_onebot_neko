@@ -7,7 +7,7 @@ import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import vm from 'node:vm'
-import { apply, buildUsagePrompt, extractQQReply, FACE_NAME_TO_ID, groupAvatarUrl, hasLegacySettings, inject as pluginInject, injectedMessageSource, inlineImageNotes, labelForSegment, mapOneBotMessage, mapOneBotNotice, normalizeDelivery, normalizeGroupId, normalizeMaxRecentTurns, normalizeReplyMode, normalizeSessionScope, NS, parseWhitelistCommand, PLUGIN_VERSION, resolveGroupMetas, textToOneBotSegments, truncateText } from './index.js'
+import { apply, buildUsagePrompt, extractQQReply, FACE_NAME_TO_ID, groupAvatarUrl, hasLegacySettings, inQuietHours, inject as pluginInject, injectedMessageSource, inlineImageNotes, labelForSegment, mapOneBotMessage, mapOneBotNotice, normalizeAutoStartDelayMs, normalizeDelivery, normalizeDestinationProfiles, normalizeGroupId, normalizeMaxRecentTurns, normalizeModelChain, normalizeReplyMode, normalizeSessionScope, normalizeVisionMode, NS, parseQuietHours, parseWhitelistCommand, PLUGIN_VERSION, resolveGroupMetas, splitModelRef, textToOneBotSegments, truncateText } from './index.js'
 import { hashOfBuffer, isCompleteMface, loadStickers, mfaceSendData, normalizeMface, saveStickers, shortHash, upsertSticker } from './stickers.js'
 
 // 状态文件必须每次从零开始：这个会话的 $env:TEMP 是固定的，
@@ -464,7 +464,7 @@ if (sim) {
 {
   check('无标记 → 一个字都不发', extractQQReply('这些技术说明不该进群') === '')
   check('单块 → 只取块内', extractQQReply('前言\n[QQ]在的 👻[/QQ]\n后记') === '在的 👻')
-  check('多块 → 按顺序拼接', extractQQReply('[QQ]第一句[/QQ]\n中间\n[QQ]第二句[/QQ]') === '第一句\n\n第二句')
+  check('多块 → 按顺序拼接', extractQQReply('[QQ]第一句[/QQ]\n中间\n[QQ]第二句[/QQ]') === '第一句\n第二句')
   check('空块 → 忽略', extractQQReply('[QQ]   [/QQ]') === '')
   check('大小写 / 跨行都认', extractQQReply('[qq]\n跨行内容\n[/QQ]') === '跨行内容')
   check('未闭合 → 不发', extractQQReply('[QQ]没有结尾') === '')
@@ -473,7 +473,7 @@ if (sim) {
   const prose = '要给 QQ 看的话放进 [QQ] 里。\n[QQ]你好[/QQ]\n后面是给自己看的技术细节'
   check('正文提及标记不会串味', extractQQReply(prose) === '你好', JSON.stringify(extractQQReply(prose)))
   const two = '技术说明一\n[QQ]第一句[/QQ]\n技术说明二\n[QQ]第二句[/QQ]\n尾注'
-  check('两块各自独立抽取', extractQQReply(two) === '第一句\n\n第二句', JSON.stringify(extractQQReply(two)))
+  check('两块各自独立抽取', extractQQReply(two) === '第一句\n第二句', JSON.stringify(extractQQReply(two)))
   const inline = '前置文字 [QQ]行内的块[/QQ] 后置文字'
   check('行内的块不再被当作块（宁可漏发也不串味）', extractQQReply(inline) === '', JSON.stringify(extractQQReply(inline)))
   // issue #1：模型先写回答、再调工具，随后又把同一句重写一遍。
@@ -490,11 +490,11 @@ if (sim) {
   )
   check(
     '去重按 trim 后比较，不误伤不同的块',
-    extractQQReply('[QQ]第一句[/QQ]\n[QQ]  第一句  [/QQ]\n[QQ]第二句[/QQ]') === '第一句\n\n第二句',
+    extractQQReply('[QQ]第一句[/QQ]\n[QQ]  第一句  [/QQ]\n[QQ]第二句[/QQ]') === '第一句\n第二句',
   )
   check(
     '非相邻的重复保持原样（可能是刻意复述）',
-    extractQQReply('[QQ]收到[/QQ]\n[QQ]好的[/QQ]\n[QQ]收到[/QQ]') === '收到\n\n好的\n\n收到',
+    extractQQReply('[QQ]收到[/QQ]\n[QQ]好的[/QQ]\n[QQ]收到[/QQ]') === '收到\n好的\n收到',
   )
 }
 
@@ -1361,7 +1361,9 @@ function sawSentText(s) {
   check('注册了 settings 命名空间 qq-bridge', registeredSettings.length === 1 && reg?.ns === 'qq-bridge', String(reg?.ns))
   const dict = reg?.schema?.dict ?? {}
   const keys = Object.keys(dict)
-  check('settings 键数量符合预期（28）', keys.length === 28, `实际 ${keys.length}`)
+  // 用下限而不是写死 ===：新增设置键是家常便饭，写死精确数字每加一个键就要改测试。
+  // 真要防的是「有人把整块配置删了」，51 是这一版的功能底数（v0.2.14 加了自动启动 NapCat 两项）。
+  check('settings 键数量不少于 51（新增功能没被整块删掉）', keys.length >= 51, `实际 ${keys.length}`)
   let settingDefaults = null
   try {
     settingDefaults = reg.schema({})
@@ -1369,6 +1371,8 @@ function sawSentText(s) {
     settingDefaults = null
   }
   check('启动时检查一次默认关', settingDefaults?.checkUpdateOnStart === false, JSON.stringify(settingDefaults?.checkUpdateOnStart))
+  check('自动启动 NapCat 默认关', settingDefaults?.autoStartNapcat === false, JSON.stringify(settingDefaults?.autoStartNapcat))
+  check('自动启动 NapCat 延迟默认 20 秒', settingDefaults?.autoStartNapcatDelayMs === 20000, JSON.stringify(settingDefaults?.autoStartNapcatDelayMs))
   check(
     '主人 QQ 默认空，说明写明留空则不能用',
     Array.isArray(settingDefaults?.ownerWhitelist) &&
@@ -1379,8 +1383,17 @@ function sawSentText(s) {
   )
   const missing = keys.filter((k) => String(dict[k]?.meta?.description ?? '').trim() === '')
   check('每个 settings 键都有说明（设置界面里能看懂）', missing.length === 0, missing.join(', '))
-  // readSettings() 会读到的键必须都在 Schema 里，否则用户在界面上改不到它
-  const want = ['targetSessionId', 'nicknames', 'wakeProbability', 'whitelist', 'groupWhitelist', 'ownerWhitelist', 'replyMode', 'visionModel']
+  // readSettings() 会读到的键必须都在 Schema 里，否则用户在界面上改不到它。
+  // 把这一版四项新功能的键都列进来，防止哪天重构漏掉一整个功能块。
+  const want = [
+    'targetSessionId', 'nicknames', 'wakeProbability', 'whitelist', 'groupWhitelist', 'ownerWhitelist', 'replyMode',
+    'visionMode', 'visionProvider', 'visionProviderModel', 'visionModel',
+    'modelChain', 'modelChainFailures',
+    'newSessionDir', 'newSessionModel', 'newSessionPreset',
+    'replyGapMinMs', 'replyGapMaxMs', 'burstWaitMs', 'listenIdleMs',
+    'destinationProfiles', 'alwaysWakePrivate',
+    'autoStartNapcat', 'autoStartNapcatDelayMs',
+  ]
   const absent = want.filter((k) => !keys.includes(k))
   check('关键键都在 Schema 里（界面上改得到）', absent.length === 0, absent.join(', '))
 }
@@ -1763,7 +1776,10 @@ function sawSentText(s) {
       )
       const cardKeys = (mod.__test?.fields ?? []).map((x) => x.key)
       const schemaKeys = Object.keys(registeredSettings[0]?.schema?.dict ?? {})
-      const notOnCard = schemaKeys.filter((k) => !cardKeys.includes(k))
+      // 这四个是旧配置兼容键：留在 Schema 里只为能读到、能撤销覆盖，卡片上**刻意**不给输入框
+      // （识图已改成下拉选，体积分档早已不生效）。除此之外每个键都必须在卡片上改得到。
+      const legacyNoCard = ['visionModel', 'imageDescribeSafeBytes', 'imageDescribeMaxBytes', 'imageWakeTotalBytes']
+      const notOnCard = schemaKeys.filter((k) => !cardKeys.includes(k) && !legacyNoCard.includes(k))
       const ownerField = (mod.__test?.fields ?? []).find((x) => x.key === 'ownerWhitelist')
       check(
         '主人 QQ：白话名称，并写明留空不会生效',
@@ -1947,7 +1963,7 @@ function sawSentText(s) {
 
 // 入站：商城表情字段要跟图片槽一起留下。NapCat 常把 mface 收成带 emoji_* 的 image 段。
 {
-  const inbound = mapOneBotMessage(
+  const inbound = await mapOneBotMessage(
     {
       message_type: 'group',
       group_id: 2001,
@@ -1983,7 +1999,7 @@ function sawSentText(s) {
     JSON.stringify(inbound.images[0]),
   )
   check('入站普通图片即使有 summary 也不算商城表情', inbound.images[1]?.mface === undefined, JSON.stringify(inbound.images[1]))
-  const bare = mapOneBotMessage(
+  const bare = await mapOneBotMessage(
     {
       message_type: 'private',
       user_id: 1001,
@@ -1996,7 +2012,7 @@ function sawSentText(s) {
     bare.images.length === 0 && bare.text === '[表情包:[动画表情]]',
     JSON.stringify(bare),
   )
-  const withUrl = mapOneBotMessage(
+  const withUrl = await mapOneBotMessage(
     {
       message_type: 'private',
       user_id: 1001,
@@ -2014,7 +2030,7 @@ function sawSentText(s) {
     withUrl.text === '[图片]' && withUrl.images[0]?.mface?.emoji_id === 'e2' && withUrl.images[0]?.mface?.emoji_package_id === 7,
     JSON.stringify(withUrl),
   )
-  const cq = mapOneBotMessage(
+  const cq = await mapOneBotMessage(
     {
       message_type: 'private',
       user_id: 1001,
@@ -6099,6 +6115,135 @@ function sawSentText(s) {
     }
     globalThis.WebSocket = savedWebSocket
     rmSync(dir, { recursive: true, force: true })
+  }
+}
+
+// ── 本版四项新功能的纯函数（离线、不依赖假 ctx）─────────────────────────────
+// 用 Date(y,m,d,h,min) 构造「本机墙上时间」，避开时区换算：用户填的就是墙上时间。
+{
+  // 休眠时段解析：半角、全角、中文连接词都认；起止相同 / 空 / 垃圾都不休眠
+  check('休眠时段：半角 23:00-08:00 解析成分钟', JSON.stringify(parseQuietHours('23:00-08:00')) === JSON.stringify({ start: 1380, end: 480 }), JSON.stringify(parseQuietHours('23:00-08:00')))
+  check('休眠时段：全角冒号 + ～ 也认', JSON.stringify(parseQuietHours('23：00～08：00')) === JSON.stringify({ start: 1380, end: 480 }), JSON.stringify(parseQuietHours('23：00～08：00')))
+  check('休眠时段：中文「到」也认', JSON.stringify(parseQuietHours('9:00到18:00')) === JSON.stringify({ start: 540, end: 1080 }), JSON.stringify(parseQuietHours('9:00到18:00')))
+  check('休眠时段：起止相同不休眠', parseQuietHours('09:00-09:00') === null)
+  check('休眠时段：空 / 垃圾不休眠', parseQuietHours('') === null && parseQuietHours('随便写写') === null && parseQuietHours('99:99-88:88') === null)
+  check('跨零点休眠：23:30 在 23:00-08:00 内', inQuietHours('23:00-08:00', new Date(2026, 0, 1, 23, 30)) === true)
+  check('跨零点休眠：凌晨 3 点也在内', inQuietHours('23:00-08:00', new Date(2026, 0, 1, 3, 0)) === true)
+  check('跨零点休眠：中午 12 点不在内', inQuietHours('23:00-08:00', new Date(2026, 0, 1, 12, 0)) === false)
+  check('不跨零点休眠：12 点在 09:00-18:00 内', inQuietHours('09:00-18:00', new Date(2026, 0, 1, 12, 0)) === true)
+  check('不跨零点休眠：20 点不在内', inQuietHours('09:00-18:00', new Date(2026, 0, 1, 20, 0)) === false)
+  check('休眠时段写错就当不休眠（宁可多回话）', inQuietHours('乱写', new Date(2026, 0, 1, 23, 30)) === false)
+
+  // 模型优先级链：只留 provider/model，去重，最多 8 条
+  const chain = normalizeModelChain(['a/x', 'b/y', 'a/x', '没有斜杠', '', 'c/z'])
+  check('模型链：去掉重复和非法项，保序', JSON.stringify(chain) === JSON.stringify(['a/x', 'b/y', 'c/z']), JSON.stringify(chain))
+  const chainFromString = normalizeModelChain('a/x, b/y\nc/z')
+  check('模型链：逗号 / 换行分隔的字符串也认', JSON.stringify(chainFromString) === JSON.stringify(['a/x', 'b/y', 'c/z']), JSON.stringify(chainFromString))
+  const longChain = normalizeModelChain(Array.from({ length: 12 }, (_, i) => `p/m${i}`))
+  check('模型链：最多 8 条', longChain.length === 8, String(longChain.length))
+  check('模型链：非数组非字符串给空', JSON.stringify(normalizeModelChain(null)) === '[]' && JSON.stringify(normalizeModelChain(42)) === '[]')
+  check('拆 provider/model', JSON.stringify(splitModelRef('deepseek-official/deepseek-v4-flash')) === JSON.stringify({ provider: 'deepseek-official', model: 'deepseek-v4-flash' }))
+  check('拆不出 provider/model 返回 null', splitModelRef('noslash') === null && splitModelRef('/m') === null && splitModelRef('p/') === null && splitModelRef('') === null)
+
+  // 识图来源三态
+  check('识图来源：三态归一化', normalizeVisionMode('auto') === 'auto' && normalizeVisionMode('session') === 'session' && normalizeVisionMode('fixed') === 'fixed')
+  check('识图来源：垃圾 / 空回落到 auto', normalizeVisionMode('garbage') === 'auto' && normalizeVisionMode(undefined) === 'auto' && normalizeVisionMode(null) === 'auto')
+
+  // 目的地个性化档案：合法 target、后者覆盖、数值夹取、非法行丢弃
+  const profiles = normalizeDestinationProfiles([
+    { target: 'group:12345678', label: '测试群', quietHours: '23:00-08:00', alwaysReply: false, burstWaitMs: 5000, idlePauseMs: 120000 },
+    { target: 'private:100000001', label: '主人', quietHours: '', alwaysReply: true, burstWaitMs: 3000 },
+    { target: 'group:12345678', label: '后来改的', quietHours: '00:00-06:00', alwaysReply: true },
+    { target: '不合法', label: '丢掉' },
+    { target: 'private:999', burstWaitMs: -5, idlePauseMs: 5 },
+  ])
+  check('档案：非法 target 整行丢弃，只留 3 条', profiles.length === 3, JSON.stringify(profiles.map((p) => p.target)))
+  check('档案：同 target 后者覆盖前者', profiles[0].label === '后来改的' && profiles[0].quietHours === '00:00-06:00' && profiles[0].alwaysReply === true, JSON.stringify(profiles[0]))
+  check('档案：alwaysReply 严格 === true', profiles[1].alwaysReply === true, JSON.stringify(profiles[1]))
+  check('档案：burstWaitMs 负数夹到 0，idlePauseMs 过小夹到下限 10000', profiles[2].burstWaitMs === 0 && profiles[2].idlePauseMs === 10000, JSON.stringify(profiles[2]))
+  check('档案：quietHours 写错保留原文（用户能看见自己填错）', profiles[0].quietHours === '00:00-06:00')
+  check('档案：非数组给空', JSON.stringify(normalizeDestinationProfiles('nope')) === '[]' && JSON.stringify(normalizeDestinationProfiles(undefined)) === '[]')
+}
+
+// ── 0.2.14：DSH 启动后延迟自动拉起 NapCat（源码级 + 纯函数 + 离线真跑 apply）────
+{
+  const indexSrc = readFileSync(new URL('./index.js', import.meta.url), 'utf8')
+  const blockStart = indexSrc.indexOf('// ── DSH 启动后延迟自动拉起 NapCat')
+  const blockEnd = indexSrc.indexOf('logger.info(`ready', blockStart)
+  const block = indexSrc.slice(blockStart, blockEnd)
+  check(
+    '自动启动块：只调 napcatLaunch，绝不下载 / 安装 / 写配置',
+    blockStart > 0 && blockEnd > blockStart && block.includes('napcatLaunch()') &&
+      !block.includes('napcatDownload(') && !block.includes('napcatConfigure(') && !block.includes('applyPluginUpdate('),
+    block.slice(0, 120),
+  )
+  check(
+    '自动启动块：到点重读开关、判已在运行、失败只记日志、timer unref',
+    block.includes('s.autoStartNapcat !== true') && block.includes('napcatRunning().running') &&
+      block.includes("action: 'failed'") && block.includes('unref'),
+  )
+  check('自动启动块：卸载清理里有 clearTimeout(autoStartTimer)', indexSrc.includes('clearTimeout(autoStartTimer)'))
+
+  // 延迟归一化纯函数
+  check('自动启动延迟：空 / 非法值回落 20000', normalizeAutoStartDelayMs(undefined) === 20000 && normalizeAutoStartDelayMs(null) === 20000 && normalizeAutoStartDelayMs('') === 20000 && normalizeAutoStartDelayMs('abc') === 20000)
+  check('自动启动延迟：0 合法（起来就立刻尝试）', normalizeAutoStartDelayMs(0) === 0 && normalizeAutoStartDelayMs('0') === 0)
+  check('自动启动延迟：夹到 0–600000', normalizeAutoStartDelayMs(-1) === 0 && normalizeAutoStartDelayMs(99999999) === 600000)
+  check('自动启动延迟：小数取整、数字串', normalizeAutoStartDelayMs(1500.9) === 1500 && normalizeAutoStartDelayMs('3500') === 3500)
+
+  // 离线真跑 apply：假 subprocess 记录 spawn，临时目录里造一个官方 launcher 脚本。
+  async function runAutoStart({ enabled, delayMs, installed, closeDuringWait, disposeNow }) {
+    const dir = mkdtempSync(join(tmpdir(), 'qq-bridge-autostart-'))
+    if (installed) writeFileSync(join(dir, 'launcher-win10.bat'), '@echo off\r\n')
+    const spawnCalls = []
+    const warnCalls = []
+    const live = { onebotUrl: '', napcatInstallDir: dir, autoStartNapcat: enabled, autoStartNapcatDelayMs: delayMs }
+    const disposers = []
+    const fakeSubprocess = {
+      spawn: (o) => {
+        spawnCalls.push(o)
+        // done 永不 settle：napcatProc 不会在测试中途被清掉，也没有挂着不放的事件循环句柄。
+        return { done: new Promise(() => {}), terminate() {}, waitForExit: async () => {} }
+      },
+    }
+    const local = {
+      logger: { info() {}, warn: (m) => warnCalls.push(String(m)) },
+      settings: { register: () => ({}), get: () => ({ ...live }) },
+      agents: ctx.agents,
+      tools: { register: () => {} },
+      on: () => () => {},
+      effect: (factory) => { const d = factory(); if (typeof d === 'function') disposers.push(d); return () => {} },
+      get: (name) => (name === 'subprocess' ? fakeSubprocess : ctx.get(name)),
+      webServer: { register: () => () => {} },
+    }
+    local.inject = (_deps, cb) => cb(local)
+    apply(local, { ...config, statePath: join(dir, 'state.json'), onebotUrl: '' })
+    if (closeDuringWait) live.autoStartNapcat = false
+    if (disposeNow) for (const d of disposers) { try { d() } catch {} }
+    await new Promise((r) => setTimeout(r, delayMs + 60))
+    rmSync(dir, { recursive: true, force: true })
+    return { spawnCalls, warnCalls }
+  }
+
+  {
+    const r = await runAutoStart({ enabled: true, delayMs: 0, installed: true })
+    check('自动启动：开关打开 + 已装 launcher → 真 spawn 一次', r.spawnCalls.length === 1, String(r.spawnCalls.length))
+    check('自动启动：spawn 走官方 launcher-bat', r.spawnCalls.length === 1 && /launcher-win10\.bat$/.test(String(r.spawnCalls[0].argv?.[2] ?? '')), r.spawnCalls.length ? JSON.stringify(r.spawnCalls[0].argv) : 'no spawn')
+  }
+  {
+    const r = await runAutoStart({ enabled: false, delayMs: 0, installed: true })
+    check('自动启动：默认关不排程、不 spawn', r.spawnCalls.length === 0, String(r.spawnCalls.length))
+  }
+  {
+    const r = await runAutoStart({ enabled: true, delayMs: 25, installed: true, closeDuringWait: true })
+    check('自动启动：等待期间关开关 → 到点跳过、不 spawn', r.spawnCalls.length === 0, String(r.spawnCalls.length))
+  }
+  {
+    const r = await runAutoStart({ enabled: true, delayMs: 25, installed: true, disposeNow: true })
+    check('自动启动：卸载清掉 timer → 不 spawn', r.spawnCalls.length === 0, String(r.spawnCalls.length))
+  }
+  {
+    const r = await runAutoStart({ enabled: true, delayMs: 0, installed: false })
+    check('自动启动：没装 NapCat → 不 spawn、只记一条失败日志', r.spawnCalls.length === 0 && r.warnCalls.some((m) => m.includes('自动启动 NapCat 失败')), JSON.stringify(r.warnCalls).slice(0, 160))
   }
 }
 
