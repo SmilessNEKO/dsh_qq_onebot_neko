@@ -352,15 +352,16 @@ export function createOneBotTransport(options) {
    * 发一个 OneBot action 并等待 echo 回包。
    * 未连接时抛错——上层据此决定“出站丢弃”还是“排队”。
    */
-  function call(action, params = {}) {
+  /** timeoutMs 可覆盖单次调用的 echo 超时（引文 get_msg 用短超时，出站不传仍为 20s）。 */
+  function call(action, params = {}, timeoutMs = echoTimeoutMs) {
     if (!isOpen()) return Promise.reject(new Error('OneBot transport is not connected'))
     echoSeq += 1
     const echo = `qq-bridge-${echoSeq}`
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         pending.delete(echo)
-        reject(new Error(`OneBot action "${action}" timed out after ${echoTimeoutMs}ms`))
-      }, echoTimeoutMs)
+        reject(new Error(`OneBot action "${action}" timed out after ${timeoutMs}ms`))
+      }, timeoutMs)
       pending.set(echo, { resolve, reject, timer })
       try {
         socket.send(JSON.stringify({ action, params, echo }))
