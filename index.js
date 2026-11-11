@@ -3746,7 +3746,11 @@ export function apply(ctx, config) {
           } catch (e) {
             logger.warn(`sendToQQ failed: ${e?.message ?? e}`)
           }
-          if (i < blocks.length - 1) await new Promise((r) => setTimeout(r, 420))
+          if (i < blocks.length - 1) {
+            // 分条之间隔一会儿：太快会像机器人一口气刷屏（用户反馈 2026-11-11）。
+            // 1.2–2.8 秒随机，读起来像人一条一条敲出来的。
+            await new Promise((r) => setTimeout(r, 1200 + Math.floor(Math.random() * 1600)))
+          }
         }
       })()
     }

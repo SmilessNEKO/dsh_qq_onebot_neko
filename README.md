@@ -16,6 +16,7 @@ Cordis 插件 id 是 `qq-bridge`。npm 包名是 `@fengye_nobug/dsh-qq-bot`。�
 - 白名单留空时，任何群和私聊都不会叫醒。
 - 被 @、命中昵称、被戳一定叫醒。其余按 `wakeProbability`（默认 `0.05`）抽样，没抽中只记录。
 - 发回 QQ 的内容由 `replyMode` 决定。在 DSH 界面里聊同一个会话时，正文不会进群。
+- 一轮里写多个 `[QQ]` 块时分条发出，相邻两条之间隔 1.2–2.8 秒（随机），不会一口气刷屏。
 - 图片先落盘，叫醒时写成文字。表情包可以登记后再发。半角方括号里的 `[表情名]` 会变成 QQ 系统表情。
 - 图片先落盘，叫醒时一律交给识图模型读成一句话，不再按体积分档（`imageDescribeSafeBytes` / `imageDescribeMaxBytes` / `imageWakeTotalBytes` 三项从此不再生效，保留只为兼容旧配置）。一次唤醒最多识别 3 张，其余留 `[图片#短哈希]` 占位。识图被 token 上限截断会自动翻倍预算重试（最多三次），三次都不行就在正文写「描述失败」。`describeImages` 关掉则完全不识图、只留占位——适合会话模型自己能看图时省调用。
 - perGroup 下会话会自动轮换：聊到 `rotateMaxTurns`（默认 300 轮）或上下文占用达到 `rotatePressureRatio`（默认 `0.75`）时就新建一条会话接着聊，旧会话留在面板里可查、不会被删。`rotateEnabled` 置 false 可关掉。目的是不让长群聊撞上模型窗口上限后每轮都失败。
