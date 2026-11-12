@@ -1,5 +1,13 @@
 # 更新日志
 
+## 未发布
+
+- **可以发语音了**：新增 `voice.js`（纯函数 + edge-tts 子进程，零依赖）。正文里写 `[语音]要念的台词[/语音]`，`voiceEnabled` 打开时这句会合成为 mp3、以 OneBot `record` 段发出去；一个语音块 = 一条 QQ 消息，前后文字照旧分条发，引用只挂第一条。新增工具 `qq_bridge_neko_voice`（显式合成并发送一条语音，走与 `qq_bridge_neko_send` 相同的白名单与来源闸门）。
+  - 设置项：`voiceEnabled`（默认 `false`）、`ttsProvider`（默认 `edge`）、`ttsVoice`（默认 `zh-CN-XiaoyiNeural`）、`ttsRate`（默认 `-8%`）、`ttsPitch`（默认 `+12Hz`）、`ttsPythonPath`（空 = 用 PATH 里的 python）、`voiceMaxChars`（默认 `120`）、`voiceCacheDir`（空 = `$DSH_HOME/qq-bridge-neko-voice`）。
+  - 合成失败、超长、TTS 不可用时**降级发文字**，正文前加「（语音没合成出来）」，不会整条消失。同一句 + 同一组音色参数命中缓存，不再重复合成。
+  - 合成文本走环境变量传给 python（`DSH_TTS_TEXT` 等），避开 Windows 命令行编码问题；record 段用 `file:///` 本地路径而不是 base64（实测两者 NapCat 都吃，本地路径帧更小）。
+  - `test-voice.mjs` 覆盖切块、缓存名、record 段与合成失败路径；设 `DSH_TTS_TEST_PYTHON` 时真跑一次合成并验证缓存命中。
+
 ## v1.0.0 — 2026-11-12
 
 - **独立发行版**：把原 fork 从 `@fengye_nobug/dsh-qq-bot` / Cordis id `qq-bridge` 整体改成独立身份：npm 包名 `@fengye_nobug/dsh-qq-bridge-neko`、Cordis id 与 settings 命名空间 `qq-bridge-neko`、接口 `/api/qq-bridge-neko/...`、工具 `qq_bridge_neko_*`、状态文件 `qq-bridge-neko-*.json`，设置页显示名改为「QQ 桥接 Neko」。可与旧插件并存在同一 profile，宿主不再按 id 去重把新代码盖掉。
