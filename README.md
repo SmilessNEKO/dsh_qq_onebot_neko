@@ -41,7 +41,7 @@ Cordis 插件 id 是 `qq-bridge-neko`。npm 包名是 `@fengye_nobug/dsh-qq-brid
 
 发版走本地打包 + 上传到本仓库 GitHub Release，不通过上游 main、也不依赖 npm registry。装其中一种：
 
-本地打好的包（`npm pack` 产物，文件名形如 `fengye_nobug-dsh-qq-bridge-neko-1.0.0.tgz`）：
+本地打好的包（`npm pack` 产物，文件名形如 `fengye_nobug-dsh-qq-bridge-neko-1.1.0.tgz`）：
 
 ```sh
 dsh plugin --profile web add <本地 .tgz 的绝对路径>
@@ -50,7 +50,7 @@ dsh plugin --profile web add <本地 .tgz 的绝对路径>
 或从本仓库的 GitHub Release 装：
 
 ```sh
-dsh plugin --profile web add github:SmilessNEKO/dsh_qq_onebot_neko#v1.0.0
+dsh plugin --profile web add github:SmilessNEKO/dsh_qq_onebot_neko#v1.1.0
 ```
 
 装完重启 dsh-web 并刷新页面（新 bundle 才会加载，登录口令可能会变）。

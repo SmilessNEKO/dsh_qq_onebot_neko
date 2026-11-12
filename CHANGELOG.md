@@ -1,6 +1,6 @@
 # 更新日志
 
-## 未发布
+## v1.1.0 — 2026-11-12
 
 - **修好一类「设置写不进去 / 读不到」的漏键**：`BridgeSettings`（设置接口的白名单，`knownSettingKeys()` 只认它里面的键）此前没有 8 个语音键，`readSettings()` 也没有输出这些键 → 界面上填了 `voiceEnabled` 等值会被直接丢掉、`s.voiceEnabled` 恒为 `undefined`，语音分支永远不触发。现已在 `BridgeSettings` / `readSettings()` / `legacySettings` 的 base 里全部补齐。同一个洞还漏了 `alwaysWakePrivate`（Schema 里有、`readSettings()` 没输出，导致关掉也不生效），一并补上。
 - **可以发语音了**：新增 `voice.js`（纯函数 + edge-tts 子进程，零依赖）。正文里写 `[语音]要念的台词[/语音]`，`voiceEnabled` 打开时这句会合成为 mp3、以 OneBot `record` 段发出去；一个语音块 = 一条 QQ 消息，前后文字照旧分条发，引用只挂第一条。新增工具 `qq_bridge_neko_voice`（显式合成并发送一条语音，走与 `qq_bridge_neko_send` 相同的白名单与来源闸门）。
