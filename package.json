@@ -47,6 +47,7 @@
     "./client": "./client/client.js",
     "./onebot.js": "./onebot.js",
     "./napcat.js": "./napcat.js",
+    "./voice.js": "./voice.js",
     "./cordis.patch.yml": "./cordis.patch.yml",
     "./package.json": "./package.json"
   },
@@ -57,6 +58,7 @@
     "napcat.js",
     "stickers.js",
     "faces.js",
+    "voice.js",
     "reply-style.js",
     "agent-presets",
     "client",

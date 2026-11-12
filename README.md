@@ -29,6 +29,7 @@ Cordis 插件 id 是 `qq-bridge-neko`。npm 包名是 `@fengye_nobug/dsh-qq-brid
 - **识图改成下拉选择，不用手写模型名**：`visionMode` 三选一 —— `auto` 自动找一个支持图片输入的模型、`session` 用会话当前模型、`fixed` 从 DSH 已配置的提供商里选一个、再选它下面的模型（两段联动下拉，模型清单带「支持识图」标记）。旧的 `visionModel`（`provider/model`）只是没配新选项时的兜底，卡片上不再给输入框。
 - **每个群 / 私聊可以单独个性化**（`destinationProfiles`，按 `group:<群号>` / `private:<QQ号>`）：休眠时段（如 `23:00-08:00`，期间只记账不回复）、`alwaysReply`（给主人的私聊打开 = 24 小时实时回复，不受休眠约束）、连发等待 `burstWaitMs` 与停听 `idlePauseMs`。这几项只对该目的地生效，覆盖全局同名设置；卡片里可从已接入的目的地直接挑，不用背群号。
 - **连发会等停手再回**：对方连着发消息时先攒着，`burstWaitMs`（默认 `0` = 立刻回，可调，例如 5 秒）内没人接着说才回复；会话跟随窗口空闲 `listenIdleMs`（默认 `120000` = 2 分钟）没有新消息就自动停听，等下一条消息再续，不会一直挂着烧 token。
+- **可以发语音**：打开 `voiceEnabled`（默认关）后，正文里写 `[语音]要念的台词[/语音]`，这句话会被合成成语音发出去（一个语音块 = 一条 QQ 消息，文字块照旧分条），语音前后的文字还是正常文字。合成走本机的 `edge-tts`（`ttsPythonPath` 指向装了它的解释器），音色 / 语速 / 音高是 `ttsVoice`（默认 `zh-CN-XiaoyiNeural`）/ `ttsRate`（默认 `-8%`）/ `ttsPitch`（默认 `+12Hz`）。单条语音上限 `voiceMaxChars`（默认 120 字）。合成失败或超长时**降级发文字**（正文前加「（语音没合成出来）」），不会整条消失。同一句话 + 同一组音色参数只合成一次，缓存在 `voiceCacheDir`（默认 `$DSH_HOME/qq-bridge-neko-voice`）。关着开关时标记原样当文字发，不静默吞字。
 - **模型优先级链**：`modelChain` 从 DSH 已配置提供商 / 模型里排出一串顺序，当前模型连续报错 `modelChainFailures`（默认 `5`）次后自动切到下一个，循环回绕；切换走宿主 `agent.model.select`，不用重建会话。新建会话默认模型（`newSessionModel` 留空时）也跟着链首走。
 - **新建 QQ 会话可指定落点**：`newSessionDir`（文件夹，空 = 「QQ 桥接」工作区）、`newSessionModel`（默认模型）、`newSessionPreset`（默认预设模式）都能在卡片里选，不填就沿用宿主默认。
 
@@ -97,6 +98,14 @@ DSH 0.2 的卡片把值写进 `$DSH_HOME/qq-bridge-neko-settings.json`。这份�
 | `replyGapMinMs` / `replyGapMaxMs` | `1200` / `2800` | 一轮里分条发出时，两条之间随机间隔的下限 / 上限（毫秒）；写反会自动换过来 |
 | `burstWaitMs` | `0` | 对方连着发消息时，先等这么多毫秒没人再说才回复；`0` = 立刻回。每个目的地可单独覆盖 |
 | `listenIdleMs` | `120000` | 会话跟随期间，这么久（毫秒）没有新消息就自动停听；默认 2 分钟 |
+| `voiceEnabled` | `false` | 要不要发语音。打开后 `[语音]…[/语音]`（以及 `qq_bridge_neko_voice` 工具）才会合成语音；关着时标记原样当文字发 |
+| `ttsProvider` | `edge` | 用哪个 TTS 合成。目前只认 `edge`（微软 edge-tts，本地跑、不用联网账号），填别的会合成失败并降级发文字 |
+| `ttsVoice` | `zh-CN-XiaoyiNeural` | 音色名（edge-tts 写法）。`zh-CN-YunxiNeural` 是男声 |
+| `ttsRate` | `-8%` | 语速，edge-tts 写法，`+10%` 更快、`-8%` 更慢 |
+| `ttsPitch` | `+12Hz` | 音高，edge-tts 写法 |
+| `ttsPythonPath` | 空 | 装了 `edge-tts` 的 python 解释器路径；留空 = 用 PATH 里的 python |
+| `voiceMaxChars` | `120` | 单条语音最多多少字，超了就降级发文字 |
+| `voiceCacheDir` | 空 | 合成好的 mp3 放哪；留空 = `$DSH_HOME/qq-bridge-neko-voice`。同一句同音色只合成一次 |
 | `autoStartNapcat` | `false` | DSH 启动后自动拉起**已装好**的 NapCat。默认关；只启动，绝不下载 / 安装 / 写配置 |
 | `autoStartNapcatDelayMs` | `20000` | 自动启动前的等待毫秒数（0–600000，默认 20 秒）；填 0 = 起来就立刻尝试。到点会重读开关、确认 NapCat 没在跑才启动，失败只记日志 |
 

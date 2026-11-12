@@ -45,6 +45,17 @@ import {
 import { FACE_NAME_TO_ID, textToOneBotSegments } from './faces.js'
 import { syncInstalledReplyStyle } from './reply-style.js'
 import { applyPluginUpdate, checkPluginUpdate } from './updates.js'
+import {
+  DEFAULT_TTS_PITCH,
+  DEFAULT_TTS_RATE,
+  DEFAULT_TTS_VOICE,
+  DEFAULT_VOICE_MAX_CHARS,
+  hasVoiceBlock,
+  recordSegment,
+  splitVoiceBlocks,
+  stripVoiceBlocks,
+  synthesize,
+} from './voice.js'
 
 const require = createRequire(import.meta.url)
 /** 当前安装的包版本。设置页和检查更新都读这一处，避免卡片里手写一份。 */
@@ -231,6 +242,15 @@ export const Config = Schema.object({
   replyGapMinMs: Schema.number().default(DEFAULT_REPLY_GAP_MIN_MS).description('一轮里分条发出时，两条之间最少隔多少毫秒。默认 1200。'),
   replyGapMaxMs: Schema.number().default(DEFAULT_REPLY_GAP_MAX_MS).description('一轮里分条发出时，两条之间最多隔多少毫秒。默认 2800。'),
   burstWaitMs: Schema.number().default(0).description('对方还在连着发消息时，先等这么多毫秒没人再说才回复。0 = 不等待。每个目的地可以在下面单独覆盖。'),
+  // ── 语音消息 ──────────────────────────────────────────────────────────────
+  voiceEnabled: Schema.boolean().default(false).description('要不要发语音。打开后正文里的 [语音]台词[/语音] 会合成为语音发出去；关着时标记原样当文字发。默认关。'),
+  ttsProvider: Schema.string().default('edge').description('用哪个 TTS 合成语音。目前只有 edge（微软 edge-tts，本地跑、免费、需要本机装了它）。'),
+  ttsVoice: Schema.string().default(DEFAULT_TTS_VOICE).description('音色名。edge-tts 的写法，例如 zh-CN-XiaoyiNeural（少女音）、zh-CN-YunxiNeural（男声）。'),
+  ttsRate: Schema.string().default(DEFAULT_TTS_RATE).description('语速。edge-tts 写法，例如 -8% 表示慢一点、+10% 表示快一点。'),
+  ttsPitch: Schema.string().default(DEFAULT_TTS_PITCH).description('音高。edge-tts 写法，例如 +12Hz 表示高一点、-5Hz 表示低一点。'),
+  ttsPythonPath: Schema.string().default('').description('装了 edge-tts 的 python 解释器路径。留空 = 用 PATH 里的 python。'),
+  voiceMaxChars: Schema.number().default(DEFAULT_VOICE_MAX_CHARS).description('单条语音最多多少字。超过就合成失败、降级发文字。默认 120。'),
+  voiceCacheDir: Schema.string().default('').description('合成好的 mp3 放哪。留空 = $DSH_HOME/qq-bridge-neko-voice。同一段话同音色只合成一次。'),
   listenIdleMs: Schema.number().default(DEFAULT_LISTEN_IDLE_MS).description('会话跟随期间，这么久没有新消息就自动停听。默认 120000（2 分钟）。'),
   // ── 每个 QQ 目的地的个性化 ────────────────────────────────────────────────
   destinationProfiles: Schema.array(DestinationProfile).default([]).description('按群 / 私聊分别设置休眠时段、24 小时实时回复、等待合并与停听时间。'),
@@ -3811,6 +3831,119 @@ export function apply(ctx, config) {
    * `options.quoteMessageId` 显式传入（含 null）时就用它，避免发的时候 `lastMessageId`
    * 已经被另一条消息改掉。省略则用这一轮钉住的消息 id，再没有用 `lastMessageId`。
    */
+  /**
+   * 语音片段逐条发（`[语音]…[/语音]` 的慢路径）。
+   *
+   * 一个片段 = 一条 QQ 消息：语音片段发 record 段，文字片段照旧拆表情发。
+   * 返回与 `sendToQQ` 同形状的结果，`sent` 是**真的发出去的条数**；
+   * 一段都没发出去才算 dropped（部分失败时 sent>0、dropped:false，并在 `failed` 里列出失败的段）。
+   *
+   * 合成失败**降级发文字**：用户宁可在群里看到一句字，也不想因为 TTS 抽风整条消失。
+   * 降级发出去的正文前会加一个「（语音没合成出来）」的说明，让人知道这不是我故意不打字。
+   */
+  async function sendVoicePieces(pieces, dest, { s, quoteId }) {
+    const cacheDir = resolveVoiceCacheDir(s)
+    let sent = 0
+    const failed = []
+
+    for (let i = 0; i < pieces.length; i++) {
+      const piece = pieces[i]
+      const isFirst = i === 0
+
+      if (piece.type === 'voice') {
+        const said = String(piece.text ?? '')
+        const chars = [...said].length
+        if (chars > s.voiceMaxChars) {
+          logger.warn(`语音片段太长（${chars} > ${s.voiceMaxChars}），降级发文字`)
+          failed.push({ index: i, reason: 'voice-too-long', limit: s.voiceMaxChars, length: chars })
+        } else {
+          const tts = await synthesizeWithSettings(said, s, cacheDir)
+          if (tts.ok) {
+            const segments = []
+            // 引用只挂在第一条上，和文字分条一致。
+            if (isFirst && s.replyWithQuote && quoteId) {
+              segments.push({ type: 'reply', data: { id: String(quoteId) } })
+            }
+            segments.push(recordSegment(tts.path))
+            const ok = await sendSegments(dest, segments)
+            if (ok) { sent++; continue }
+            failed.push({ index: i, reason: 'send-failed' })
+            continue
+          }
+          logger.warn(`语音合成失败：${tts.reason}`)
+          failed.push({ index: i, reason: tts.reason })
+        }
+        // 降级：把这段话当文字发。加一句说明，别让人以为语音是被吞了。
+        const fallback = `（语音没合成出来）${said}`
+        const ok = await sendTextPiece(fallback, dest, { s, quoteId: isFirst ? quoteId : null })
+        if (ok) sent++
+        continue
+      }
+
+      const ok = await sendTextPiece(piece.text, dest, { s, quoteId: isFirst ? quoteId : null })
+      if (ok) sent++
+    }
+
+    if (sent === 0) {
+      const reason = failed[0]?.reason ?? 'empty'
+      logger.warn(`语音出站：一段都没发出去（${reason}）`)
+      return { sent: 0, dropped: true, reason, voiceFailed: failed }
+    }
+    return { sent, dropped: false, destination: dest, ...(failed.length ? { failed } : {}) }
+  }
+
+  /** 发一段文字（超长则丢弃并回 too-long）。 */
+  async function sendTextPiece(text, dest, { s, quoteId }) {
+    const body = String(text ?? '').trim()
+    if (body === '') return false
+    const chars = [...body].length
+    if (chars > s.replyMaxChars) {
+      logger.warn(`出站丢弃：too-long（${chars} > ${s.replyMaxChars}）`)
+      return false
+    }
+    const segments = []
+    if (s.replyWithQuote && quoteId) segments.push({ type: 'reply', data: { id: String(quoteId) } })
+    segments.push(...textToOneBotSegments(body))
+    return await sendSegments(dest, segments)
+  }
+
+  /** 真正调 OneBot 发一次。成功 true，失败 false（只打日志，不抛）。 */
+  async function sendSegments(dest, segments) {
+    try {
+      if (dest.kind === 'group') {
+        await transport.call('send_group_msg', { group_id: dest.groupId, message: segments })
+      } else {
+        await transport.call('send_private_msg', { user_id: dest.userId, message: segments })
+      }
+      return true
+    } catch (error) {
+      logger.warn(`outbound dropped: send-failed (${error?.message ?? error})`)
+      return false
+    }
+  }
+
+  /** 语音缓存目录：设置优先，留空用 $DSH_HOME/qq-bridge-neko-voice。 */
+  function resolveVoiceCacheDir(s) {
+    const configured = String(s?.voiceCacheDir ?? '').trim()
+    return configured !== '' ? configured : join(home, 'qq-bridge-neko-voice')
+  }
+
+  /**
+   * 按设置合成语音。`ttsProvider` 目前只认 edge —— 别偷偷换实现，
+   * 认不出的值直接失败，让调用方降级，而不是无声地用别的东西顶着。
+   */
+  async function synthesizeWithSettings(text, s, cacheDir) {
+    const provider = String(s?.ttsProvider ?? 'edge').trim().toLowerCase() || 'edge'
+    if (provider !== 'edge') return { ok: false, reason: `unsupported-tts-provider: ${provider}` }
+    return await synthesize(text, {
+      pythonPath: String(s?.ttsPythonPath ?? '').trim(),
+      voice: String(s?.ttsVoice ?? '').trim() || DEFAULT_TTS_VOICE,
+      rate: String(s?.ttsRate ?? '').trim() || DEFAULT_TTS_RATE,
+      pitch: String(s?.ttsPitch ?? '').trim() || DEFAULT_TTS_PITCH,
+      cacheDir,
+    })
+  }
+
   async function sendToQQ(text, destination, options) {
     const s = readSettings()
     const fallbackGate = gateOf(null)
@@ -3827,6 +3960,16 @@ export function apply(ctx, config) {
     const body = s.stripMarkdown ? stripMarkdown(text) : String(text)
     if (body === '') return { sent: 0, dropped: true, reason: 'empty' }
 
+    const quoteId = options && Object.prototype.hasOwnProperty.call(options, 'quoteMessageId')
+      ? options.quoteMessageId
+      : (fallbackGate.currentTurnMessageId || state.lastMessageId)
+
+    // ── 语音：正文里出现 [语音]…[/语音] 且开关打开时，切成 text / voice 片段逐条发 ──
+    // 开关关着时标记原样当文字（不静默吞字）；打开时按片段的**文字长度**分别判上限：
+    // 文字片段用 replyMaxChars，语音片段用 voiceMaxChars（太长合成慢、听着也累）。
+    const voicePieces = s.voiceEnabled === true && hasVoiceBlock(body) ? splitVoiceBlocks(body) : null
+    if (voicePieces) return await sendVoicePieces(voicePieces, dest, { s, quoteId })
+
     // 判据用**去完 Markdown 之后**的字数（按码点算，emoji 计 1 个字），
     // 跟真正会出现在群里的字一致。
     const length = [...body].length
@@ -3835,9 +3978,6 @@ export function apply(ctx, config) {
       return { sent: 0, dropped: true, reason: 'too-long', limit: s.replyMaxChars, length }
     }
 
-    const quoteId = options && Object.prototype.hasOwnProperty.call(options, 'quoteMessageId')
-      ? options.quoteMessageId
-      : (fallbackGate.currentTurnMessageId || state.lastMessageId)
     const segments = []
     if (s.replyWithQuote && quoteId) {
       segments.push({ type: 'reply', data: { id: String(quoteId) } })
