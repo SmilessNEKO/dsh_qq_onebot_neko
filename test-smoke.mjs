@@ -5010,6 +5010,175 @@ function sawSentText(s) {
   rmSync(dir, { recursive: true, force: true })
 }
 
+// 归档即换会话 + 挂工作区（用户报的 bug：在面板里归档当前 QQ 会话后，
+// 下一条消息还投给那条已归档的会话 —— 宿主对它 agent/pre-step 直接 reject，
+// 那一轮静默消失，连 wake-failed 都不记；会话也永远挂不进工作区，
+// 因为服务名被写成了宿主根本没有的 'workspace'）。
+{
+  const dir = mkdtempSync(join(tmpdir(), 'qq-bridge-neko-archived-'))
+  const stateFile = join(dir, 'state.json')
+  const novelDir = join(dir, 'novel-workspace') // 故意不预先创建：要验证会自动 mkdir
+  const createdOpts = []
+  const createdIds = []
+  const workspaceCalls = []
+  const attached = []
+  const warns = []
+  const agents = new Map()
+  let archived = []
+  let registryMode = 'ok'
+  const scopeSettings = {
+    targetSessionId: '',
+    sessionScope: 'perGroup',
+    maxRecentTurns: 0,
+    nicknames: ['小助手'],
+    wakeProbability: 0,
+    whitelist: ['10000002'],
+    groupWhitelist: ['12345678', '87654321'],
+    replyMode: 'marker',
+    delivery: 'followup',
+    newSessionDir: novelDir,
+  }
+  const iso = {
+    logger: {
+      info() {},
+      warn: (message) => warns.push(String(message)),
+    },
+    settings: { register: () => {}, get: () => scopeSettings },
+    agents: {
+      get: (id) => agents.get(id),
+      resume: async () => {
+        throw new Error('should create')
+      },
+      create: async (opts) => {
+        createdOpts.push(opts)
+        createdIds.push(opts.sessionId)
+        const agent = {
+          id: opts.sessionId,
+          session: { id: opts.sessionId, events: () => [], append() {} },
+          status: 'idle',
+          followup() {},
+          ctx: { get: () => undefined, effect: () => () => {} },
+        }
+        agents.set(opts.sessionId, agent)
+        return { agent, dispose: async () => {} }
+      },
+      withInitiator: (_agent, fn) => fn(),
+    },
+    tools: { register: (def) => tools.push(def) },
+    on: () => () => {},
+    effect: () => {},
+    get(name) {
+      if (name === 'workspaceRegistry') {
+        if (registryMode === 'throw') throw new Error('workspaceRegistry get failed')
+        if (registryMode === 'missing') return undefined
+        return {
+          get archivedSessionIds() {
+            if (registryMode === 'garbage') return undefined
+            return archived
+          },
+          async create(path, title) {
+            if (registryMode === 'no-create') return {}
+            workspaceCalls.push({ path, title })
+            return {
+              title,
+              async attachSession(sessionId) {
+                if (registryMode === 'attach-throw') throw new Error('cwd mismatch')
+                attached.push({ path, sessionId })
+              },
+            }
+          },
+        }
+      }
+      return undefined
+    },
+    inject: () => {},
+  }
+  const tools = []
+  apply(iso, {
+    statePath: stateFile,
+    debugTools: true,
+    onebotUrl: '',
+    targetSessionId: '',
+    sessionScope: 'perGroup',
+    maxRecentTurns: 0,
+    nicknames: ['小助手'],
+    whitelist: [],
+    groupWhitelist: [],
+    napcatInstallDir: join(dir, 'no-napcat'),
+  })
+  const sim = tools.find((t) => t.name === 'qq_bridge_neko_simulate')
+  const wake = (extra) => sim.execute({ text: '小助手在吗', userId: '10000002', nickname: '甲', ...extra })
+  const firstWake = JSON.parse(await wake({ groupId: '12345678' }))
+  const firstId = firstWake?.decision?.sessionId
+
+  check('归档：新建会话目录不存在时会自动创建', existsSync(novelDir), novelDir)
+  check(
+    '归档：newSessionDir 被用作 cwd',
+    createdOpts.at(-1)?.meta?.cwd === novelDir,
+    JSON.stringify(createdOpts.at(-1)?.meta),
+  )
+  check(
+    '归档：挂工作区走 workspaceRegistry，标题取目录名',
+    workspaceCalls.at(-1)?.path === novelDir && workspaceCalls.at(-1)?.title === 'novel-workspace',
+    JSON.stringify(workspaceCalls.at(-1)),
+  )
+  check(
+    '归档：会话被 attachSession 挂进该工作区',
+    attached.at(-1)?.sessionId === firstId && attached.at(-1)?.path === novelDir,
+    JSON.stringify(attached.at(-1)),
+  )
+
+  // 主人手动归档了这一条 —— 下一条消息必须换一条新会话，而不是继续投给旧的。
+  archived = [firstId]
+  const secondWake = JSON.parse(await wake({ groupId: '12345678' }))
+  const secondId = secondWake?.decision?.sessionId
+  check('归档后：不要再投给已归档的会话', secondId !== firstId, JSON.stringify({ firstId, secondId }))
+  check('归档后：真的新建了一条会话', createdIds.length === 2 && createdIds.at(-1) === secondId, JSON.stringify(createdIds))
+  const saved = JSON.parse(readFileSync(stateFile, 'utf8'))
+  check(
+    '归档后：sessionByDest 改指新会话',
+    saved.sessionByDest?.['group:12345678'] === secondId,
+    JSON.stringify(saved.sessionByDest),
+  )
+  const again = JSON.parse(await wake({ groupId: '12345678' }))
+  check('归档后：新会话会被复用，不每轮新建', again?.decision?.sessionId === secondId && createdIds.length === 2, JSON.stringify(createdIds))
+
+  // 读不到归档清单时必须 fail-open：既不能因此把会话换掉，也不能挡住新建。
+  // 每种坏法用一个独立的目的地，免得复用上一步已经建好的会话导致计数看不出新建。
+  const failOpenGroups = { throw: '87654321', missing: '13572468', garbage: '24681357' }
+  scopeSettings.groupWhitelist = [...scopeSettings.groupWhitelist, ...Object.values(failOpenGroups)]
+  for (const [mode, groupId] of Object.entries(failOpenGroups)) {
+    registryMode = mode
+    archived = [firstId] // 清单坏掉时连真实归档内容都读不到，仍不能乱换
+    const before = createdIds.length
+    const r = JSON.parse(await wake({ groupId }))
+    registryMode = 'ok'
+    archived = []
+    check(
+      `归档清单读不到（${mode}）不挡新建，也不误判`,
+      r?.decision?.delivered === true &&
+        createdIds.length === before + 1 &&
+        r?.decision?.sessionId === createdIds.at(-1),
+      JSON.stringify({ decision: r?.decision, before, after: createdIds.length }),
+    )
+  }
+
+  // attach 失败只记账，不影响投递。
+  registryMode = 'attach-throw'
+  scopeSettings.groupWhitelist = [...scopeSettings.groupWhitelist, '11112222']
+  const beforeWarn = warns.length
+  const attachFailed = JSON.parse(await wake({ groupId: '11112222' }))
+  registryMode = 'ok'
+  check(
+    '挂工作区失败仍投递成功，只记一条 warn',
+    attachFailed?.decision?.delivered === true &&
+      warns.slice(beforeWarn).some((line) => line.includes('挂到 QQ 工作区失败')),
+    JSON.stringify(warns.slice(beforeWarn)),
+  )
+
+  rmSync(dir, { recursive: true, force: true })
+}
+
 // 会话句柄：死的丢掉；同时握着超过 48 个时放开最久没用的，映射还在，下次再恢复。
 {
   const dir = mkdtempSync(join(tmpdir(), 'qq-bridge-neko-handles-'))

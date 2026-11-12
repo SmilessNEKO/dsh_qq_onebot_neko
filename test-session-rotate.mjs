@@ -22,7 +22,7 @@ registerHooks({
   },
 })
 
-const { rotateSessionVerdict } = await import(
+const { rotateSessionVerdict, sessionReplacedVerdict } = await import(
   new URL('./index.js', import.meta.url).href
 )
 
@@ -83,6 +83,30 @@ check(
   check('压力触发时带原因', typeof r.reason === 'string' && r.reason.includes('%'), r.reason)
 }
 
+// ── 归档即换会话（sessionReplacedVerdict）───────────────────
+// 归档后 id 一直留在 archivedSessionIds 里（归档不删会话文件），
+// 宿主对它的每一步 agent/pre-step 直接 reject ⇒ 必须换。
+
+check('未归档不换会话', sessionReplacedVerdict({ sessionId: 'qq-a', archivedSessionIds: [] }).replace === false)
+check(
+  '已归档就换会话',
+  sessionReplacedVerdict({ sessionId: 'qq-a', archivedSessionIds: ['qq-b', 'qq-a'] }).replace === true,
+)
+{
+  const r = sessionReplacedVerdict({ sessionId: 'qq-a', archivedSessionIds: ['qq-a'] })
+  check('归档触发时带原因', typeof r.reason === 'string' && r.reason.length > 0, r.reason)
+}
+check('归档清单里没有这个 id 不换', sessionReplacedVerdict({ sessionId: 'qq-z', archivedSessionIds: ['qq-a'] }).replace === false)
+check('没有归档清单不换（fail-open）', sessionReplacedVerdict({ sessionId: 'qq-a' }).replace === false)
+check('归档清单不是数组不换（fail-open）', sessionReplacedVerdict({ sessionId: 'qq-a', archivedSessionIds: null }).replace === false)
+check('空 sessionId 不换', sessionReplacedVerdict({ sessionId: '', archivedSessionIds: [''] }).replace === false)
+check('sessionId 只有空白不换', sessionReplacedVerdict({ sessionId: '   ', archivedSessionIds: ['   '] }).replace === false)
+check('undefined 不换', sessionReplacedVerdict().replace === false)
+check('null 不换', sessionReplacedVerdict(null).replace === false)
+check(
+  '前后空白会被裁掉再比（" qq-a " 命中 qq-a）',
+  sessionReplacedVerdict({ sessionId: '  qq-a  ', archivedSessionIds: ['qq-a'] }).replace === true,
+)
+
 console.log(failed === 0 ? '\n全部通过' : `\n${failed} 项失败`)
 process.exit(failed === 0 ? 0 : 1)
-

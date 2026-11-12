@@ -20,7 +20,7 @@ import { spawn } from 'node:child_process'
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { homedir } from 'node:os'
-import { dirname, isAbsolute, join } from 'node:path'
+import { basename, dirname, isAbsolute, join } from 'node:path'
 
 import Schema from '@deepseek-ai/schemastery'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
@@ -447,6 +447,32 @@ export function inlineImageNotes(text, images, noteById) {
     const stickerBody = stickerNoteText(face.summary, note.text)
     return String(stickerBody).trim() === '' ? head : `${head}：${stickerBody}`
   })
+}
+
+/**
+ * 这个群/私聊记着的那条会话还能不能用（是不是已经被主人归档了）。
+ *
+ * 为什么需要：宿主归档一条会话后会把它记进 `workspaceRegistry.archivedSessionIds`，
+ * 并且从此对它的每一步 `agent/pre-step` 直接 reject。插件如果还照着
+ * `state.sessionByDest[key]` 投递，那一轮就等于被静默吞掉 —— 既没有回复，
+ * 也不会新建会话，日志里连 wake-failed 都没有。
+ *
+ * 宿主归档不会把 id 从 archivedSessionIds 里移除（除非手动取消归档），
+ * 所以这条判据是单调的：一旦为 true，就该换一条新会话。
+ * 纯函数，导出是为了单测。
+ *
+ * @param {{ sessionId?: string, archivedSessionIds?: string[] }} facts
+ * @returns {{ replace: boolean, reason?: string }}
+ */
+export function sessionReplacedVerdict(facts = {}) {
+  const source = facts ?? {}
+  const id = String(source.sessionId ?? '').trim()
+  if (id === '') return { replace: false }
+  const archived = Array.isArray(source.archivedSessionIds) ? source.archivedSessionIds : []
+  // 宿主归档后 archivedSessionIds 里就一直留着这个 id（归档不删会话），
+  // 而且宿主的归档闸门会把它之后的每一步 agent/pre-step 都静默 reject。
+  if (archived.includes(id)) return { replace: true, reason: '会话已被归档' }
+  return { replace: false }
 }
 
 /**
@@ -2485,23 +2511,63 @@ export function apply(ctx, config) {
   }
 
   /**
+   * 宿主当前归档了哪些会话。
+   *
+   * 服务名是 `workspaceRegistry`（不是 `workspace`，宿主的 `workspace` 取不到东西），
+   * 它不在插件 inject 里，只能 `ctx.get` 拿。拿不到就返回空数组 = 不按归档判断，
+   * 绝不因为读不到就把会话换掉。
+   */
+  function archivedSessionIds() {
+    try {
+      const registry = typeof ctx.get === 'function' ? ctx.get('workspaceRegistry') : undefined
+      const ids = registry?.archivedSessionIds
+      return Array.isArray(ids) ? ids : []
+    } catch (error) {
+      logger.warn(`读取归档会话清单失败（本轮不按归档判断）：${error?.message ?? error}`)
+      return []
+    }
+  }
+
+  /**
+   * 这条会话是不是已经被主人归档了。
+   * 读不到归档清单时一律返回 false（宁可继续用，也不乱换会话）。
+   */
+  function isArchivedSession(sessionId) {
+    return sessionReplacedVerdict({
+      sessionId,
+      archivedSessionIds: archivedSessionIds(),
+    }).replace
+  }
+
+  /**
    * 把一条会话挂进「QQ 桥接」工作区。
    *
    * DSH 面板按 workspace（工作区＝目录）给会话分组，同一个目录下的会话归在一起。
    * 所有 QQ 会话都用同一个 cwd，所以把它们都挂到该 cwd 对应的工作区，
    * 面板里就是一组「QQ 桥接」，而不是散在最近的会话里。
    *
-   * `workspace.attachSession` 会校验 `header.cwd` 与工作区 path 一致；
+   * 服务名是 `workspaceRegistry`：宿主的 `workspace` 这个名字根本不存在，
+   * 早先写成 `ctx.get('workspace')` 时这里一直静默空转、一个会话都没挂进去过。
+   *
+   * `registry.create(path, title)` 同路径会复用已有实体、不改标题；
+   * `entity.attachSession` 会校验 `header.cwd` 与工作区 path 一致；
    * cwd 不一致（比如宿主换过默认目录）时只打日志，不影响会话本身。
    */
   async function attachToQQWorkspace(sessionId) {
     try {
-      const workspace = ctx.get('workspace')
-      if (!workspace || typeof workspace.create !== 'function') return
+      const registry = typeof ctx.get === 'function' ? ctx.get('workspaceRegistry') : undefined
+      if (!registry || typeof registry.create !== 'function') return
       const dir = destSessionCwd()
-      const entity = await workspace.create(dir, 'QQ 桥接')
+      if (!isAbsolute(String(dir ?? '').trim())) {
+        logger.warn(`新建会话目录不是绝对路径（${dir}），跳过挂工作区`)
+        return
+      }
+      // 工作区按目录 naming：用户明确指定了目录就用目录名，否则叫「QQ 桥接」。
+      const configured = String(readSettings()?.newSessionDir ?? '').trim()
+      const title = configured !== '' ? basename(configured) || 'QQ 桥接' : 'QQ 桥接'
+      const entity = await registry.create(dir, title)
       if (typeof entity?.attachSession === 'function') await entity.attachSession(sessionId)
-      logger.info(`会话 ${sessionId} 已挂到工作区「${entity?.title ?? 'QQ 桥接'}」`)
+      logger.info(`会话 ${sessionId} 已挂到工作区「${entity?.title ?? title}」`)
     } catch (error) {
       logger.warn(`挂到 QQ 工作区失败（会话本身照常）：${error?.message ?? error}`)
     }
@@ -2527,6 +2593,34 @@ export function apply(ctx, config) {
       logger.warn(`读取默认工作目录失败，改用进程工作目录：${error?.message ?? error}`)
     }
     return process.cwd()
+  }
+
+  /**
+   * 确保这个目录存在（新建 QQ 会话目录是用户在设置里手填的，可能还没建）。
+   *
+   * 宿主建会话只校验 cwd 是绝对路径，不会替你 mkdir；而 `workspace.create` 会
+   * realpath + stat 校验，目录不存在就直接失败 —— 表现就是「会话建出来了，
+   * 但面板里没有对应的工作区」。所以建会话之前先补一次。
+   * 建不出来只打日志，不挡会话（宿主那边还有它自己的兜底）。
+   */
+  function ensureDirectory(dir) {
+    const target = String(dir ?? '').trim()
+    if (target === '' || !isAbsolute(target)) return false
+    try {
+      if (statSync(target).isDirectory()) return true
+    } catch (error) {
+      if (error?.code !== 'ENOENT') {
+        logger.warn(`检查新建会话目录失败（继续尝试创建）：${error?.message ?? error}`)
+      }
+    }
+    try {
+      mkdirSync(target, { recursive: true })
+      logger.info(`新建会话目录不存在，已创建：${target}`)
+      return true
+    } catch (error) {
+      logger.warn(`创建新建会话目录失败（会话仍会建，只是可能打不开）：${target}：${error?.message ?? error}`)
+      return false
+    }
   }
 
   /**
@@ -2575,6 +2669,10 @@ export function apply(ctx, config) {
     if (typeof ctx.agents?.create !== 'function') {
       throw new Error('这个宿主没有 agents.create，无法为每个群单独开会话')
     }
+    // 目录得先存在：宿主的 workspace.create 会 realpath + stat 校验，
+    // 目录不在就直接失败（表现为「会话建了但没挂进工作区」）。
+    const cwd = destSessionCwd(s)
+    ensureDirectory(cwd)
     const sessionId = `qq-${randomUUID().replace(/-/g, '').slice(0, 12)}`
     // 模型来源优先级：显式 targetSessionId 的模型 > 新建会话默认模型 / 模型链第一个 > 宿主默认。
     // 这样「新建会话默认用什么模型」在设置卡片上就配得出来，不必去改宿主全局默认。
@@ -2592,7 +2690,7 @@ export function apply(ctx, config) {
       ...(agentOptions ? { agentOptions } : {}),
       ...(preset ? { setup: mountPreset } : {}),
       meta: {
-        cwd: destSessionCwd(s),
+        cwd,
         ...(preset ? { agentPreset: preset } : {}),
       },
     })
@@ -2617,6 +2715,21 @@ export function apply(ctx, config) {
       id = state.sessionByDest[key]
       if (!id) return await createDestSession(msg, s)
 
+      // 主人手动归档了这条会话 → 换一条新的接着聊。
+      //
+      // ⚠️ 这一步必须在轮换判断之前，而且不能只靠 `ctx.agents.get(id)` 或 resume 失败来兜：
+      // 宿主的 `archived-session-gate` 会把归档会话的每一步 `agent/pre-step` 直接
+      // `{kind:'reject'}` 掉，插件这边拿不到任何异常 —— 那一轮就这么静默消失，
+      // 台账不记 wake-failed、也不新建会话。所以只能主动问宿主「这条归档了吗」。
+      //
+      // 归档不清 sessionByDest 的话，这个目的地会永远投给那条已归档的会话。
+      if (isArchivedSession(id)) {
+        logger.info(`会话 ${id} 已被归档，按设置新建一条会话接着聊（目的地 ${key}）`)
+        delete state.sessionByDest[key]
+        saveState()
+        return await createDestSession(msg, s)
+      }
+
       // 会话轮换：聊太久 / 上下文快满时换一条新会话接着聊，
       // 而不是等它撞上模型的窗口上限、之后每轮都失败。
       if (s.rotateEnabled !== false) {
@@ -2635,6 +2748,11 @@ export function apply(ctx, config) {
     } else {
       id = s.targetSessionId
       if (!id) throw new Error('未配置 targetSessionId')
+      // 非 perGroup 模式下目标会话是主人指定的，不能自己换一条 ——
+      // 只把原因说清楚，让台账记一条 wake-failed，而不是静默丢消息。
+      if (isArchivedSession(id)) {
+        throw new Error(`目标会话 ${id} 已被归档：请先取消归档，或改用 perGroup 模式让插件自己新建会话`)
+      }
     }
 
     const live = ctx.agents.get(id)

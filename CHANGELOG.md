@@ -1,5 +1,12 @@
 # 更新日志
 
+## 未发布
+
+- **修好「手动归档 QQ 会话后不再新建会话」**：此前插件只会在轮数 / 上下文压力达标时轮换，或在 `resume` 抛错时兜底新建；你在面板里归档当前会话后，`sessionByDest` 仍指着那条已归档的 id，于是每条消息继续投给一条宿主已经拒收的会话（宿主 `agent/pre-step` 对归档会话直接 `reject`，不抛异常），那一轮静默消失、台账里连 `wake-failed` 都不记。现在每次唤醒前先读 `workspaceRegistry.archivedSessionIds`，命中就清掉 `sessionByDest` 并按 `newSessionDir` / `newSessionModel` / `newSessionPreset` 新建一条接着聊。判据只看归档清单（归档不删会话文件，id 会一直留在清单里），读不到清单时 fail-open、不换会话。`sessionScope = single` 下目标会话由 `targetSessionId` 指定，不自作主张换，改为抛错让台账记一条带原因的 `wake-failed`。
+- **修好「新建 QQ 会话挂不进工作区」**：`attachToQQWorkspace` 一直用 `ctx.get('workspace')` 取服务，而宿主没有这个服务名（正确名是 `workspaceRegistry`），取到的永远是 `undefined`，函数在第一个 `if` 就静默返回——从没有任何 QQ 会话被挂进工作区，也没有日志。现改读 `workspaceRegistry`；`newSessionDir` 填了目录时工作区标题取该目录名，留空沿用「QQ 桥接」；目录不是绝对路径只记 warn、不抛。
+- **新建会话前补建目录**：宿主建会话只校验 `cwd` 是绝对路径、不会替你 `mkdir`，而 `workspaceRegistry.create` 会 `realpath` + `stat` 校验目录存在——配了一个还不存在的 `newSessionDir` 时，会话能建、工作区挂不上。现在 `createDestSession` 先 `ensureDirectory(cwd)`（ENOENT 才递归创建，已存在不碰），再把同一个 `cwd` 传给 `agents.create` 的 `meta.cwd`。
+- 新增导出纯函数 `sessionReplacedVerdict(facts)`（会话要不要换掉）与内部 `archivedSessionIds()` / `isArchivedSession()`；`README.md` 会话小节与 `newSessionDir` 表格行同步补上「归档后自动新建」「目录不存在会自动创建」。
+
 ## 未发布（仅文档）
 
 - **纠正 README 里的 npm 说法**：`@fengye_nobug/dsh-qq-bridge-neko` 从来没发布到 npm——`@fengye_nobug` 作用域没在 registry 注册过，`npm view` 与 `GET registry.npmjs.org/@fengye_nobug%2Fdsh-qq-bridge-neko` 都是 404（实测）。README 现在开头就写清「这个插件不发 npm」，安装只给本地 `.tgz` 与 GitHub tag 两条，并补了前置条件、NapCat 三步接通、装完为什么必须重启、包名与 Cordis `name` 的对应关系、与旧插件并存要注意的 `onebotUrl`、以及一节排障。`DESIGN.md` 的「用 npm 安装」改成「包名与安装」，同时修掉几处会让人照着执行却必然失败的 `dsh plugin add @fengye_nobug/dsh-qq-bridge-neko@0.2.5`；「不要和官方插件一起挂」改成「不要和上游插件同时连一个 OneBot」（上游 id 是 `qq-bridge`，本 fork 是 `qq-bridge-neko`，两者可并存，抢的只是同一条 WS）。`docs/awesome-dsh-plugin-entry.yml` 与 `HANDOVER.md` 的市场条目路径同步改成 `SmilessNEKO/dsh_qq_onebot_neko`，并注明不写 npm 字段。

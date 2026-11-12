@@ -656,7 +656,7 @@ QQ 的“拍一拍”在 OneBot 里走的是 **notice 事件**，不是消息段
 | `describeImages` | `true` | 关掉则完全不识图、图片只留 `[图片#短哈希]` 占位，适合会话模型自己能看图时省调用 |
 | `modelChain` | `[]` | 模型优先级链（**下拉**排顺序，最多 8 条，↑/↓/✕）。当前模型连续报错 / blocked 达 `modelChainFailures` 次就切下一个、循环回绕；切换走宿主 `agent.model.select`，不重建会话。日志里记 `model-chain` / `switch`，`qq_bridge_neko_status` 能看到链实时位置 |
 | `modelChainFailures` | `5` | 链上切换阈值（1–50）。成功完成一轮就把连续失败计数清零 |
-| `newSessionDir` | `''` | 新建 QQ 会话放到哪个文件夹（绝对路径）；空 = 「QQ 桥接」工作区 |
+| `newSessionDir` | `''` | 新建 QQ 会话放到哪个文件夹（绝对路径，不存在会自动创建）；空 = 「QQ 桥接」工作区。建完会话会 `workspaceRegistry.create(该目录)` + `attachSession`，填了目录时工作区标题取目录名。手动归档当前会话后，下一条消息也按这里重建 |
 | `newSessionModel` | `''` | 新建会话默认模型（**下拉**）；空 = 宿主默认模型或 `modelChain` 第一个 |
 | `newSessionPreset` | `''` | 新建会话默认预设模式（**下拉**，取自 `agentPresets.list()`）；空 = 沿用 `agentPreset` |
 | `agentPreset` | `''` | 人设预设（**下拉**）；空 = 沿用会话自己记着的 |
@@ -665,7 +665,7 @@ QQ 的“拍一拍”在 OneBot 里走的是 **notice 事件**，不是消息段
 | `replyGapMinMs` / `replyGapMaxMs` | `1200` / `2800` | 分条发出时两条之间随机间隔的下限 / 上限（毫秒，0–60000，写反自动换过来） |
 | `burstWaitMs` | `0` | 对方连着发消息时，先等这么多毫秒没人再说才回复；`0` = 立刻回。每个目的地可在档案里单独覆盖 |
 | `listenIdleMs` | `120000` | 会话跟随期间，这么久（毫秒）没有新消息就自动停听（1 万–24 小时，默认 2 分钟）；开窗时把值钉进窗口 |
-| `rotateEnabled` / `rotateMaxTurns` / `rotatePressureRatio` | `true` / `300` / `0.75` | perGroup 会话轮数 / 上下文压力到阈值就新建一条接着聊；关掉则不轮换 |
+| `rotateEnabled` / `rotateMaxTurns` / `rotatePressureRatio` | `true` / `300` / `0.75` | perGroup 会话轮数 / 上下文压力到阈值就新建一条接着聊；关掉则不轮换。另有一条**不归这三个开关管**的换会话路径：目的地指向的会话出现在 `workspaceRegistry.archivedSessionIds` 里（主人手动归档）时，下一次唤醒就清掉 `sessionByDest` 新建一条 —— 宿主对归档会话的每一步 `agent/pre-step` 直接 reject，不换等于那一轮静默丢失 |
 | `onebotUrl` | `''` | OneBot 连接地址；空 = 先不连接 |
 | `accessTokenEnv` | `''` | OneBot 令牌放在哪个环境变量（填变量名，不是令牌，也不是模型 API key） |
 | `selfId` | `''` | 机器人自己的 QQ 号。空 = 连上后自动读取；读取完成前，先用事件里的 `self_id`。想避开这段空窗就填上 |

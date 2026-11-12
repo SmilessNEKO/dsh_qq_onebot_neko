@@ -42,9 +42,10 @@
 **会话**
 
 - perGroup 下会话会自动轮换：聊到 `rotateMaxTurns`（默认 300 轮）或上下文占用达到 `rotatePressureRatio`（默认 0.75）时就新建一条会话接着聊，旧会话留在面板里可查、不会被删。`rotateEnabled` 置 `false` 可关掉。目的是不让长群聊撞上模型窗口上限后每轮都失败。
-- 新建的 QQ 会话会挂到「QQ 桥接」工作区，面板里按目录分组显示，不散落在最近会话里。
+- **手动归档后会自动新建**：你在面板里把当前 QQ 会话归档，下一条消息进来时插件发现目的地指向的会话已在归档清单里，就按 `newSessionDir` / 模型 / 预设重新建一条接着聊，不用等轮换条件。归档不会删会话文件，所以这条判断只看归档清单。
+- 新建的 QQ 会话会挂到工作区：`newSessionDir` 留空时挂到「QQ 桥接」，填了文件夹就挂到该目录同名的工作区（目录不存在会自动创建），面板里按目录分组显示，不散落在最近会话里。
 - **模型优先级链**：`modelChain` 从 DSH 已配置提供商 / 模型里排出一串顺序，当前模型连续报错 `modelChainFailures`（默认 `5`）次后自动切到下一个，循环回绕；切换走宿主 `agent.model.select`，不用重建会话。新建会话默认模型（`newSessionModel` 留空时）也跟着链首走。
-- **新建 QQ 会话可指定落点**：`newSessionDir`（文件夹，空 = 「QQ 桥接」工作区）、`newSessionModel`（默认模型）、`newSessionPreset`（默认预设模式）都能在卡片里选，不填就沿用宿主默认。
+- **新建 QQ 会话可指定落点**：`newSessionDir`（文件夹，空 = 「QQ 桥接」工作区）、`newSessionModel`（默认模型）、`newSessionPreset`（默认预设模式）都能在卡片里选，不填就沿用宿主默认。`sessionScope = single` 时目标会话由 `targetSessionId` 指定，被归档不会自动换——插件会在台账里记一条 `wake-failed` 并说明原因，需要你取消归档或改用 perGroup。
 - **会话跟随**：模型可以调 `qq_bridge_neko_listen` 开一段 5–60 分钟的跟随窗口，窗口内同一个群 / 私聊的普通消息也会叫醒，不必每条都 @。`listenIdleMs`（默认 2 分钟）没有新消息就自动停听，不挂着烧 token。
 
 **语音**
@@ -156,7 +157,7 @@ DSH 0.2 的卡片把值写进 `$DSH_HOME/qq-bridge-neko-settings.json`。这份�
 | `rotatePressureRatio` | `0.75` | 上下文占用达到这个比例就换新会话。`0` = 只按轮数判断 |
 | `modelChain` | `[]` | 模型优先级链，从已配置提供商 / 模型里排顺序；连续报错达阈值自动切下一个 |
 | `modelChainFailures` | `5` | 链上当前模型连续报错几次后切到下一个（1–50） |
-| `newSessionDir` | 空 | 新建 QQ 会话放到哪个文件夹（绝对路径）；空 = 「QQ 桥接」工作区 |
+| `newSessionDir` | 空 | 新建 QQ 会话放到哪个文件夹（绝对路径，不存在会自动创建）；空 = 「QQ 桥接」工作区。手动归档当前会话后，下一条消息会按这里新建一条 |
 | `newSessionModel` | 空 | 新建会话默认模型；空 = 宿主默认模型或 `modelChain` 第一个 |
 | `newSessionPreset` | 空 | 新建会话默认预设模式 |
 | `destinationProfiles` | `[]` | 按 `group:<群号>` / `private:<QQ号>` 分别设休眠时段、24 小时实时回复、连发等待、停听时间 |
