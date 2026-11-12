@@ -358,7 +358,7 @@ check(
 }
 
 console.log('registered tools:', registered.map((t) => t.name).join(', '))
-check('apply 未抛错且注册了 7 个工具', registered.length === 7)
+check('apply 未抛错且注册了 8 个工具', registered.length === 8)
 
 const sim = registered.find((t) => t.name === 'qq_bridge_neko_simulate')
 const status = registered.find((t) => t.name === 'qq_bridge_neko_status')
