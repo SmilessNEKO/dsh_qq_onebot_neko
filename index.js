@@ -5754,6 +5754,130 @@ export function apply(ctx, config) {
     },
   }))
 
+  // ── 语音：把一句台词合成为语音直接发出去 ────────────────────────────────────
+  //
+  // 和标记块那条路（`[语音]…[/语音]`）共用 `voice.js` 与同一套设置，区别只是：
+  // 这里是显式调用、不走 marker 场景，所以同样要过 `qq_bridge_neko_send` 那两道门。
+  // 语音开关关着时**不做**——答应了却不发，比直接说「语音没开」更难受。
+
+  ctx.tools.register(defineTool({
+    name: 'qq_bridge_neko_voice',
+    description:
+      '把一句话合成为语音发到 QQ（默认发给这一轮钉住的群或私聊）。' +
+      '需要先打开设置里的「发语音」（voiceEnabled），否则返回 `reason: "voice-disabled"`，一个字都不发。' +
+      '音色 / 语速 / 音高默认读设置，也可以用 voice / rate / pitch 单次覆盖（edge-tts 写法，例如 zh-CN-XiaoyiNeural、-8%、+12Hz）。' +
+      'text 只写要念的内容本体：不要带 [语音] 标记，也不带表情名和 Markdown，那些念不出来。' +
+      '合成失败或超过 voiceMaxChars 时**降级发文字**（正文前加「（语音没合成出来）」），不会整条消失。' +
+      '合成好的 mp3 会缓存，同一句同音色只合成一次。',
+    parameters: {
+      text: { type: 'string', required: true, description: '要念的内容本体，不要带标记或表情名。' },
+      voice: { type: 'string', description: '音色，覆盖设置里的 ttsVoice。' },
+      rate: { type: 'string', description: '语速，覆盖设置里的 ttsRate，例如 -8%。' },
+      pitch: { type: 'string', description: '音高，覆盖设置里的 ttsPitch，例如 +12Hz。' },
+      userId: { type: 'string', description: '私聊目标 QQ 号；与 groupId 二选一，都不给则用这一轮钉住的目的地。' },
+      groupId: { type: 'string', description: '群号；与 userId 二选一。显式指定时不引用别的群的消息。' },
+    },
+    output: { schema: { type: 'string' }, render: (_a, v) => [{ type: 'text', text: v }] },
+    async execute(args, exec) {
+      const s = readSettings()
+      if (s.voiceEnabled !== true) {
+        return JSON.stringify({
+          sent: 0,
+          dropped: true,
+          reason: 'voice-disabled',
+          error: '设置里的「发语音」（voiceEnabled）关着，没有合成也没有发。要发语音先在设置里打开它。',
+        }, null, 2)
+      }
+      const said = String(args.text ?? '').trim()
+      if (said === '') {
+        return JSON.stringify({ sent: 0, dropped: true, reason: 'empty-text' }, null, 2)
+      }
+      const chars = [...said].length
+      if (chars > s.voiceMaxChars) {
+        return JSON.stringify({
+          sent: 0,
+          dropped: true,
+          reason: 'too-long',
+          limit: s.voiceMaxChars,
+          length: chars,
+          error: `这段有 ${chars} 字，超过语音上限 ${s.voiceMaxChars} 字。拆成几段或者先用文字发。`,
+        }, null, 2)
+      }
+
+      const denied = explicitOutboundBlock(args)
+      if (denied) {
+        recordDropped({
+          via: 'tool',
+          reason: denied.reason,
+          destination: args.groupId
+            ? { kind: 'group', groupId: String(args.groupId) }
+            : { kind: 'private', userId: String(args.userId) },
+          sessionId: 'tool:qq_bridge_neko_voice',
+        })
+        return JSON.stringify(denied, null, 2)
+      }
+      const blocked = outboundGate('qq_bridge_neko_voice', sessionIdOf(exec?.agent))
+      if (blocked !== null) return blocked
+
+      const resolved = resolveOutboundDest(args, exec)
+      const dest = resolved.dest
+      if (!dest?.kind) {
+        return JSON.stringify({ sent: 0, dropped: true, reason: 'no-destination' }, null, 2)
+      }
+
+      // 单次覆盖只对「显式传了」的项生效；空字符串当作没传，免得把设置里的值抹成空。
+      const cacheDir = resolveVoiceCacheDir(s)
+      const tts = await synthesize(said, {
+        pythonPath: String(s.ttsPythonPath ?? '').trim(),
+        voice: String(args.voice ?? '').trim() || String(s.ttsVoice ?? '').trim() || DEFAULT_TTS_VOICE,
+        rate: String(args.rate ?? '').trim() || String(s.ttsRate ?? '').trim() || DEFAULT_TTS_RATE,
+        pitch: String(args.pitch ?? '').trim() || String(s.ttsPitch ?? '').trim() || DEFAULT_TTS_PITCH,
+        cacheDir,
+      })
+
+      let result
+      if (tts.ok) {
+        const segments = []
+        if (s.replyWithQuote && resolved.quoteMessageId) {
+          segments.push({ type: 'reply', data: { id: String(resolved.quoteMessageId) } })
+        }
+        segments.push(recordSegment(tts.path))
+        const ok = await sendSegments(dest, segments)
+        result = ok
+          ? { sent: 1, dropped: false, kind: 'voice', destination: dest, cached: tts.cached === true }
+          : { sent: 0, dropped: true, reason: 'send-failed', kind: 'voice' }
+      } else {
+        // 合成失败：降级发文字，让人至少收到这句话。
+        logger.warn(`qq_bridge_neko_voice 合成失败：${tts.reason}，降级发文字`)
+        const ok = await sendTextPiece(`（语音没合成出来）${said}`, dest, {
+          s,
+          quoteId: resolved.quoteMessageId,
+        })
+        result = ok
+          ? { sent: 1, dropped: false, kind: 'text-fallback', destination: dest, voiceError: tts.reason }
+          : { sent: 0, dropped: true, reason: tts.reason, kind: 'text-fallback-failed' }
+      }
+
+      if (result.sent > 0) {
+        recordOutbox({
+          sessionId: 'tool:qq_bridge_neko_voice',
+          via: 'tool',
+          nonQQTurn: !gateOf(sessionIdOf(exec?.agent)).currentTurnFromQQ,
+          to: dest,
+          text: result.kind === 'voice' ? `[语音] ${said}` : `（语音没合成出来）${said}`,
+        })
+      } else {
+        recordDropped({
+          via: 'tool',
+          reason: result.reason,
+          destination: dest,
+          sessionId: 'tool:qq_bridge_neko_voice',
+        })
+      }
+      return JSON.stringify(result, null, 2)
+    },
+  }))
+
   // ── 会话跟随：模型自己决定“下一轮要不要必然触发” ──────────────────────────
   // 不受 debugTools 限制 —— 这是产品的使用方式，不是调试工具。
   const DEFAULT_LISTEN_MINUTES = 5
