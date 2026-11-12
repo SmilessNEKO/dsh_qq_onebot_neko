@@ -22,7 +22,7 @@ registerHooks({
   },
 })
 
-const { rotateSessionVerdict, sessionReplacedVerdict } = await import(
+const { rotateSessionVerdict, sessionReplacedVerdict, blankSessionVerdict } = await import(
   new URL('./index.js', import.meta.url).href
 )
 
@@ -107,6 +107,47 @@ check(
   '前后空白会被裁掉再比（" qq-a " 命中 qq-a）',
   sessionReplacedVerdict({ sessionId: '  qq-a  ', archivedSessionIds: ['qq-a'] }).replace === true,
 )
+
+// ── 空白会话判定（blankSessionVerdict）────────────────────
+// 判据与宿主一致：只有 turn/start 会让一条会话从「空白」变「用过」。
+// 种子事件（permission/preset、sandbox/mode、approval/policy、session/end-seed）不算用过。
+
+const SEED_EVENTS = [
+  { type: 'permission/preset' },
+  { type: 'sandbox/mode' },
+  { type: 'approval/policy' },
+  { type: 'session/end-seed' },
+]
+
+check('从没跑过一轮算空白', blankSessionVerdict({ sessionId: 'qq-a', events: SEED_EVENTS }).blank === true)
+check('只有种子事件也算空白', blankSessionVerdict({ sessionId: 'qq-a', events: [] }).blank === true)
+check(
+  '跑过一轮就不算空白',
+  blankSessionVerdict({ sessionId: 'qq-a', events: [...SEED_EVENTS, { type: 'turn/start' }] }).blank === false,
+)
+check(
+  '有 user/message 但没 turn/start 仍算空白（与宿主一致）',
+  blankSessionVerdict({ sessionId: 'qq-a', events: [...SEED_EVENTS, { type: 'user/message' }] }).blank === true,
+)
+{
+  const r = blankSessionVerdict({ sessionId: 'qq-a', events: SEED_EVENTS })
+  check('空白触发时带原因', typeof r.reason === 'string' && r.reason.length > 0, r.reason)
+}
+check(
+  '已归档的不再判空白',
+  blankSessionVerdict({ sessionId: 'qq-a', events: SEED_EVENTS, archivedSessionIds: ['qq-a'] }).blank === false,
+)
+check(
+  'events 取不到时按投影 blank=true 兜底',
+  blankSessionVerdict({ sessionId: 'qq-a', events: null, blank: true }).blank === true,
+)
+check('events 拿不到、投影也没说空白 → 不判空白', blankSessionVerdict({ sessionId: 'qq-a', blank: false }).blank === false)
+check('两样都没有 → 不判空白（宁可少归档）', blankSessionVerdict({ sessionId: 'qq-a' }).blank === false)
+check('投影 blank 不是布尔 true 不算', blankSessionVerdict({ sessionId: 'qq-a', blank: 'yes' }).blank === false)
+check('events 不是数组时不当成证据', blankSessionVerdict({ sessionId: 'qq-a', events: 'oops', blank: true }).blank === true)
+check('空 sessionId 不判空白', blankSessionVerdict({ sessionId: '', events: [] }).blank === false)
+check('undefined 不判空白', blankSessionVerdict().blank === false)
+check('null 不判空白', blankSessionVerdict(null).blank === false)
 
 console.log(failed === 0 ? '\n全部通过' : `\n${failed} 项失败`)
 process.exit(failed === 0 ? 0 : 1)

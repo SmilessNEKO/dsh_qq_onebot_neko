@@ -156,6 +156,9 @@ const DEFAULT_RECENT_CHAT_LIMIT = 8
 const MAX_STICKER_LIST = 50
 /** 同时握着的会话句柄上限。超出就放开最久没用的，映射还留着，下次消息再恢复。 */
 const MAX_SESSION_HANDLES = 48
+// 每新建一条 QQ 会话，最多顺手清理多少条空白会话（见 pruneBlankSessions）。
+// 正常情况下工作区里顶多一两条，给个上限纯粹是防止有人在同一目录堆了几百条空壳时拖慢新建。
+const MAX_BLANK_PRUNE_PER_ROUND = 20
 /** `list` 里每条描述截断到多少字（紧凑列表，别把上下文吃掉）。 */
 const MAX_STICKER_DESC = 40
 
@@ -238,6 +241,7 @@ export const Config = Schema.object({
   newSessionDir: Schema.string().default('').description('perGroup 新建会话放在哪个目录。留空 = 用宿主的默认工作目录。'),
   newSessionModel: Schema.string().default('').description('新建 QQ 会话默认用哪个模型（provider/model）。留空 = 用宿主默认模型或 MODEL_CHAIN 的第一个。'),
   newSessionPreset: Schema.string().default('').description('新建 QQ 会话默认用哪个人设预设。留空 = 不挂载预设。'),
+  pruneBlankSessions: Schema.boolean().default(true).description('新建 QQ 会话时，顺手把同一个工作区里从没聊过的空白会话归档掉。宿主点「新建会话」会优先复用这种空白会话，留着它们就会每次都打开同一条旧的。默认开。'),
   // ── 回复节奏 ──────────────────────────────────────────────────────────────
   replyGapMinMs: Schema.number().default(DEFAULT_REPLY_GAP_MIN_MS).description('一轮里分条发出时，两条之间最少隔多少毫秒。默认 1200。'),
   replyGapMaxMs: Schema.number().default(DEFAULT_REPLY_GAP_MAX_MS).description('一轮里分条发出时，两条之间最多隔多少毫秒。默认 2800。'),
@@ -332,6 +336,7 @@ const BridgeSettings = Schema.object({
   newSessionDir: Schema.string().default('').description('perGroup 新建会话放在哪个目录。留空 = 用宿主的默认工作目录。'),
   newSessionModel: Schema.string().default('').description('新建 QQ 会话默认用哪个模型（provider/model）。留空 = 用宿主默认模型或模型优先级链的第一个。'),
   newSessionPreset: Schema.string().default('').description('新建 QQ 会话默认用哪个人设预设。留空 = 不挂载预设。'),
+  pruneBlankSessions: Schema.boolean().default(true).description('新建 QQ 会话时，顺手把同一个工作区里从没聊过的空白会话归档掉。宿主点「新建会话」会优先复用这种空白会话，留着它们就会每次都打开同一条旧的。默认开。'),
   // ── 回复节奏 ──────────────────────────────────────────────────────────────
   replyGapMinMs: Schema.number().default(DEFAULT_REPLY_GAP_MIN_MS).description('分条发出时两条之间最少隔多少毫秒。默认 1200。'),
   replyGapMaxMs: Schema.number().default(DEFAULT_REPLY_GAP_MAX_MS).description('分条发出时两条之间最多隔多少毫秒。默认 2800。'),
@@ -473,6 +478,43 @@ export function sessionReplacedVerdict(facts = {}) {
   // 而且宿主的归档闸门会把它之后的每一步 agent/pre-step 都静默 reject。
   if (archived.includes(id)) return { replace: true, reason: '会话已被归档' }
   return { replace: false }
+}
+
+/**
+ * 这条会话是不是「从没聊过的空白会话」。
+ *
+ * 为什么需要：宿主面板点「新建会话」时，会先在当前工作区里找一条**空白会话**
+ * 直接复用，而不是铸一个新 id（客户端 `createInWorkspace` 里的 blank 匹配，
+ * 宿主 `claim` 里也把「没有 turn/start」当成可复用）。所以工作区里只要留着一条
+ * 从没聊过的空会话，用户每次点新建，拿回来的都是同一条，看上去就像「弹出了刚才那个」。
+ *
+ * 判据与宿主一致：宿主自己算 blank 的规则是
+ * `blank = state.blank && event.type !== 'turn/start'`（只有 turn/start 才会让它变 false），
+ * 所以这里也只看有没有 turn/start —— 光有 permission/preset、sandbox/mode、
+ * approval/policy、session/end-seed 这些种子事件，仍然算空白。
+ *
+ * events 拿不到时才看投影里的 `sessionListMetadata.blank`；
+ * 两者都没有就判「不是空白」（宁可少归档，也不能把正在用的会话归档掉）。
+ *
+ * 纯函数，导出是为了单测。
+ *
+ * @param {{ sessionId?: string, events?: Array<{ type?: string }>, blank?: boolean, archivedSessionIds?: string[] }} facts
+ * @returns {{ blank: boolean, reason?: string }}
+ */
+export function blankSessionVerdict(facts = {}) {
+  const source = facts ?? {}
+  const id = String(source.sessionId ?? '').trim()
+  if (id === '') return { blank: false }
+  const archived = Array.isArray(source.archivedSessionIds) ? source.archivedSessionIds : []
+  // 已经归档的不用再归档一次（宿主会直接返回，这里提前挡掉省一次调用）。
+  if (archived.includes(id)) return { blank: false }
+  const events = Array.isArray(source.events) ? source.events : null
+  if (events !== null) {
+    const used = events.some((event) => String(event?.type ?? '') === 'turn/start')
+    return used ? { blank: false } : { blank: true, reason: '从没跑过一轮' }
+  }
+  if (source.blank === true) return { blank: true, reason: '投影标记为空白' }
+  return { blank: false }
 }
 
 /**
@@ -1266,6 +1308,7 @@ export function apply(ctx, config) {
       newSessionDir: String(s.newSessionDir ?? config.newSessionDir ?? '').trim(),
       newSessionModel: String(s.newSessionModel ?? config.newSessionModel ?? '').trim(),
       newSessionPreset: String(s.newSessionPreset ?? config.newSessionPreset ?? '').trim(),
+      pruneBlankSessions: (s.pruneBlankSessions ?? config.pruneBlankSessions) !== false,
       replyGapMinMs: clampInt(s.replyGapMinMs ?? config.replyGapMinMs, 0, 60000, DEFAULT_REPLY_GAP_MIN_MS),
       replyGapMaxMs: clampInt(s.replyGapMaxMs ?? config.replyGapMaxMs, 0, 60000, DEFAULT_REPLY_GAP_MAX_MS),
       burstWaitMs: clampInt(s.burstWaitMs ?? config.burstWaitMs, 0, 60000, 0),
@@ -2541,8 +2584,6 @@ export function apply(ctx, config) {
 
   /**
    * 把一条会话挂进「QQ 桥接」工作区。
-   *
-   * DSH 面板按 workspace（工作区＝目录）给会话分组，同一个目录下的会话归在一起。
    * 所有 QQ 会话都用同一个 cwd，所以把它们都挂到该 cwd 对应的工作区，
    * 面板里就是一组「QQ 桥接」，而不是散在最近的会话里。
    *
@@ -2570,6 +2611,150 @@ export function apply(ctx, config) {
       logger.info(`会话 ${sessionId} 已挂到工作区「${entity?.title ?? title}」`)
     } catch (error) {
       logger.warn(`挂到 QQ 工作区失败（会话本身照常）：${error?.message ?? error}`)
+    }
+  }
+
+  /**
+   * 把 `dir` 这个工作区里「从没聊过」的空白会话归档掉（设置项 pruneBlankSessions）。
+   *
+   * 为什么需要：宿主面板点「新建会话」时，会先在当前工作区里找一条空白会话**复用**，
+   * 而不是铸新 id（客户端 `createInWorkspace` 的 blank 匹配 + 宿主 `claim` 的
+   * `!events.some(e => e.type === 'turn/start')`）。所以在面板里手开过、又没聊过的会话
+   * 会一直挡在前面 —— 用户每次点新建都拿回同一条，看着就像「没新建、还是刚才那个」。
+   * QQ 这边每建一条会话顺手清一遍，工作区里就不会再留这种待复用的空壳。
+   *
+   * 几条自律：
+   * - 只碰 `registry.resolveByPath(dir).sessionIds`（该工作区自己记着的会话），
+   *   不遍历全局会话列表，也不碰别的目录。
+   * - 只归档**没有 turn/start** 的（判据见 blankSessionVerdict）；有对话历史的一律不碰。
+   * - 跳过 `state.sessionByDest` 里还指着的会话：那是某个群/私聊的当前会话，由归档检测
+   *   那套逻辑自己管，不该被这里顺手换掉。
+   * - 归档**不传** `stopActivity`：宿主会先问 `workspace/session-activity`，正在跑的一律
+   *   抛 WorkspaceActiveSessionError，我们 catch 掉跳过 —— 绝不打断谁正在打的字。
+   * - 任何一步失败都只打日志，不挡新建会话。归档本身可撤销（宿主 `unarchiveSession`）。
+   *
+   * @returns {Promise<number>} 这一轮归档掉几条
+   */
+  async function pruneBlankSessions(dir) {
+    const target = String(dir ?? '').trim()
+    if (target === '' || !isAbsolute(target)) return 0
+    if (readSettings().pruneBlankSessions === false) return 0
+    let registry
+    try {
+      registry = typeof ctx.get === 'function' ? ctx.get('workspaceRegistry') : undefined
+    } catch (error) {
+      logger.warn(`清理空白会话时读不到工作区服务（跳过）：${error?.message ?? error}`)
+      return 0
+    }
+    if (!registry) return 0
+
+    let sessionIds
+    try {
+      // 用 resolveByPath（只查不建）：create 会顺手新建一个工作区，这里不该有副作用。
+      const entity =
+        typeof registry.resolveByPath === 'function' ? await registry.resolveByPath(target) : undefined
+      sessionIds = Array.isArray(entity?.sessionIds) ? [...entity.sessionIds] : []
+    } catch (error) {
+      logger.warn(`清理空白会话时读不到工作区（跳过）：${error?.message ?? error}`)
+      return 0
+    }
+    if (sessionIds.length === 0 || typeof registry.archiveSession !== 'function') return 0
+
+    const archived = new Set(archivedSessionIds())
+    const mapped = new Set(Object.values(state.sessionByDest ?? {}).filter((id) => typeof id === 'string'))
+    let query
+    try {
+      query = typeof ctx.get === 'function' ? ctx.get('sessionQuery') : undefined
+    } catch {
+      query = undefined
+    }
+
+    let removed = 0
+    for (const sessionId of sessionIds.slice(0, MAX_BLANK_PRUNE_PER_ROUND)) {
+      if (typeof sessionId !== 'string' || sessionId === '') continue
+      if (archived.has(sessionId) || mapped.has(sessionId)) continue
+      // 正在跑的那条不碰：宿主 `workspace/session-activity` 会报 activity，归档会被拒；
+      // 这里先看一眼，省一次往返，也免得日志里刷一条预期内的失败。
+      //
+      // 注意这里**不**跳过「活着但闲着的空白会话」——那恰恰就是面板「新建会话」会去复用的
+      // 那一条（客户端挑 blank 的会话当 sessionId 传下去，宿主 resume 它就活了）。
+      // 跳过它等于这个开关什么也没做。归档是可撤销的（面板里取消归档即可），
+      // 所以宁可归档也不留着它一直挡路。
+      let busy
+      try {
+        const live = ctx.agents?.get?.(sessionId)
+        busy = live !== undefined && (live?.status === 'running' || live?.status === 'stopping')
+      } catch {
+        busy = false
+      }
+      if (busy) continue
+      const verdict = blankSessionVerdict({
+        sessionId,
+        events: await sessionEventsOf(query, sessionId),
+        blank: await sessionBlankFlag(query, sessionId),
+        archivedSessionIds: [...archived],
+      })
+      if (!verdict.blank) continue
+      try {
+        await registry.archiveSession(sessionId)
+        removed += 1
+        logger.info(`工作区里有一条从没聊过的空白会话，已归档（${verdict.reason}）：${sessionId}`)
+      } catch (error) {
+        // 正在跑的一轮会被宿主拒（WorkspaceActiveSessionError），跳过就好。
+        logger.warn(`归档空白会话 ${sessionId} 没成（跳过）：${error?.message ?? error}`)
+      }
+    }
+    if (removed > 0) {
+      logger.info(`已清理 ${removed} 条空白会话（${target}），面板里「新建会话」不会再复用它们`)
+      pushLog({ kind: 'prune-blank', action: 'archive', count: removed, dir: target })
+    }
+    return removed
+  }
+
+  /**
+   * 读一条会话的事件序列（判空白用）。取不到返回 null，交给投影兜底。
+   * 只 `observeSession` + 立刻释放 lease，不 retain、不改会话。
+   */
+  async function sessionEventsOf(query, sessionId) {
+    if (!query || typeof query.observeSession !== 'function') return null
+    let lease
+    try {
+      lease = await query.observeSession(sessionId, { projectionMode: 'none' })
+      const events = lease?.events
+      return Array.isArray(events) ? events.map((event) => ({ type: event?.type })) : null
+    } catch (error) {
+      logger.warn(`读取会话事件失败（改用投影判断空白）：${sessionId}：${error?.message ?? error}`)
+      return null
+    } finally {
+      try {
+        lease?.[Symbol.dispose]?.()
+      } catch {
+        // lease 释放失败没有后果，忽略。
+      }
+    }
+  }
+
+  /** 读投影里的 `sessionListMetadata.blank`（宿主自己算的空白标记）。取不到返回 undefined。 */
+  async function sessionBlankFlag(query, sessionId) {
+    if (!query || typeof query.observeSession !== 'function') return undefined
+    let lease
+    try {
+      lease = await query.observeSession(sessionId, { projectionMode: 'all' })
+      const proj = lease?.projections
+      const meta =
+        proj?.values?.sessionListMetadata ??
+        proj?.sessionListMetadata ??
+        (typeof proj?.get === 'function' ? proj.get('sessionListMetadata') : undefined)
+      if (typeof meta?.blank === 'boolean') return meta.blank
+      return undefined
+    } catch {
+      return undefined
+    } finally {
+      try {
+        lease?.[Symbol.dispose]?.()
+      } catch {
+        // 同上。
+      }
     }
   }
 
@@ -2673,6 +2858,10 @@ export function apply(ctx, config) {
     // 目录不在就直接失败（表现为「会话建了但没挂进工作区」）。
     const cwd = destSessionCwd(s)
     ensureDirectory(cwd)
+    // 顺手清掉这个工作区里从没聊过的空白会话（设置项 pruneBlankSessions，默认开）。
+    // 必须在新会话建出来**之前**做：此时新会话还没进工作区，不会被自己归档掉。
+    // 面板点「新建会话」会优先复用这种空壳，留着它们就每次打开同一条旧的。
+    await pruneBlankSessions(cwd)
     const sessionId = `qq-${randomUUID().replace(/-/g, '').slice(0, 12)}`
     // 模型来源优先级：显式 targetSessionId 的模型 > 新建会话默认模型 / 模型链第一个 > 宿主默认。
     // 这样「新建会话默认用什么模型」在设置卡片上就配得出来，不必去改宿主全局默认。

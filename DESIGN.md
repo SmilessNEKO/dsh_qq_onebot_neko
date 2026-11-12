@@ -92,6 +92,7 @@ ensureTargetAgent():
 | `modelChain` | string[] | `[]` | 模型优先级链（最多 8 条），连续报错达阈值自动切下一个 |
 | `modelChainFailures` | number | `5` | 链上切换阈值（1–50） |
 | `newSessionDir` / `newSessionModel` / `newSessionPreset` | string | `''` | 新建 QQ 会话的文件夹 / 默认模型 / 默认预设 |
+| `pruneBlankSessions` | boolean | `true` | 新建 QQ 会话前，把 `newSessionDir` 这个工作区里从没跑过 `turn/start` 的空白会话归档掉（宿主面板点「新建会话」会优先复用这种空壳） |
 | `replyGapMinMs` / `replyGapMaxMs` | number | `1200` / `2800` | 分条间隔随机区间（毫秒，写反自动换） |
 | `burstWaitMs` | number | `0` | 连发停手多久才回（`0` = 立刻），每目的地可覆盖 |
 | `listenIdleMs` | number | `120000` | 会话跟随空闲多久自动停听（毫秒，默认 2 分钟） |
@@ -659,6 +660,7 @@ QQ 的“拍一拍”在 OneBot 里走的是 **notice 事件**，不是消息段
 | `newSessionDir` | `''` | 新建 QQ 会话放到哪个文件夹（绝对路径，不存在会自动创建）；空 = 「QQ 桥接」工作区。建完会话会 `workspaceRegistry.create(该目录)` + `attachSession`，填了目录时工作区标题取目录名。手动归档当前会话后，下一条消息也按这里重建 |
 | `newSessionModel` | `''` | 新建会话默认模型（**下拉**）；空 = 宿主默认模型或 `modelChain` 第一个 |
 | `newSessionPreset` | `''` | 新建会话默认预设模式（**下拉**，取自 `agentPresets.list()`）；空 = 沿用 `agentPreset` |
+| `pruneBlankSessions` | `true` | 新建 QQ 会话前，把 `newSessionDir` 指向的工作区里**从没跑过 `turn/start`** 的会话归档掉。判据与宿主一致（`blank = state.blank && event.type !== 'turn/start'`，只有 `turn/start` 会让它变非空白），种子事件（`permission/preset` / `sandbox/mode` / `approval/policy` / `session/end-seed`）不算用过。只碰 `workspaceRegistry.resolveByPath(目录).sessionIds`（`resolve` 只查不建，不能用会新建工作区的 `create`），跳过已归档的、`sessionByDest` 还指着的、`agents.get(id).status` 是 `running`/`stopping` 的；归档**不传** `stopActivity`，正在跑的由宿主抛 `WorkspaceActiveSessionError`，catch 掉跳过。每轮最多 20 条（`MAX_BLANK_PRUNE_PER_ROUND`）。清掉后有 `prune-blank` 台账；归档可 `unarchiveSession` 撤销。之所以要做：客户端 `createInWorkspace` 会挑同目录下 `blank && cwd === workspace.path && sessionIds.includes(id) && !archived` 的会话当 `sessionId` 传下去，宿主 `claim` 见它没有 `turn/start` 就直接 `reuseLive`/`resume` —— 不 mint 新 id，面板上看着像「点新建没反应、还是刚才那个」 |
 | `agentPreset` | `''` | 人设预设（**下拉**）；空 = 沿用会话自己记着的 |
 | `alwaysWakePrivate` | `true` | 主人私聊（`ownerWhitelist`）一律叫醒、不抽签；关掉回到按概率 |
 | `destinationProfiles` | `[]` | 按 `group:<群号>` / `private:<QQ号>` 个性化（**卡片式编辑**，目的地从 `GET /api/qq-bridge-neko/profiles` 挑）。每条可设 `quietHours` 休眠时段、`alwaysReply`（24 小时实时、跳过休眠）、`burstWaitMs` 连发等待、`idlePauseMs` 停听。后写的同 target 覆盖先写的 |

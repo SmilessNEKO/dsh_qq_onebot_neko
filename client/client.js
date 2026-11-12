@@ -88,6 +88,12 @@ window.__ModuleLoader__.load({
         hint: '新建的群/私聊会话挂哪套人设。留空 = 不挂载。',
       },
       {
+        key: 'pruneBlankSessions',
+        label: '顺手清掉没用的空白会话',
+        kind: 'boolean',
+        hint: '同一目录里从没聊过、也没在用的会话，会在新建 QQ 会话时自动归档（能取消归档）。不打开这个，面板点「新建会话」会一直复用同一条旧空壳，看着像没新建。',
+      },
+      {
         key: 'nicknames',
         label: '听到这些名字就回应',
         kind: 'list',

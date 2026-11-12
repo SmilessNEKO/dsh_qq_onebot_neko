@@ -5179,6 +5179,207 @@ function sawSentText(s) {
   rmSync(dir, { recursive: true, force: true })
 }
 
+// 顺手清掉空白会话（pruneBlankSessions，默认开）。
+// 宿主面板点「新建会话」会优先复用同目录下「从没跑过一轮」的空白会话（客户端
+// createInWorkspace 找 blank + 宿主 claim 看有没有 turn/start）——所以新建 QQ 会话前
+// 先把这类空壳归档掉，否则用户每次点新建都拿回同一条旧的，看着像没新建。
+{
+  const dir = mkdtempSync(join(tmpdir(), 'qq-bridge-neko-prune-'))
+  const stateFile = join(dir, 'state.json')
+  const workDir = join(dir, 'qq-work')
+  mkdirSync(workDir, { recursive: true })
+  const warns = []
+  const agents = new Map()
+  const createdIds = []
+  /** sessionId → 事件数组（判空白用） */
+  const eventsOf = new Map()
+  /** 被归档的 id 顺序 */
+  const archiveCalls = []
+  const archived = new Set()
+  let registryBroken = false
+  let archiveThrows = false
+  let queryMissing = false
+  const scopeSettings = {
+    targetSessionId: '',
+    sessionScope: 'perGroup',
+    maxRecentTurns: 0,
+    nicknames: ['小助手'],
+    wakeProbability: 0,
+    whitelist: ['10000002'],
+    groupWhitelist: ['12345678', '22334455', '33445566', '44556677', '55667788'],
+    replyMode: 'marker',
+    delivery: 'followup',
+    newSessionDir: workDir,
+  }
+  const lease = (sessionId) => {
+    const events = (eventsOf.get(sessionId) ?? []).map((type) => ({ type }))
+    return {
+      events,
+      projections: { values: { sessionListMetadata: { blank: !events.some((e) => e.type === 'turn/start') } } },
+      [Symbol.dispose]() {},
+    }
+  }
+  const iso = {
+    logger: { info() {}, warn: (message) => warns.push(String(message)) },
+    settings: { register: () => {}, get: () => scopeSettings },
+    agents: {
+      get: (id) => agents.get(id),
+      resume: async () => {
+        throw new Error('should create')
+      },
+      create: async (opts) => {
+        createdIds.push(opts.sessionId)
+        const agent = {
+          id: opts.sessionId,
+          session: { id: opts.sessionId, events: () => [], append() {} },
+          status: 'idle',
+          followup() {},
+          ctx: { get: () => undefined, effect: () => () => {} },
+        }
+        agents.set(opts.sessionId, agent)
+        return { agent, dispose: async () => {} }
+      },
+      withInitiator: (_agent, fn) => fn(),
+    },
+    tools: { register: (def) => tools.push(def) },
+    on: () => () => {},
+    effect: () => {},
+    get(name) {
+      if (name === 'workspaceRegistry') {
+        if (registryBroken) throw new Error('registry down')
+        return {
+          get archivedSessionIds() {
+            return [...archived]
+          },
+          async resolveByPath(path) {
+            if (path !== workDir) return undefined
+            // 工作区里记着的会话：夹具里那几条空壳 + 已经建出来的 QQ 会话
+            return { sessionIds: ['blank-1', 'blank-2', 'used-1', 'busy-1', ...createdIds] }
+          },
+          async create() {
+            return { title: 'qq-work', async attachSession() {} }
+          },
+          async archiveSession(sessionId) {
+            if (archiveThrows) throw new Error('WorkspaceActiveSessionError')
+            archiveCalls.push(sessionId)
+            archived.add(sessionId)
+          },
+        }
+      }
+      if (name === 'sessionQuery' && !queryMissing) {
+        return { observeSession: async (sessionId) => lease(sessionId) }
+      }
+      return undefined
+    },
+    inject: () => {},
+  }
+  const tools = []
+  apply(iso, {
+    statePath: stateFile,
+    debugTools: true,
+    onebotUrl: '',
+    targetSessionId: '',
+    sessionScope: 'perGroup',
+    maxRecentTurns: 0,
+    nicknames: ['小助手'],
+    whitelist: [],
+    groupWhitelist: [],
+    napcatInstallDir: join(dir, 'no-napcat'),
+  })
+  const sim = tools.find((t) => t.name === 'qq_bridge_neko_simulate')
+  const wake = (extra) => sim.execute({ text: '小助手在吗', userId: '10000002', nickname: '甲', ...extra })
+
+  // blank-1/blank-2：只有种子事件 → 空白，该归档。
+  eventsOf.set('blank-1', ['permission/preset', 'sandbox/mode', 'approval/policy', 'session/end-seed'])
+  eventsOf.set('blank-2', [])
+  // used-1：跑过一轮 → 不碰。
+  eventsOf.set('used-1', ['session/end-seed', 'turn/start', 'user/message'])
+  // busy-1：也是空白，但宿主里正跑着 → 不碰（正在打的字不能被归档打断）。
+  eventsOf.set('busy-1', [])
+  agents.set('busy-1', { id: 'busy-1', status: 'running' })
+
+  const first = JSON.parse(await wake({ groupId: '12345678' }))
+  check('空白会话：照常新建，消息投出去', first?.decision?.delivered === true && createdIds.length === 1, JSON.stringify(first?.decision))
+  check(
+    '空白会话：只有种子事件的被归档',
+    archiveCalls.includes('blank-1') && archiveCalls.includes('blank-2'),
+    JSON.stringify(archiveCalls),
+  )
+  check('空白会话：跑过一轮的不归档', !archiveCalls.includes('used-1'), JSON.stringify(archiveCalls))
+  check('空白会话：正在跑的不归档', !archiveCalls.includes('busy-1'), JSON.stringify(archiveCalls))
+  check('空白会话：刚建出来的那条不会把自己归档掉', !archiveCalls.includes(createdIds[0]), JSON.stringify(archiveCalls))
+  check(
+    '空白会话：归档过的下一轮不再重复归档',
+    await (async () => {
+      const before = archiveCalls.length
+      await wake({ groupId: '22334455' })
+      return archiveCalls.filter((id) => id === 'blank-1').length === 1 && archiveCalls.length === before
+    })(),
+    JSON.stringify(archiveCalls),
+  )
+
+  // 归档接口对正在跑的会抛 WorkspaceActiveSessionError —— 必须吞掉继续新建。
+  eventsOf.set('blank-3', [])
+  iso.get = ((original) => (name) => {
+    if (name !== 'workspaceRegistry') return original(name)
+    const registry = original(name)
+    return {
+      ...registry,
+      async resolveByPath() {
+        return { sessionIds: ['blank-3'] }
+      },
+    }
+  })(iso.get)
+  archiveThrows = true
+  const beforeThrow = createdIds.length
+  const thrown = JSON.parse(await wake({ groupId: '33445566' }))
+  archiveThrows = false
+  check(
+    '空白会话：归档被拒（正在跑）也照样新建、照样投递',
+    thrown?.decision?.delivered === true && createdIds.length === beforeThrow + 1,
+    JSON.stringify({ decision: thrown?.decision, before: beforeThrow, after: createdIds.length }),
+  )
+
+  // 读不到工作区 / 读不到 sessionQuery：一律放过，绝不挡新建。
+  registryBroken = true
+  queryMissing = true
+  const beforeBroken = createdIds.length
+  const broken = JSON.parse(await wake({ groupId: '44556677' }))
+  registryBroken = false
+  check(
+    '空白会话：工作区服务坏掉也照常新建',
+    broken?.decision?.delivered === true && createdIds.length === beforeBroken + 1,
+    JSON.stringify({ decision: broken?.decision, before: beforeBroken, after: createdIds.length }),
+  )
+
+  // 开关关掉：一条都不归档。
+  const beforeOff = archiveCalls.length
+  scopeSettings.pruneBlankSessions = false
+  agents.delete('busy-1')
+  eventsOf.set('blank-4', [])
+  const beforeOffCreated = createdIds.length
+  iso.get = ((original) => (name) => {
+    if (name !== 'workspaceRegistry') return original(name)
+    const registry = original(name)
+    return {
+      ...registry,
+      async resolveByPath() {
+        return { sessionIds: ['blank-4'] }
+      },
+    }
+  })(iso.get)
+  const offWake = JSON.parse(await wake({ groupId: '55667788' }))
+  check(
+    '空白会话：开关关掉时不归档，但仍照常新建',
+    offWake?.decision?.delivered === true &&
+      createdIds.length === beforeOffCreated + 1 &&
+      archiveCalls.length === beforeOff,
+    JSON.stringify({ archiveCalls: archiveCalls.length, beforeOff }),
+  )
+
+  rmSync(dir, { recursive: true, force: true })
+}
+
 // 会话句柄：死的丢掉；同时握着超过 48 个时放开最久没用的，映射还在，下次再恢复。
 {
   const dir = mkdtempSync(join(tmpdir(), 'qq-bridge-neko-handles-'))
