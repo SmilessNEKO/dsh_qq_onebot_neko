@@ -337,6 +337,16 @@ const BridgeSettings = Schema.object({
   replyGapMaxMs: Schema.number().default(DEFAULT_REPLY_GAP_MAX_MS).description('分条发出时两条之间最多隔多少毫秒。默认 2800。'),
   burstWaitMs: Schema.number().default(0).description('对方还在连着发消息时，先等这么多毫秒没人再说才回复。0 = 不等待。'),
   listenIdleMs: Schema.number().default(DEFAULT_LISTEN_IDLE_MS).description('会话跟随期间，这么久没有新消息就自动停听。默认 120000（2 分钟）。'),
+  // ── 语音消息 ──────────────────────────────────────────────────────────────
+  // sendToQQ 的 [语音]…[/语音] 与 qq_bridge_neko_voice 工具都读这几个键。
+  voiceEnabled: Schema.boolean().default(false).description('要不要发语音。打开后正文里的 [语音]台词[/语音] 会合成为语音发出去；关着时标记原样当文字发。默认关。'),
+  ttsProvider: Schema.string().default('edge').description('用哪个 TTS 合成语音。目前只有 edge（微软 edge-tts，本地跑、免费、需要本机装了它）。'),
+  ttsVoice: Schema.string().default(DEFAULT_TTS_VOICE).description('音色名。edge-tts 的写法，例如 zh-CN-XiaoyiNeural（少女音）、zh-CN-YunxiNeural（男声）。'),
+  ttsRate: Schema.string().default(DEFAULT_TTS_RATE).description('语速。edge-tts 写法，例如 -8% 表示慢一点、+10% 表示快一点。'),
+  ttsPitch: Schema.string().default(DEFAULT_TTS_PITCH).description('音高。edge-tts 写法，例如 +12Hz 表示高一点、-5Hz 表示低一点。'),
+  ttsPythonPath: Schema.string().default('').description('装了 edge-tts 的 python 解释器路径。留空 = 用 PATH 里的 python。'),
+  voiceMaxChars: Schema.number().default(DEFAULT_VOICE_MAX_CHARS).description('单条语音最多多少字。超过就降级发文字。默认 120。'),
+  voiceCacheDir: Schema.string().default('').description('合成好的 mp3 放哪。留空 = $DSH_HOME/qq-bridge-neko-voice。同一段话同音色只合成一次。'),
   // ── 每个 QQ 目的地的个性化 ────────────────────────────────────────────────
   destinationProfiles: Schema.array(DestinationProfile).default([]).description('按群 / 私聊分别设置休眠时段、24 小时实时回复、等待合并与停听时间。'),
 })
@@ -1165,6 +1175,14 @@ export function apply(ctx, config) {
         qqNumber: config.qqNumber ?? '',
         sessionScope: normalizeSessionScope(config.sessionScope),
         maxRecentTurns: normalizeMaxRecentTurns(config.maxRecentTurns),
+        voiceEnabled: config.voiceEnabled === true,
+        ttsProvider: config.ttsProvider ?? 'edge',
+        ttsVoice: config.ttsVoice ?? DEFAULT_TTS_VOICE,
+        ttsRate: config.ttsRate ?? DEFAULT_TTS_RATE,
+        ttsPitch: config.ttsPitch ?? DEFAULT_TTS_PITCH,
+        ttsPythonPath: config.ttsPythonPath ?? '',
+        voiceMaxChars: config.voiceMaxChars ?? DEFAULT_VOICE_MAX_CHARS,
+        voiceCacheDir: config.voiceCacheDir ?? '',
       },
         applies: 'live',
     })
@@ -1192,6 +1210,8 @@ export function apply(ctx, config) {
       // 只回落到硬编码默认值会把用户配置悄悄丢掉（如昵称、群白名单）。
       nicknames: (s.nicknames ?? config.nicknames ?? ['244']).map((n) => String(n)).filter((n) => n !== ''),
       wakeProbability: clamp01(Number(s.wakeProbability ?? config.wakeProbability ?? 0.05)),
+      // 主人的私聊必回。漏掉这一行会让用户把它关掉也不生效（恒为 true）。
+      alwaysWakePrivate: (s.alwaysWakePrivate ?? config.alwaysWakePrivate) !== false,
       whitelist: (s.whitelist ?? config.whitelist ?? []).map(String),
       groupWhitelist: (s.groupWhitelist ?? config.groupWhitelist ?? []).map(String),
       ownerWhitelist: (s.ownerWhitelist ?? config.ownerWhitelist ?? []).map(String),
@@ -1224,6 +1244,15 @@ export function apply(ctx, config) {
       replyGapMaxMs: clampInt(s.replyGapMaxMs ?? config.replyGapMaxMs, 0, 60000, DEFAULT_REPLY_GAP_MAX_MS),
       burstWaitMs: clampInt(s.burstWaitMs ?? config.burstWaitMs, 0, 60000, 0),
       listenIdleMs: clampInt(s.listenIdleMs ?? config.listenIdleMs, 10000, 24 * 60 * 60 * 1000, DEFAULT_LISTEN_IDLE_MS),
+      // 语音：sendToQQ 与 qq_bridge_neko_voice 都从这里取值。漏一行 = 用户设了也不生效。
+      voiceEnabled: (s.voiceEnabled ?? config.voiceEnabled) === true,
+      ttsProvider: String(s.ttsProvider ?? config.ttsProvider ?? 'edge').trim() || 'edge',
+      ttsVoice: String(s.ttsVoice ?? config.ttsVoice ?? '').trim() || DEFAULT_TTS_VOICE,
+      ttsRate: String(s.ttsRate ?? config.ttsRate ?? '').trim() || DEFAULT_TTS_RATE,
+      ttsPitch: String(s.ttsPitch ?? config.ttsPitch ?? '').trim() || DEFAULT_TTS_PITCH,
+      ttsPythonPath: String(s.ttsPythonPath ?? config.ttsPythonPath ?? '').trim(),
+      voiceMaxChars: clampInt(s.voiceMaxChars ?? config.voiceMaxChars, 1, 2000, DEFAULT_VOICE_MAX_CHARS),
+      voiceCacheDir: String(s.voiceCacheDir ?? config.voiceCacheDir ?? '').trim(),
       destinationProfiles: normalizeDestinationProfiles(s.destinationProfiles ?? config.destinationProfiles),
       imageDescribeSafeBytes: Math.max(1, Number(s.imageDescribeSafeBytes ?? config.imageDescribeSafeBytes ?? IMAGE_DESCRIBE_SAFE_BYTES)),
       imageDescribeMaxBytes: Math.max(1, Number(s.imageDescribeMaxBytes ?? config.imageDescribeMaxBytes ?? IMAGE_DESCRIBE_MAX_BYTES)),
