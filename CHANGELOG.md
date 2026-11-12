@@ -1,5 +1,9 @@
 # 更新日志
 
+## 未发布（仅文档）
+
+- **纠正 README 里的 npm 说法**：`@fengye_nobug/dsh-qq-bridge-neko` 从来没发布到 npm——`@fengye_nobug` 作用域没在 registry 注册过，`npm view` 与 `GET registry.npmjs.org/@fengye_nobug%2Fdsh-qq-bridge-neko` 都是 404（实测）。README 现在开头就写清「这个插件不发 npm」，安装只给本地 `.tgz` 与 GitHub tag 两条，并补了前置条件、NapCat 三步接通、装完为什么必须重启、包名与 Cordis `name` 的对应关系、与旧插件并存要注意的 `onebotUrl`、以及一节排障。`DESIGN.md` 的「用 npm 安装」改成「包名与安装」，同时修掉几处会让人照着执行却必然失败的 `dsh plugin add @fengye_nobug/dsh-qq-bridge-neko@0.2.5`；「不要和官方插件一起挂」改成「不要和上游插件同时连一个 OneBot」（上游 id 是 `qq-bridge`，本 fork 是 `qq-bridge-neko`，两者可并存，抢的只是同一条 WS）。`docs/awesome-dsh-plugin-entry.yml` 与 `HANDOVER.md` 的市场条目路径同步改成 `SmilessNEKO/dsh_qq_onebot_neko`，并注明不写 npm 字段。
+
 ## v1.1.0 — 2026-11-12
 
 - **修好一类「设置写不进去 / 读不到」的漏键**：`BridgeSettings`（设置接口的白名单，`knownSettingKeys()` 只认它里面的键）此前没有 8 个语音键，`readSettings()` 也没有输出这些键 → 界面上填了 `voiceEnabled` 等值会被直接丢掉、`s.voiceEnabled` 恒为 `undefined`，语音分支永远不触发。现已在 `BridgeSettings` / `readSettings()` / `legacySettings` 的 base 里全部补齐。同一个洞还漏了 `alwaysWakePrivate`（Schema 里有、`readSettings()` 没输出，导致关掉也不生效），一并补上。

@@ -212,12 +212,12 @@ qq_bridge_neko_napcat
 
 0.2.12 起，插件启动时会看 `$DSH_HOME/.agent-presets/dsh-qq-bridge/skills/qq-session-reply-style/references/reply-style.md`。里面若还有 “Emoji are welcome when they make the answer friendlier.”，只删这一句。这文件不在 npm 包的安装目录里，`dsh plugin add` 不会顺手改它；人设安装时整份复制到 `$DSH_HOME/.agent-presets`，所以要等新版本的插件进程起来才写回。文件不存在就不创建。不要为了这句话删掉整个人设目录，本插件不会把人设的其它文件补回去。
 
-1. 设置卡片里先点「检查更新」。有新正式版时出现「更新到 vX.Y.Z」。点下去优先执行 `dsh plugin --profile web add @fengye_nobug/dsh-qq-bridge-neko@X.Y.Z`，走这台机器上 pnpm 已经配置的 registry，然后重启面板。装完会把 profile、`$DSH_HOME/cordis.patch.yml`（写了 `qq-bridge-neko` 才改）和插件补丁里 `qq-bridge-neko` 的 `name` 改成磁盘上的包名，`config` 不动。设置还在，不改 NapCat。重启后刷新页面；登录口令可能会变。
-2. 自己执行同一条命令。npm 上已经发出的是 `@fengye_nobug/dsh-qq-bridge-neko@0.2.5`。自己装不会自动改 profile 里的旧 `name`。
-3. 指定 GitHub tag：`dsh plugin --profile web add github:SmilessNEKO/dsh_qq_onebot_neko#vX.Y.Z`
+1. 设置卡片里先点「检查更新」。有新正式版时出现「更新到 vX.Y.Z」。点下去先试 `dsh plugin --profile web add @fengye_nobug/dsh-qq-bridge-neko@X.Y.Z`（走这台机器上 pnpm 已经配置的 registry），然后重启面板。装完会把 profile、`$DSH_HOME/cordis.patch.yml`（写了 `qq-bridge-neko` 才改）和插件补丁里 `qq-bridge-neko` 的 `name` 改成磁盘上的包名，`config` 不动。设置还在，不改 NapCat。重启后刷新页面；登录口令可能变。
+2. 自己执行同一条命令。⚠️ 这个包**不在 npm 上**（`@fengye_nobug` 这个作用域没在 registry 注册过，查询恒为 404），所以手动执行它会失败——手动装请用第 3 条。自己装不会自动改 profile 里的旧 `name`。
+3. 指定 GitHub tag：`dsh plugin --profile web add github:SmilessNEKO/dsh_qq_onebot_neko#vX.Y.Z`。这是**实际可用**的装法。
 4. 卸掉再装，然后重启。
 
-无作用域名字发不出去。第 1 步如果发现 registry 里没有 `@fengye_nobug/dsh-qq-bridge-neko` 的这一版，会改从 GitHub 下载该标签的官方源码包：先 `github.com`，连不上再试同一标签的 `codeload.github.com`，然后交给 `dsh plugin add`。v0.2.4 及更早标签里的 `package.json` 仍是无作用域名，这种源码包仍然能装，Cordis 的 `name` 也保持 `dsh-qq-bridge-neko`。v0.2.5 的 `package.json` 已是作用域包，但补丁里的 `name` 还是旧的，所以会 404。插件不写死第三方镜像。registry 里已经有比当前新的正式版时，检查和安装不再访问 GitHub。
+包名只是安装目录与模块解析的标识，不代表 registry 上有这个包。第 1 步里 npm 那一次必然读到 404，于是改从 GitHub 下载该标签的官方源码包：先 `github.com`，连不上再试同一标签的 `codeload.github.com`，然后交给 `dsh plugin add`。v0.2.4 及更早标签里的 `package.json` 是无作用域名，这种源码包仍然能装，Cordis 的 `name` 也保持 `dsh-qq-bridge-neko`；v1.0.0 起是作用域包名，卡片上的「检查更新」会一并把旧 `name` 改成新包名。插件不写死第三方镜像。
 
 从 0.2.5 点「更新」时，执行的还是那一版里的安装程序，不会改 profile，也不会自己重启。若设置页变成 HTTP 404，把 profile 和插件目录里 `qq-bridge-neko` 的 `name` 改成 `@fengye_nobug/dsh-qq-bridge-neko`，再重启 dsh-web。这一版（0.2.7）自己跑一键更新时会改包名，并在装完后自动重启。
 
@@ -229,20 +229,24 @@ qq_bridge_neko_napcat
 
 想让 npm 走镜像，把 npm / pnpm 的 registry 配成你自己的镜像。插件只在没读到配置时用 `https://registry.npmjs.org/`。
 
-### 不要和官方插件一起挂
+### 不要和上游插件同时连一个 OneBot
 
-官方仓库是 [sj244/dsh-qq-bridge](https://github.com/sj244/dsh-qq-bridge)。两边的 Cordis id 都是 `qq-bridge-neko`，连的是同一个 OneBot。一起装会抢这条连接，消息对不上。只用其中一个。
+上游仓库是 [sj244/dsh-qq-bridge](https://github.com/sj244/dsh-qq-bridge)，它的 Cordis id 是 `qq-bridge`。本 fork 的 id 是 `qq-bridge-neko`，所以两者**可以并存**（宿主不会按 id 去重）。但两边都连 OneBot 时**不要填同一个 `onebotUrl`**：同一个 NapCat 的正向 WebSocket 被两边抢，消息会丢、会对不上。要同时跑就开两个端口；只用一个就卸掉另一边。
 
-从官方换成这个 fork 时，包名一般是 `dsh-qq-bridge`。下面没有真实路径，profile 用你自己的：
+从上游换到这个 fork 时，上游包名一般是 `dsh-qq-bridge`。下面没有真实路径，profile 用你自己的：
 
 ```sh
 dsh plugin --profile web remove dsh-qq-bridge
-dsh plugin --profile web add @fengye_nobug/dsh-qq-bridge-neko@0.2.5
+dsh plugin --profile web add "<本地 .tgz 的绝对路径>"
 ```
 
-连不上 npm 时，把上面第二条换成 `dsh plugin --profile web add github:SmilessNEKO/dsh_qq_onebot_neko#v0.2.5`。
+没有本地包时用 GitHub tag：
 
-然后重启 dsh-web。profile 里原来按 `id: qq-bridge-neko` 写的覆盖可以留着。若其中有 `name`，写成 `@fengye_nobug/dsh-qq-bridge-neko`，不要留着 `dsh-qq-bridge-neko` 或 `dsh-qq-bridge`。`list` 里如果包名不是 `dsh-qq-bridge`，卸你看到的那一个官方包，不要卸别的插件。
+```sh
+dsh plugin --profile web add github:SmilessNEKO/dsh_qq_onebot_neko#v1.1.0
+```
+
+然后重启 dsh-web。profile 里原来按 `id: qq-bridge-neko` 写的覆盖可以留着。若其中有 `name`，写成 `@fengye_nobug/dsh-qq-bridge-neko`，不要留着 `dsh-qq-bridge-neko` 或 `dsh-qq-bridge`。`list` 里如果包名不是 `dsh-qq-bridge`，卸你看到的那一个上游包，不要卸别的插件。
 
 ### 开发期
 
@@ -262,39 +266,40 @@ New-Item -ItemType Junction `
 
 每次改完插件代码，重启 `dsh web` 再刷新页面。
 
-## 用 npm 安装
+## 包名与安装
 
-`dsh plugin` 是 pnpm 的包装。安装和一键更新都用作用域包名。npm 上已经发出的是 0.2.5：
+`dsh plugin` 是 pnpm 的包装。安装和一键更新都用作用域包名 `@fengye_nobug/dsh-qq-bridge-neko`，**但这个包没有发布到 npm**：`@fengye_nobug` 这个作用域没在 registry 注册过，`npm view` / registry 查询恒为 404。包名只用于安装目录和 Cordis 按名字解析模块。
 
-```sh
-dsh plugin --profile web add @fengye_nobug/dsh-qq-bridge-neko@0.2.5
-```
-
-无作用域的 `dsh-qq-bridge-neko` 发不出去，npm 认为它和已有的 `dsh-qqbot` 太像。不要写成 `dsh plugin add dsh-qq-bridge-neko@版本`。
-
-registry 里还没有要装的那一版时（源码 0.2.7 尚未发布），改用 GitHub：
+所以下面这条**在没发布前装不上**，留在文档里是为了说明一键更新第一步试的是什么：
 
 ```sh
-dsh plugin --profile web add github:SmilessNEKO/dsh_qq_onebot_neko#v0.2.5
+dsh plugin --profile web add @fengye_nobug/dsh-qq-bridge-neko@1.1.0
 ```
 
-一键更新的顺利路径是 npm，不再要求打开 github.com。某台机器上的 `dsh plugin --help` 如果只认 `github:`，就继续用 Release tag。想用镜像，配置这台机器的 npm / pnpm registry，不要等插件内置一个镜像地址。
+实际装法只有两种——本地 `.tgz`，或 GitHub tag：
 
-发版见 [README 的更新](./README.md#更新)。
+```sh
+dsh plugin --profile web add "<本地 .tgz 的绝对路径>"
+dsh plugin --profile web add github:SmilessNEKO/dsh_qq_onebot_neko#v1.1.0
+```
+
+一键更新走的是后者：先试 npm（必然 404），再下载同一标签的官方源码包（`github.com` → `codeload.github.com`），交给 `dsh plugin add`。某台机器上的 `dsh plugin --help` 如果只认 `github:`，就继续用 Release tag。想用镜像，配置这台机器的 npm / pnpm registry，不要等插件内置一个镜像地址。
+
+发版见 [README 的发版](./README.md#发版本地维护)。
 
 `files` 是白名单。Node 要求 `>=22`（`engines`）。`@deepseek-ai/*` 仍是 `peerDependencies`，由 DSH 的 profile 提供，不要改成普通 dependencies。
 
 ## 插件市场
 
-[awesome-dsh-plugin](https://github.com/awesome-dsh-plugin/awesome-dsh-plugin) 里已经有上游 [sj244/dsh-qq-bridge](https://github.com/sj244/dsh-qq-bridge)。本 fork 还没进索引。安装不必等收录，用上面的 `@fengye_nobug/dsh-qq-bridge-neko` 即可。
+[awesome-dsh-plugin](https://github.com/awesome-dsh-plugin/awesome-dsh-plugin) 里已经有上游 [sj244/dsh-qq-bridge](https://github.com/sj244/dsh-qq-bridge)。本 fork 还没进索引。安装不必等收录，用上面的 `.tgz` 或 GitHub tag 即可。
 
 要申请收录，按[贡献说明](https://github.com/awesome-dsh-plugin/awesome-dsh-plugin/blob/main/contributing.md)做：
 
 1. 在 GitHub 仓库页面加上 topic `dsh-plugin`。这个 topic 不会跟着 git 走，要在网页上加。
-2. 把本仓库的 [`docs/awesome-dsh-plugin-entry.yml`](./docs/awesome-dsh-plugin-entry.yml) 复制成对方仓库的 `data/plugins/yunfengnobug__dsh-qq-bridge-neko.yml`，提一个 PR。不要改上游那条。一个 PR 最多 3 条。对方的 README 由脚本生成，不要手改。
-3. 描述只写插件实际做的事。`repository` 必须指回本仓库（`package.json` 里已经是了）。yml 里不要手写 `npm:`，市场自己从 registry 认。
+2. 把本仓库的 [`docs/awesome-dsh-plugin-entry.yml`](./docs/awesome-dsh-plugin-entry.yml) 复制成对方仓库的 `data/plugins/smilessneko__dsh_qq_onebot_neko.yml`，提一个 PR。不要改上游那条。一个 PR 最多 3 条。对方的 README 由脚本生成，不要手改。
+3. 描述只写插件实际做的事。`repository` 必须指回本仓库（`package.json` 里已经是了）。
 
-npm 上已经有 `@fengye_nobug/dsh-qq-bridge-neko`（目前是 0.2.5）。无作用域名发不出去。发到 npm 之后，市场才能显示下载量；不发也能收录。
+没发 npm 也能收录，只是市场显示不出下载量；`npm:` 字段不要手写，市场自己从 registry 认，认不到就不显示。
 
 用着有问题，到 [Issues](https://github.com/SmilessNEKO/dsh_qq_onebot_neko/issues/new/choose) 选模板：**连不上**、**不回**、**发不出**。不要在 Issue 里贴真实 QQ 号、群号、token 或服务器地址。
 

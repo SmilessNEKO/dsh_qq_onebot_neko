@@ -1,6 +1,6 @@
 # 交接说明
 
-> 这份交接说明来自上游 sj244/dsh-qq-bridge。本 fork 的 npm 包名是 **`@fengye_nobug/dsh-qq-bridge-neko`**（无作用域的 `dsh-qq-bridge-neko` 发不出去）。界面显示名是「QQ 桥接 Neko」。Cordis 插件 id 是 `qq-bridge-neko`（独立 id，与旧 `qq-bridge` 插件不同、可并存）。文中的本机路径、会话 id 若出现占位符，不要换成真实环境。
+> 这份交接说明来自上游 sj244/dsh-qq-bridge。本 fork 的包名是 **`@fengye_nobug/dsh-qq-bridge-neko`**（仓库 `package.json` 的 `name`，只用于安装目录与 Cordis 模块解析；**这个包没有发布到 npm**，`@fengye_nobug` 作用域未在 registry 注册，查询恒为 404）。安装只走本地 `.tgz` 或本仓库 GitHub tag。界面显示名是「QQ 桥接 Neko」。Cordis 插件 id 是 `qq-bridge-neko`（独立 id，与上游 `qq-bridge` 不同、可并存）。文中的本机路径、会话 id 若出现占位符，不要换成真实环境。
 
 > 交接对象：接手本项目的专门 agent
 > 交接人：DSH 工作区会话 `<HANDOVER_SESSION>` 的 agent
@@ -862,7 +862,7 @@ window.__ModuleLoader__.load({
 ## 16. 上架插件市场（awesome-dsh-plugin）
 
 规范：<https://github.com/awesome-dsh-plugin/awesome-dsh-plugin/blob/main/contributing.md>
-条目文件：`docs/awesome-dsh-plugin-entry.yml`。本 fork 若单独上架，复制成 `data/plugins/yunfengnobug__dsh-qq-bridge-neko.yml` 再开 PR。上游 sj244/dsh-qq-bridge 若已有条目，保留原文件，不要覆盖。
+条目文件：`docs/awesome-dsh-plugin-entry.yml`。本 fork 若单独上架，复制成 `data/plugins/smilessneko__dsh_qq_onebot_neko.yml` 再开 PR。上游 sj244/dsh-qq-bridge 若已有条目，保留原文件，不要覆盖。
 
 **要求对照**：
 
@@ -888,16 +888,16 @@ window.__ModuleLoader__.load({
 - `HANDOVER.md` 一处真实本机路径 `C:\Users\<用户名>\…` → `%USERPROFILE%\…`；
 - 一处真实会话 id 与群友聊天内容 → `<TARGET_SESSION_ID>` / 占位昵称。
 - **发布前每次跑一遍**：`git grep -n -i -E "<关键词>"`，关键词至少覆盖 QQ 号、群号、会话 id、用户名、本机路径。
-- `package.json` 去掉 `private: true`（留着就没法发 npm；规范说 npm 可选，但别把门焊死）。
+- `package.json` 去掉 `private: true`（留着就没法发 npm；规范说 npm 可选，但别把门焊死）。当前 `private` 已去掉，`publishConfig.access` 是 `public`。
 
 **已完成 / 尚未做**：
 - ✅ `screenshots.json`（市场详情页截图）：`assets/market-cover.jpg` —— 用的是**用户自己拍的**那张
   “群里发一句‘总结这个仓库’→ 机器人一行回复”的聊天截图（更贴合“当群友玩”的卖点）。
   按规范放在**本项目仓库**里（相对路径），市场下一次构建自动取；以后换图推本项目仓库即可。
   `test-smoke.mjs` 会校验路径规格 + **文件真实存在** —— 规范点名过“路径写错只会在市场里静默 404”。
-- ⏳ 发布到 npm（可选，预构建安装可跳过构建授权）；要发的话 `repository` 必须指回本仓库（已经是了）。
+- ❌ **不发布到 npm**：`@fengye_nobug` 作用域没在 npm registry 注册过，`@fengye_nobug/dsh-qq-bridge-neko` 查询恒为 404（已实测）。仓库里这个 `name` 只用于安装目录与 Cordis 模块解析。市场收录不需要 npm；`.github/workflows/npm-publish.yml` 是手动可选通道，有 token 也发不出去。
 
-**提交方式**：把 `docs/awesome-dsh-plugin-entry.yml` 复制成 `data/plugins/yunfengnobug__dsh-qq-bridge-neko.yml`，
+**提交方式**：把 `docs/awesome-dsh-plugin-entry.yml` 复制成 `data/plugins/smilessneko__dsh_qq_onebot_neko.yml`，
 推到本仓库 fork 的分支后开 PR。一个 PR 最多 3 条（本项目 1 条），市场 README 由脚本生成、别手改。
 中文用户看条目里的 `description.zh`；`description.en` 是目录规范要求的英文字段。
 
