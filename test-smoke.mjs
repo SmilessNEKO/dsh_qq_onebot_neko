@@ -358,7 +358,8 @@ check(
 }
 
 console.log('registered tools:', registered.map((t) => t.name).join(', '))
-check('apply 未抛错且注册了 8 个工具', registered.length === 8)
+// 工具数量跟着实际注册走：status / transport / simulate / send / sticker / napcat / voice / sing / listen。
+check('apply 未抛错且注册了 9 个工具', registered.length === 9, String(registered.length))
 
 const sim = registered.find((t) => t.name === 'qq_bridge_neko_simulate')
 const status = registered.find((t) => t.name === 'qq_bridge_neko_status')
@@ -1391,7 +1392,7 @@ function sawSentText(s) {
     'modelChain', 'modelChainFailures',
     'newSessionDir', 'newSessionModel', 'newSessionPreset',
     'replyGapMinMs', 'replyGapMaxMs', 'burstWaitMs', 'listenIdleMs',
-    'destinationProfiles', 'alwaysWakePrivate',
+    'destinationProfiles', 'alwaysWakePrivate', 'fallbackToOwnerPrivate',
     'autoStartNapcat', 'autoStartNapcatDelayMs',
   ]
   const absent = want.filter((k) => !keys.includes(k))
@@ -1529,7 +1530,9 @@ function sawSentText(s) {
       ),
       JSON.stringify(slotInjects),
     )
-    check('四个 slot 各自的卡片都注册了', cards.length === 4, String(cards.length))
+    // 5 个挂载点：settings.plugins.tab / settings.plugin.item / plugins.tab /
+    // sidebar.footer.action（左下角入口）/ plugins.detail.section。
+    check('五个 slot 各自的卡片都注册了', cards.length === 5, String(cards.length))
     const oldCard = cards.find((c) => c.options.name === 'settings.plugin.item')
     const newCard = cards.find((c) => c.options.name === 'settings.plugins.tab')
     check(
@@ -1686,10 +1689,10 @@ function sawSentText(s) {
         },
       }
       mod.apply(fakeCtx2)
-      check('只有 webUiSettings 时也能注册（0.2.0 的服务名）', cards2.length === 4, String(cards2.length))
+      check('只有 webUiSettings 时也能注册（0.2.0 的服务名）', cards2.length === 5, String(cards2.length))
       check(
         '两个服务都在时只注册一次（不重复挂卡片）',
-        cards.length === 4 && cards2.length === 4,
+        cards.length === 5 && cards2.length === 5,
         `旧 ctx=${cards.length} 新 ctx=${cards2.length}`,
       )
     }
@@ -1713,7 +1716,7 @@ function sawSentText(s) {
         },
       }
       mod.apply(fakeCtx3)
-      check('没有设置服务、inject 不回调时也立刻挂上卡片', cards3.length === 4, String(cards3.length))
+      check('没有设置服务、inject 不回调时也立刻挂上卡片', cards3.length === 5, String(cards3.length))
       const detail = cards3.find((c) => c.options.name === 'plugins.detail.section')
       check('插件详情：没带 subject 时仍给出卡片', typeof detail?.cell === 'function' && Boolean(detail.cell()))
       check(
@@ -5813,6 +5816,102 @@ function sawSentText(s) {
     else resolvedSettings.delivery = prevDelivery
     fakeAgent = prevAgent
     mainSessionHandler({ id: 'session-smoke' }, { type: 'turn/end', data: { reason: { kind: 'completed' } } })
+  }
+}
+
+// 兜底目的地：`fallbackToOwnerPrivate` 开着时，没指定发给谁就发主人私聊。
+// 关着（默认）沿用最后一次入站消息 —— 在群里聊就发回那个群。
+// 真正会走到这一层的只有「没被 QQ 消息钉住的那一轮」：DSH 界面里顺手调工具最常见。
+{
+  const prev = {
+    groupWhitelist: resolvedSettings.groupWhitelist,
+    whitelist: resolvedSettings.whitelist,
+    ownerWhitelist: resolvedSettings.ownerWhitelist,
+    replyMode: resolvedSettings.replyMode,
+    replyWithQuote: resolvedSettings.replyWithQuote,
+    fallbackToOwnerPrivate: resolvedSettings.fallbackToOwnerPrivate,
+  }
+  const sendTool = registered.find((t) => t.name === 'qq_bridge_neko_send')
+  const simTool = registered.find((t) => t.name === 'qq_bridge_neko_simulate')
+  const exec = { agent: { id: 'session-smoke', session: { id: 'session-smoke' } } }
+  const framesWith = (needle) => {
+    const hits = []
+    for (const socket of qqSockets) {
+      for (const frame of socket.sent ?? []) {
+        if (frame.action !== 'send_group_msg' && frame.action !== 'send_private_msg') continue
+        const segs = Array.isArray(frame.params?.message) ? frame.params.message : []
+        const text = segs.filter((part) => part?.type === 'text').map((part) => String(part.data?.text ?? '')).join('')
+        if (text.includes(needle)) hits.push(frame)
+      }
+    }
+    return hits
+  }
+  // 起一个「DSH 界面里的」新轮：不是 QQ 唤醒的，所以出站闸门会先要一次确认。
+  const dshTurn = (n) => {
+    mainSessionHandler({ id: 'session-smoke' }, { type: 'turn/end', data: { reason: { kind: 'completed' } } })
+    mainSessionHandler({ id: 'session-smoke' }, { type: 'user/message', data: { source: { kind: 'user' }, content: [{ type: 'text', text: '在 DSH 里说话' }] } })
+    mainSessionHandler({ id: 'session-smoke' }, { type: 'turn/start', data: { turn: n } })
+  }
+  try {
+    resolvedSettings.groupWhitelist = ['111']
+    resolvedSettings.whitelist = ['1001']
+    resolvedSettings.ownerWhitelist = ['1001']
+    resolvedSettings.replyMode = 'marker'
+    resolvedSettings.replyWithQuote = true
+    await simTool.execute({ text: '群里闲聊', userId: '1001', groupId: '111', messageId: 'mg' })
+
+    resolvedSettings.fallbackToOwnerPrivate = true
+    dshTurn(1)
+    const asked = JSON.parse(await sendTool.execute({ text: '兜底发主人' }, exec))
+    check('兜底：非 QQ 轮第一次只回确认、一个字不发', asked.needsConfirm === true && asked.sent === 0 && framesWith('兜底发主人').length === 0, JSON.stringify(asked))
+    const sent = JSON.parse(await sendTool.execute({ text: '兜底发主人' }, exec))
+    const frame = framesWith('兜底发主人').at(-1)
+    check(
+      '兜底开：没指定目的地 → 发主人私聊',
+      sent.sent === 1 && frame?.action === 'send_private_msg' && String(frame?.params?.user_id) === '1001',
+      JSON.stringify(frame?.params),
+    )
+    check(
+      '兜底开：改写目的地时不带引用段（引用的是群里的消息）',
+      frame?.params?.message?.[0]?.type === 'text',
+      JSON.stringify(frame?.params?.message?.[0]),
+    )
+
+    // 关掉开关 → 回到「沿用最后一次入站」，并照旧带引用。
+    resolvedSettings.fallbackToOwnerPrivate = false
+    dshTurn(2)
+    await sendTool.execute({ text: '按最后入站' }, exec)
+    const off = JSON.parse(await sendTool.execute({ text: '按最后入站' }, exec))
+    const offFrame = framesWith('按最后入站').at(-1)
+    check(
+      '兜底关：沿用最后一次入站目的地（群 111）',
+      off.sent === 1 && offFrame?.action === 'send_group_msg' && String(offFrame?.params?.group_id) === '111',
+      JSON.stringify(offFrame?.params),
+    )
+    check(
+      '兜底关：照旧带上最后一条入站的引用',
+      offFrame?.params?.message?.[0]?.type === 'reply' && String(offFrame?.params?.message[0]?.data?.id) === 'mg',
+      JSON.stringify(offFrame?.params?.message?.[0]),
+    )
+
+    // 开着但主人号是空的 → 不能把消息凭空丢掉，回落最后一次入站。
+    resolvedSettings.fallbackToOwnerPrivate = true
+    resolvedSettings.ownerWhitelist = []
+    dshTurn(3)
+    await sendTool.execute({ text: '主人号是空的' }, exec)
+    const noOwner = JSON.parse(await sendTool.execute({ text: '主人号是空的' }, exec))
+    const noOwnerFrame = framesWith('主人号是空的').at(-1)
+    check(
+      '兜底开但主人号为空：回落最后一次入站，不丢消息',
+      noOwner.sent === 1 && noOwnerFrame?.action === 'send_group_msg' && String(noOwnerFrame?.params?.group_id) === '111',
+      JSON.stringify(noOwnerFrame?.params),
+    )
+  } finally {
+    mainSessionHandler({ id: 'session-smoke' }, { type: 'turn/end', data: { reason: { kind: 'completed' } } })
+    for (const [k, v] of Object.entries(prev)) {
+      if (v === undefined) delete resolvedSettings[k]
+      else resolvedSettings[k] = v
+    }
   }
 }
 

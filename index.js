@@ -49,6 +49,7 @@ import {
   DEFAULT_FFMPEG_TIMEOUT_MS,
   DEFAULT_FEIYU_BASE_URL,
   DEFAULT_FEIYU_POLL_INTERVAL_MS,
+  DEFAULT_FEIYU_IDLE_STOP_MINUTES,
   DEFAULT_FEIYU_SING_TIMEOUT_MS,
   DEFAULT_FEIYU_STYLE,
   DEFAULT_FEIYU_TIMEOUT_MS,
@@ -59,7 +60,10 @@ import {
   DEFAULT_VOICE_MAX_CHARS,
   DEFAULT_VOICE_MAX_SONG_CHARS,
   FEIYU_STYLES,
+  ensureFeiyuService,
   feiyuSing,
+  noteFeiyuActivity,
+  resetFeiyuServices,
   hasVoiceBlock,
   normalizeFeiyuStyle,
   recordSegment,
@@ -287,6 +291,11 @@ export const Config = Schema.object({
   feiyuPollIntervalMs: Schema.number().default(DEFAULT_FEIYU_POLL_INTERVAL_MS).description('问肥鱼服务「好了没」的间隔（毫秒）。默认 1000。'),
   feiyuSingTimeoutMs: Schema.number().default(DEFAULT_FEIYU_SING_TIMEOUT_MS).description('等肥鱼服务「唱完」的最长时间（毫秒）。唱歌比说话慢得多（SVS 推理 + 换声 + 混音），默认 600000。'),
   voiceMaxSongChars: Schema.number().default(DEFAULT_VOICE_MAX_SONG_CHARS).description('歌词最多多少字（一个音符一个字，一字多音用 _ 占位）。超过就拒唱。默认 400。'),
+  // ── 肥鱼服务的自动启停（插件自己管，不需要人盯着）──────────────────────────
+  feiyuAutoStart: Schema.boolean().default(true).description('肥鱼服务没起时，插件自己把它拉起来再合成（默认开）。关掉后服务没起就直接降级发文字。'),
+  feiyuServerDir: Schema.string().default('').description('肥鱼服务端目录（里面有 .venv 和 configs/voice_service.json）。自动启动要用它；留空 = 不自动启动。'),
+  feiyuPythonPath: Schema.string().default('').description('跑肥鱼服务的 python。留空 = 用服务端目录下的 .venv（Windows 的 Scripts\\python.exe / Linux 的 bin/python）。'),
+  feiyuIdleStopMinutes: Schema.number().default(DEFAULT_FEIYU_IDLE_STOP_MINUTES).description('肥鱼服务空闲多少分钟就自动停掉、释放显存。默认 10；填 0 = 一直开着。'),
   voiceMaxChars: Schema.number().default(DEFAULT_VOICE_MAX_CHARS).description('单条语音最多多少字。超过就合成失败、降级发文字。默认 120。'),
   voiceCacheDir: Schema.string().default('').description('合成好的音频放哪（mp3 / wav）。留空 = $DSH_HOME/qq-bridge-neko-voice。同一段话 + 同引擎同参数只合成一次。'),
   listenIdleMs: Schema.number().default(DEFAULT_LISTEN_IDLE_MS).description('会话跟随期间，这么久没有新消息就自动停听。默认 120000（2 分钟）。'),
@@ -299,6 +308,7 @@ export const Config = Schema.object({
   whitelist: Schema.array(Schema.string()).default([]).description('哪些私聊可以叫醒。留空 = 任何私聊都不叫醒。'),
   groupWhitelist: Schema.array(Schema.string()).default([]).description('哪些群可以叫醒。留空 = 任何群都不叫醒。'),
   ownerWhitelist: Schema.array(Schema.string()).default([]).description('主人 QQ。这些号才能在 QQ 里用「白名单」命令。留空 = 谁都不能用。'),
+  fallbackToOwnerPrivate: Schema.boolean().default(false).description('没指定发给谁时，默认发给主人私聊。关着 = 沿用最后一次入站消息的目的地（在群里聊就发回那个群）。'),
   checkUpdateOnStart: Schema.boolean().default(false).description('启动时向 GitHub 检查一次有没有新版本。默认关。只在日志里提示，不会自动安装。'),
 })
 
@@ -315,6 +325,7 @@ const BridgeSettings = Schema.object({
   whitelist: Schema.array(Schema.string()).default([]).description('哪些私聊可以叫醒。留空 = 任何私聊都不叫醒。'),
   groupWhitelist: Schema.array(Schema.string()).default([]).description('哪些群可以叫醒。留空 = 任何群都不叫醒。'),
   ownerWhitelist: Schema.array(Schema.string()).default([]).description('主人 QQ。这些号才能在 QQ 里用「白名单」命令。留空 = 谁都不能用。'),
+  fallbackToOwnerPrivate: Schema.boolean().default(false).description('没指定发给谁时，默认发给主人私聊。关着 = 沿用最后一次入站消息的目的地（在群里聊就发回那个群）。'),
   checkUpdateOnStart: Schema.boolean().default(false).description('启动时向 GitHub 检查一次有没有新版本。默认关。只在日志里提示，不会自动安装。'),
   attachRecentChat: Schema.boolean().default(true).description('把没叫醒时的聊天一并带上。'),
   recentChatLimit: Schema.number().default(DEFAULT_RECENT_CHAT_LIMIT).description('附带最近几条（0–200）。'),
@@ -397,6 +408,11 @@ const BridgeSettings = Schema.object({
   feiyuPollIntervalMs: Schema.number().default(DEFAULT_FEIYU_POLL_INTERVAL_MS).description('问肥鱼服务「好了没」的间隔（毫秒）。默认 1000。'),
   feiyuSingTimeoutMs: Schema.number().default(DEFAULT_FEIYU_SING_TIMEOUT_MS).description('等肥鱼服务「唱完」的最长时间（毫秒）。唱歌比说话慢得多（SVS 推理 + 换声 + 混音），默认 600000。'),
   voiceMaxSongChars: Schema.number().default(DEFAULT_VOICE_MAX_SONG_CHARS).description('歌词最多多少字（一个音符一个字，一字多音用 _ 占位）。超过就拒唱。默认 400。'),
+  // ── 肥鱼服务的自动启停（插件自己管，不需要人盯着）──────────────────────────
+  feiyuAutoStart: Schema.boolean().default(true).description('肥鱼服务没起时，插件自己把它拉起来再合成（默认开）。关掉后服务没起就直接降级发文字。'),
+  feiyuServerDir: Schema.string().default('').description('肥鱼服务端目录（里面有 .venv 和 configs/voice_service.json）。自动启动要用它；留空 = 不自动启动。'),
+  feiyuPythonPath: Schema.string().default('').description('跑肥鱼服务的 python。留空 = 用服务端目录下的 .venv（Windows 的 Scripts\\python.exe / Linux 的 bin/python）。'),
+  feiyuIdleStopMinutes: Schema.number().default(DEFAULT_FEIYU_IDLE_STOP_MINUTES).description('肥鱼服务空闲多少分钟就自动停掉、释放显存。默认 10；填 0 = 一直开着。'),
   voiceMaxChars: Schema.number().default(DEFAULT_VOICE_MAX_CHARS).description('单条语音最多多少字。超过就降级发文字。默认 120。'),
   voiceCacheDir: Schema.string().default('').description('合成好的音频放哪（mp3 / wav）。留空 = $DSH_HOME/qq-bridge-neko-voice。同一段话 + 同引擎同参数只合成一次。'),
   // ── 每个 QQ 目的地的个性化 ────────────────────────────────────────────────
@@ -1271,6 +1287,7 @@ export function apply(ctx, config) {
         whitelist: config.whitelist ?? [],
         groupWhitelist: config.groupWhitelist ?? [],
         ownerWhitelist: config.ownerWhitelist ?? [],
+        fallbackToOwnerPrivate: config.fallbackToOwnerPrivate === true,
         checkUpdateOnStart: config.checkUpdateOnStart === true,
         onebotUrl: config.onebotUrl ?? '',
         accessTokenEnv: config.accessTokenEnv ?? '',
@@ -1304,6 +1321,10 @@ export function apply(ctx, config) {
         feiyuTimeoutMs: config.feiyuTimeoutMs ?? DEFAULT_FEIYU_TIMEOUT_MS,
         feiyuPollIntervalMs: config.feiyuPollIntervalMs ?? DEFAULT_FEIYU_POLL_INTERVAL_MS,
         feiyuSingTimeoutMs: config.feiyuSingTimeoutMs ?? DEFAULT_FEIYU_SING_TIMEOUT_MS,
+        feiyuAutoStart: config.feiyuAutoStart !== false,
+        feiyuServerDir: config.feiyuServerDir ?? '',
+        feiyuPythonPath: config.feiyuPythonPath ?? '',
+        feiyuIdleStopMinutes: config.feiyuIdleStopMinutes ?? DEFAULT_FEIYU_IDLE_STOP_MINUTES,
         voiceMaxSongChars: config.voiceMaxSongChars ?? DEFAULT_VOICE_MAX_SONG_CHARS,
         voiceMaxChars: config.voiceMaxChars ?? DEFAULT_VOICE_MAX_CHARS,
         voiceCacheDir: config.voiceCacheDir ?? '',
@@ -1339,6 +1360,8 @@ export function apply(ctx, config) {
       whitelist: (s.whitelist ?? config.whitelist ?? []).map(String),
       groupWhitelist: (s.groupWhitelist ?? config.groupWhitelist ?? []).map(String),
       ownerWhitelist: (s.ownerWhitelist ?? config.ownerWhitelist ?? []).map(String),
+      // 没指定发给谁时发哪里。默认关 = 沿用最后一次入站消息的目的地。
+      fallbackToOwnerPrivate: (s.fallbackToOwnerPrivate ?? config.fallbackToOwnerPrivate) === true,
       checkUpdateOnStart: (s.checkUpdateOnStart ?? config.checkUpdateOnStart) === true,
       attachRecentChat: (s.attachRecentChat ?? config.attachRecentChat) !== false,
       recentChatLimit: Math.max(
@@ -1385,6 +1408,10 @@ export function apply(ctx, config) {
       feiyuTimeoutMs: clampInt(s.feiyuTimeoutMs ?? config.feiyuTimeoutMs, 1000, 1800000, DEFAULT_FEIYU_TIMEOUT_MS),
       feiyuPollIntervalMs: clampInt(s.feiyuPollIntervalMs ?? config.feiyuPollIntervalMs, 50, 60000, DEFAULT_FEIYU_POLL_INTERVAL_MS),
       feiyuSingTimeoutMs: clampInt(s.feiyuSingTimeoutMs ?? config.feiyuSingTimeoutMs, 10000, 3600000, DEFAULT_FEIYU_SING_TIMEOUT_MS),
+      feiyuAutoStart: (s.feiyuAutoStart ?? config.feiyuAutoStart) !== false,
+      feiyuServerDir: String(s.feiyuServerDir ?? config.feiyuServerDir ?? '').trim(),
+      feiyuPythonPath: String(s.feiyuPythonPath ?? config.feiyuPythonPath ?? '').trim(),
+      feiyuIdleStopMinutes: clampInt(s.feiyuIdleStopMinutes ?? config.feiyuIdleStopMinutes, 0, 1440, DEFAULT_FEIYU_IDLE_STOP_MINUTES),
       voiceMaxSongChars: clampInt(s.voiceMaxSongChars ?? config.voiceMaxSongChars, 1, 4000, DEFAULT_VOICE_MAX_SONG_CHARS),
       ttsModelDir: String(s.ttsModelDir ?? config.ttsModelDir ?? '').trim(),
       ttsSid: Number.isFinite(Number(s.ttsSid ?? config.ttsSid)) ? Number(s.ttsSid ?? config.ttsSid) : 0,
@@ -4367,6 +4394,13 @@ export function apply(ctx, config) {
       style: normalizeFeiyuStyle(overrides.style ?? s?.feiyuStyle),
       ffmpegPath: String(s?.ffmpegPath ?? '').trim(),
       pollIntervalMs: Number(s?.feiyuPollIntervalMs) > 0 ? Number(s.feiyuPollIntervalMs) : DEFAULT_FEIYU_POLL_INTERVAL_MS,
+      // 肥鱼服务的自动启停：服务没起就拉起来，闲下来自己停。设置里那四个键都在这儿生效。
+      // 用 `feiyu*` 前缀传：`pythonPath` 这个键名在 edge/sherpa 分支里是 ttsPythonPath，
+      // 不能复用；`synthesize()` 会在分派给 feiyuSynthesize 时把它们映射成无前缀名。
+      feiyuServerDir: String(s?.feiyuServerDir ?? '').trim(),
+      feiyuPythonPath: String(s?.feiyuPythonPath ?? '').trim(),
+      feiyuAutoStart: s?.feiyuAutoStart !== false,
+      feiyuIdleStopMs: Math.max(0, Math.floor(Number(s?.feiyuIdleStopMinutes ?? DEFAULT_FEIYU_IDLE_STOP_MINUTES) || 0)) * 60000,
       ...(provider === 'feiyu'
         ? { timeoutMs: Number(s?.feiyuTimeoutMs) > 0 ? Number(s.feiyuTimeoutMs) : DEFAULT_FEIYU_TIMEOUT_MS }
         : {}),
@@ -4374,10 +4408,30 @@ export function apply(ctx, config) {
     })
   }
 
+  /**
+   * 最后一级兜底目的地：**没指定发给谁、这一轮也没被钉住**时用它。
+   *
+   * - `fallbackToOwnerPrivate` 关着（默认）：沿用最后一次入站消息的目的地 —— 在群里聊就发回群。
+   * - 打开：改成主人私聊。主人 = `ownerWhitelist` 的第一个号（那本来就是"谁是主人"的唯一来源，
+   *   不另外加一个键去记第二个真相）。
+   *
+   * `ownerPrivate: true` 表示这次是**改写**了目的地，调用方据此丢掉引用 —— 引用的那条消息
+   * 在群里，而这条要发到私聊，带过去点开就是一条找不到的消息。
+   */
+  function fallbackDestination(s) {
+    if (s?.fallbackToOwnerPrivate === true) {
+      const owner = normalizeIdList(s.ownerWhitelist)[0]
+      if (owner) return { dest: { kind: 'private', userId: owner }, ownerPrivate: true }
+    }
+    return { dest: state.lastDestination ?? null, ownerPrivate: false }
+  }
+
   async function sendToQQ(text, destination, options) {
     const s = readSettings()
     const fallbackGate = gateOf(null)
-    const dest = destination ?? fallbackGate.currentTurnDestination ?? state.lastDestination
+    const pinned = destination ?? fallbackGate.currentTurnDestination
+    const fallback = fallbackDestination(s)
+    const dest = pinned ?? fallback.dest
     if (!dest?.kind) {
       logger.warn('outbound dropped: no destination yet (还没有任何非丢弃的入站消息)')
       return { sent: 0, dropped: true, reason: 'no-destination' }
@@ -4390,9 +4444,10 @@ export function apply(ctx, config) {
     const body = s.stripMarkdown ? stripMarkdown(text) : String(text)
     if (body === '') return { sent: 0, dropped: true, reason: 'empty' }
 
+    // 兜底改写成主人私聊时不带引用：那条消息不在这个目的地里。
     const quoteId = options && Object.prototype.hasOwnProperty.call(options, 'quoteMessageId')
       ? options.quoteMessageId
-      : (fallbackGate.currentTurnMessageId || state.lastMessageId)
+      : (pinned ? (fallbackGate.currentTurnMessageId || state.lastMessageId) : (fallback.ownerPrivate ? null : state.lastMessageId))
 
     // ── 语音：正文里出现 [语音]…[/语音] 且开关打开时，切成 text / voice 片段逐条发 ──
     // 开关关着时标记原样当文字（不静默吞字）；打开时按片段的**文字长度**分别判上限：
@@ -4436,6 +4491,10 @@ export function apply(ctx, config) {
     transport.start()
     return () => transport.dispose()
   })
+
+  // 肥鱼服务的空闲计时器随插件卸载一起收掉（否则重载插件会留下一个孤儿计时器）。
+  // 注意：**不在这里停服务** —— 插件卸载后服务还能被别人用，杀进程交给空闲计时器。
+  ctx.effect(() => () => resetFeiyuServices())
 
   // 只有“地址 / token 引用”变了才重连；改昵称、唤醒概率之类不该把连接掐了。
   let lastTransportKey = `${readSettings().onebotUrl}\u0000${readSettings().accessTokenEnv}`
@@ -4737,7 +4796,14 @@ export function apply(ctx, config) {
       // 被拒绝的（含超长）不落 outbox，否则台账里会多出一条 QQ 里根本没有的消息。
       // 被拒的结果记进独立的丢弃台账。
       const via = s.replyMode === 'always' ? 'always' : 'marker'
-      const outboundDest = turnDest || state.lastDestination
+      // 这一轮的目的地：被 QQ 钉住的就用它；没有钉住的（比如 DSH 界面里聊完顺手写了个标记块）
+      // 走同一个兜底函数 —— `fallbackToOwnerPrivate` 开着就发主人私聊，且不引用群里的那条。
+      // 用 `||` 而不是 `??`：turnDest 是 null 时要落到兜底，不能把 null 递进 sendToQQ。
+      const markerFallback = turnDest ? null : fallbackDestination(s)
+      const outboundDest = turnDest || markerFallback.dest
+      // 引用只在**同一目的地**里有意义：兜底改写成主人私聊时丢掉引用，
+      // 否则私聊里挂一条指向群里消息的 reply 段（点开是找不到的消息）。
+      const markerQuote = markerFallback?.ownerPrivate ? null : (turnMsgId || null)
       // 串行发、每条之间留一点间隔：分条发出要保证顺序，也让群里看起来像人连发。
       // 引用只挂在**第一条**上，避免每条都引同一句。
       ;(async () => {
@@ -4745,7 +4811,7 @@ export function apply(ctx, config) {
           const piece = blocks[i]
           try {
             const result = await sendToQQ(piece, outboundDest, {
-              quoteMessageId: i === 0 ? (turnMsgId || null) : null,
+              quoteMessageId: i === 0 ? markerQuote : null,
             })
             if (result?.dropped) {
               const detail = result.reason === 'too-long' ? `（${result.length} 字 > 上限 ${result.limit} 字）` : ''
@@ -5122,7 +5188,11 @@ export function apply(ctx, config) {
     if (g.currentTurnDestination) {
       return { dest: g.currentTurnDestination, quoteMessageId: g.currentTurnMessageId ?? null }
     }
-    return { dest: state.lastDestination, quoteMessageId: state.lastMessageId ?? null }
+    // 最后一级：`fallbackToOwnerPrivate` 开着就发主人私聊（此时不带引用 —— 要引的那条在群里），
+    // 关着沿用最后一次入站消息的目的地。
+    const fallback = fallbackDestination(readSettings())
+    if (fallback.ownerPrivate) return { dest: fallback.dest, quoteMessageId: null }
+    return { dest: fallback.dest, quoteMessageId: state.lastMessageId ?? null }
   }
 
   function outboundGate(action, sessionId) {
@@ -6489,6 +6559,11 @@ export function apply(ctx, config) {
         timeoutMs: Number(s.feiyuSingTimeoutMs) > 0 ? Number(s.feiyuSingTimeoutMs) : DEFAULT_FEIYU_SING_TIMEOUT_MS,
         pollIntervalMs: Number(s.feiyuPollIntervalMs) > 0 ? Number(s.feiyuPollIntervalMs) : DEFAULT_FEIYU_POLL_INTERVAL_MS,
         ffmpegPath: String(s.ffmpegPath ?? '').trim(),
+        // 自动启停：唱歌同样先确认服务活着（没活就拉起来），唱完重置空闲计时。
+        serverDir: String(s.feiyuServerDir ?? '').trim(),
+        pythonPath: String(s.feiyuPythonPath ?? '').trim(),
+        autoStart: s.feiyuAutoStart !== false,
+        idleStopMs: Math.max(0, Math.floor(Number(s.feiyuIdleStopMinutes ?? DEFAULT_FEIYU_IDLE_STOP_MINUTES) || 0)) * 60000,
       })
 
       let result

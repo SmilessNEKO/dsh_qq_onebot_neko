@@ -113,6 +113,12 @@ window.__ModuleLoader__.load({
         hint: '打开后，「主人 QQ」里的号发来的私聊一律回话，不按概率抽签。别人的私聊和所有群不受影响。',
       },
       {
+        key: 'fallbackToOwnerPrivate',
+        label: '没指定发给谁时发给主人私聊',
+        kind: 'boolean',
+        hint: '关着 = 沿用最后一次入站消息的目的地（在群里聊就发回那个群）。打开后，插件不知道该往哪发时一律发给「主人 QQ」的第一个号，群里的动静不会再把它带走。注意：显式指定群号 / 私聊号，或者被一条 QQ 消息钉住的回复，都不受影响。',
+      },
+      {
         key: 'whitelist',
         label: '哪些私聊可以叫醒',
         kind: 'list',
@@ -267,6 +273,30 @@ window.__ModuleLoader__.load({
         label: '一首歌最多几个字',
         kind: 'number',
         hint: '一个音符一个字，所以这就是最多唱多少个音符。15 秒的小曲约 10 个字，一分钟一百多字。默认 400。',
+      },
+      {
+        key: 'feiyuAutoStart',
+        label: '服务没起就自动拉起',
+        kind: 'boolean',
+        hint: '合成前先问一下本地声音服务；没开就自己把它启动起来再合成。关掉后服务没起就直接降级发文字。',
+      },
+      {
+        key: 'feiyuServerDir',
+        label: '声音服务目录',
+        kind: 'text',
+        hint: '服务端项目目录（里面有 .venv 与 configs/voice_service.json）。自动启动要用它；留空 = 不自动启动。',
+      },
+      {
+        key: 'feiyuPythonPath',
+        label: '跑服务的 python',
+        kind: 'text',
+        hint: '留空 = 用服务目录下的 .venv（Windows 的 Scripts\python.exe、Linux 的 bin/python）。',
+      },
+      {
+        key: 'feiyuIdleStopMinutes',
+        label: '空闲多久自动停',
+        kind: 'number',
+        hint: '分钟。这么久没有合成请求就把服务停掉、释放显存。默认 10；填 0 = 一直开着。只停插件自己启动的那个进程。',
       },
       {
         key: 'visionMode',
@@ -435,7 +465,7 @@ window.__ModuleLoader__.load({
       {
         id: 'wake',
         label: '唤醒',
-        keys: ['nicknames', 'wakeProbability', 'alwaysWakePrivate', 'whitelist', 'groupWhitelist', 'ownerWhitelist', 'atOnlyInGroup'],
+        keys: ['nicknames', 'wakeProbability', 'alwaysWakePrivate', 'fallbackToOwnerPrivate', 'whitelist', 'groupWhitelist', 'ownerWhitelist', 'atOnlyInGroup'],
       },
       {
         id: 'session',
@@ -496,6 +526,10 @@ window.__ModuleLoader__.load({
           'feiyuPollIntervalMs',
           'feiyuSingTimeoutMs',
           'voiceMaxSongChars',
+          'feiyuAutoStart',
+          'feiyuServerDir',
+          'feiyuPythonPath',
+          'feiyuIdleStopMinutes',
         ],
       },
       {
@@ -532,6 +566,10 @@ window.__ModuleLoader__.load({
       'feiyuPollIntervalMs',
       'feiyuSingTimeoutMs',
       'voiceMaxSongChars',
+      'feiyuAutoStart',
+      'feiyuServerDir',
+      'feiyuPythonPath',
+      'feiyuIdleStopMinutes',
     ])
 
     /** 当前是不是「肥鱼声音服务」那一套。 */

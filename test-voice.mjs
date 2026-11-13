@@ -22,17 +22,28 @@ import {
   DEFAULT_TTS_VOICE,
   DEFAULT_VOICE_MAX_SONG_CHARS,
   DEFAULT_VOICE_PROVIDER,
+  DEFAULT_FEIYU_IDLE_STOP_MINUTES,
+  DEFAULT_FEIYU_PROBE_TIMEOUT_MS,
+  DEFAULT_FEIYU_START_TIMEOUT_MS,
+  ensureFeiyuService,
   ensureRecordAudio,
   feiyuSing,
   feiyuSynthesize,
   hasVoiceBlock,
   normalizeFeiyuStyle,
   normalizeVoiceProvider,
+  noteFeiyuActivity,
+  probeFeiyuService,
+  resetFeiyuServices,
+  stopFeiyuService,
   recordSegment,
   splitVoiceBlocks,
   stripVoiceBlocks,
   synthesize,
   voiceCacheName,
+  VOICE_FILTER_CHAIN,
+  VOICE_OUTPUT_BITRATE,
+  VOICE_OUTPUT_SAMPLE_RATE,
   VOICE_PROVIDERS,
 } from './voice.js'
 
@@ -216,6 +227,13 @@ function startFeiyu(handler) {
     req.on('end', () => {
       const entry = { method: req.method, url: req.url, headers: req.headers, body }
       requests.push(entry)
+      // /health 由这里统一应答：真实服务上它免鉴权、永远 200。合成前插件会先探它，
+      // 探不到就会去自动拉起服务，测试里没必要掺这一层。
+      if (req.method === 'GET' && req.url === '/health') {
+        res.writeHead(200, { 'content-type': 'application/json' })
+        res.end(JSON.stringify({ status: 'ok', version: 'test' }))
+        return
+      }
       try {
         handler(entry, res, requests)
       } catch (error) {
@@ -291,8 +309,9 @@ function happyHandler(entry, res, requests) {
     check('产物是 .wav', r.path.endsWith('.wav'), r.path)
     check('第一次是现合成（cached=false）', r.cached === false)
   }
-  const post = svc.requests[0]
-  check('第一个请求是 POST /v1/speech', post?.method === 'POST' && post?.url === '/v1/speech', `${post?.method} ${post?.url}`)
+  const post = svc.requests.find((q) => q.method === 'POST' && q.url === '/v1/speech')
+  check('合成前先探过 /health', svc.requests.some((q) => q.url === '/health'))
+  check('提交任务是 POST /v1/speech', post?.method === 'POST' && post?.url === '/v1/speech', `${post?.method} ${post?.url}`)
   check('带 Bearer 鉴权头', post?.headers?.authorization === 'Bearer test-key')
   const sent = JSON.parse(post?.body ?? '{}')
   check('请求体带 voice/text/style', sent.voice === 'feiyu' && sent.text === text && sent.style === 'gentle', post?.body)
@@ -359,8 +378,18 @@ function happyHandler(entry, res, requests) {
   const dead = await startFeiyu((entry, res) => { res.end('') })
   const deadUrl = dead.baseUrl
   await dead.close()   // 端口关掉了，连它必失败
-  const r = await feiyuSynthesize('连不上这句', { cacheDir: dir, baseUrl: deadUrl, timeoutMs: 5000, pollIntervalMs: 20 })
-  check('连不上 → connect-failed（不抛）', r.ok === false && r.reason.startsWith('connect-failed'), r.reason)
+  // 关掉自动启动：探活失败就该直接失败，而不是去拉一个不存在的服务。
+  const r = await feiyuSynthesize('连不上这句', {
+    cacheDir: dir, baseUrl: deadUrl, timeoutMs: 5000, pollIntervalMs: 20, autoStart: false,
+  })
+  check('连不上 + 不开自动启动 → service-down（不抛）', r.ok === false && r.reason.startsWith('service-down'), r.reason)
+  // 服务起着、但 POST 时连接被掐：这才是 connect-failed。
+  const flaky = await startFeiyu((entry, res, requests) => {
+    res.destroy()
+  })
+  const rf = await feiyuSynthesize('半路断开这句', { cacheDir: dir, baseUrl: flaky.baseUrl, timeoutMs: 3000, pollIntervalMs: 20 })
+  check('连接被掐 → connect-failed（不抛）', rf.ok === false && rf.reason.startsWith('connect-failed'), rf.reason)
+  await flaky.close()
 }
 
 // 22) 超时：任务永远 running，到点必须放弃
@@ -634,6 +663,293 @@ function singHandler(entry, res, requests) {
   const r3 = await feiyuSing({ ...opts, lyrics: '换一句词', baseUrl: third.baseUrl })
   check('换歌词 → 不命中旧缓存，真去请求', r3.ok === true && r3.cached === false && third.requests.length > 0)
   await third.close()
+}
+
+// ── 自动启停：探活 / 拉起 / 去重 / 空闲自停 ────────────────────────────────
+// 全程用假的 fetch + 假的 spawn，不碰真服务、不占端口、不真起进程。
+
+/** 一个可编程的假环境：health 通不通、被 spawn 几次、shutdown 被调几次。 */
+function fakeWorld() {
+  const state = { up: false, spawns: [], shutdownCalls: 0, killed: 0 }
+  const fetchImpl = async (target) => {
+    const u = String(target)
+    if (u.endsWith('/health')) {
+      if (!state.up) {
+        const error = new Error('fetch failed')
+        error.cause = { code: 'ECONNREFUSED' }
+        throw error
+      }
+      return new Response(JSON.stringify({ status: 'ok', version: 'stub' }), {
+        status: 200, headers: { 'content-type': 'application/json' },
+      })
+    }
+    if (u.endsWith('/v1/admin/shutdown')) {
+      state.shutdownCalls += 1
+      state.up = false
+      return new Response(JSON.stringify({ status: 'shutting-down' }), { status: 200 })
+    }
+    return new Response('{}', { status: 404 })
+  }
+  const spawnImpl = (spec) => {
+    state.spawns.push(spec)
+    state.up = true
+    return { unref() {}, exitCode: null, signalCode: null, kill() { state.killed += 1; state.up = false } }
+  }
+  return { state, fetchImpl, spawnImpl }
+}
+
+// 35) 常量：滤镜链与输出规格
+{
+  check('滤镜链带高通/低通/两段 EQ/压缩/响度', ['highpass', 'lowpass', 'equalizer', 'acompressor', 'loudnorm']
+    .every((x) => VOICE_FILTER_CHAIN.includes(x)), VOICE_FILTER_CHAIN)
+  check('输出 44.1kHz（loudnorm 会升到 192k，必须显式收回来）', VOICE_OUTPUT_SAMPLE_RATE === 44100)
+  check('码率 96k', VOICE_OUTPUT_BITRATE === '96k')
+  check('空闲默认 10 分钟', DEFAULT_FEIYU_IDLE_STOP_MINUTES === 10)
+  check('启动等 60 秒、探活 3 秒', DEFAULT_FEIYU_START_TIMEOUT_MS === 60000 && DEFAULT_FEIYU_PROBE_TIMEOUT_MS === 3000)
+}
+
+// 36) 探活：通 → ok + version；不通 → service-down 带错误码
+{
+  const ok = fakeWorld()
+  ok.state.up = true
+  const a = await probeFeiyuService({ baseUrl: 'http://127.0.0.1:19001', fetchImpl: ok.fetchImpl })
+  check('探活通 → ok 带 version', a.ok === true && a.version === 'stub', JSON.stringify(a))
+
+  const down = fakeWorld()
+  const b = await probeFeiyuService({ baseUrl: 'http://127.0.0.1:19002', fetchImpl: down.fetchImpl })
+  check('探活不通 → service-down 带错误码', b.ok === false && b.reason.startsWith('service-down: ECONNREFUSED'), b.reason)
+
+  const bad = await probeFeiyuService({ baseUrl: 'ftp://x', fetchImpl: down.fetchImpl })
+  check('探活地址非法 → bad-base-url', bad.ok === false && bad.reason.startsWith('bad-base-url'), bad.reason)
+}
+
+// 37) 服务没起 → 自动拉起（argv 走 python -m feiyu_voice_service）
+{
+  resetFeiyuServices()
+  const w = fakeWorld()
+  const r = await ensureFeiyuService({
+    baseUrl: 'http://127.0.0.1:19010',
+    apiKey: 'k',
+    serverDir: 'C:\\fake\\server',
+    pythonPath: 'C:\\fake\\python.exe',
+    autoStart: true,
+    startTimeoutMs: 5000,
+    probeTimeoutMs: 200,
+    idleStopMs: 0,
+    fetchImpl: w.fetchImpl,
+    spawnImpl: w.spawnImpl,
+  })
+  check('服务没起 → 拉起来了', r.ok === true && r.started === true, JSON.stringify(r))
+  check('只 spawn 一次', w.state.spawns.length === 1, String(w.state.spawns.length))
+  const argv = w.state.spawns[0]?.argv ?? []
+  check('启动命令是 python -B -m feiyu_voice_service', argv[0] === 'C:\\fake\\python.exe' && argv[1] === '-B' && argv[2] === '-m' && argv[3] === 'feiyu_voice_service', argv.join(' '))
+  check('端口从 baseUrl 解析出来', argv.includes('--port') && argv[argv.indexOf('--port') + 1] === '19010', argv.join(' '))
+  check('cwd 是服务目录', w.state.spawns[0]?.cwd === 'C:\\fake\\server')
+  check('配置文件默认取 configs/voice_service.json', argv[argv.indexOf('--config') + 1].replace(/\\/g, '/').endsWith('configs/voice_service.json'), argv[argv.indexOf('--config') + 1])
+  resetFeiyuServices()
+}
+
+// 38) 服务已经起着 → 不 spawn
+{
+  resetFeiyuServices()
+  const w = fakeWorld()
+  w.state.up = true
+  const r = await ensureFeiyuService({
+    baseUrl: 'http://127.0.0.1:19011', serverDir: 'C:\\fake\\server', pythonPath: 'C:\\fake\\python.exe',
+    startTimeoutMs: 3000, probeTimeoutMs: 200, idleStopMs: 0,
+    fetchImpl: w.fetchImpl, spawnImpl: w.spawnImpl,
+  })
+  check('服务活着 → ok 且 started=false', r.ok === true && r.started === false, JSON.stringify(r))
+  check('活着就不 spawn', w.state.spawns.length === 0, String(w.state.spawns.length))
+  resetFeiyuServices()
+}
+
+// 39) 拉不起来的原因要说清：关了自动启动 / 没填目录 / 找不到 python
+{
+  resetFeiyuServices()
+  const w = fakeWorld()
+  const off = await ensureFeiyuService({
+    baseUrl: 'http://127.0.0.1:19012', serverDir: 'C:\\fake\\server', autoStart: false,
+    startTimeoutMs: 1000, probeTimeoutMs: 100, idleStopMs: 0, fetchImpl: w.fetchImpl, spawnImpl: w.spawnImpl,
+  })
+  check('关掉自动启动 → service-down（带「已关闭」）', off.ok === false && off.reason.includes('自动启动已关闭'), off.reason)
+
+  const noDir = await ensureFeiyuService({
+    baseUrl: 'http://127.0.0.1:19013', autoStart: true,
+    startTimeoutMs: 1000, probeTimeoutMs: 100, idleStopMs: 0, fetchImpl: w.fetchImpl, spawnImpl: w.spawnImpl,
+  })
+  check('没填服务目录 → server-dir-missing', noDir.ok === false && noDir.reason === 'server-dir-missing', noDir.reason)
+
+  const noPy = await ensureFeiyuService({
+    baseUrl: 'http://127.0.0.1:19014', serverDir: dir, autoStart: true,
+    startTimeoutMs: 1000, probeTimeoutMs: 100, idleStopMs: 0, fetchImpl: w.fetchImpl, spawnImpl: w.spawnImpl,
+  })
+  check('目录下没有 .venv → python-missing', noPy.ok === false && noPy.reason.startsWith('python-missing'), noPy.reason)
+  check('这三种情况都不该 spawn', w.state.spawns.length === 0, String(w.state.spawns.length))
+  resetFeiyuServices()
+}
+
+// 40) 并发来两个请求，只拉起一次（别抢同一个端口）
+{
+  resetFeiyuServices()
+  const w = fakeWorld()
+  const opts = {
+    baseUrl: 'http://127.0.0.1:19015', serverDir: 'C:\\fake\\server', pythonPath: 'C:\\fake\\python.exe',
+    autoStart: true, startTimeoutMs: 5000, probeTimeoutMs: 200, idleStopMs: 0,
+    fetchImpl: w.fetchImpl, spawnImpl: w.spawnImpl,
+  }
+  const [a, b] = await Promise.all([ensureFeiyuService(opts), ensureFeiyuService(opts)])
+  check('并发两路都成功', a.ok === true && b.ok === true, a.ok + '/' + b.ok)
+  check('并发也只 spawn 一次', w.state.spawns.length === 1, String(w.state.spawns.length))
+  resetFeiyuServices()
+}
+
+// 41) 空闲自停：到点调 shutdown 接口（不是 kill 别人的进程）
+{
+  resetFeiyuServices()
+  const w = fakeWorld()
+  const r = await ensureFeiyuService({
+    baseUrl: 'http://127.0.0.1:19016', serverDir: 'C:\\fake\\server', pythonPath: 'C:\\fake\\python.exe',
+    autoStart: true, startTimeoutMs: 5000, probeTimeoutMs: 200, idleStopMs: 120,
+    fetchImpl: w.fetchImpl, spawnImpl: w.spawnImpl,
+  })
+  check('先起来', r.ok === true, JSON.stringify(r))
+  await new Promise((done) => setTimeout(done, 320))
+  check('空闲到点 → 调了 shutdown', w.state.shutdownCalls === 1, String(w.state.shutdownCalls))
+  resetFeiyuServices()
+}
+
+// 42) 有活动就不该被停：noteFeiyuActivity 把计时器推后
+{
+  resetFeiyuServices()
+  const w = fakeWorld()
+  const baseUrl = 'http://127.0.0.1:19017'
+  await ensureFeiyuService({
+    baseUrl, serverDir: 'C:\\fake\\server', pythonPath: 'C:\\fake\\python.exe',
+    autoStart: true, startTimeoutMs: 5000, probeTimeoutMs: 200, idleStopMs: 150,
+    fetchImpl: w.fetchImpl, spawnImpl: w.spawnImpl,
+  })
+  for (let i = 0; i < 3; i += 1) {
+    await new Promise((done) => setTimeout(done, 100))
+    noteFeiyuActivity({ baseUrl, idleStopMs: 150 })
+  }
+  check('一直在用 → 没被停', w.state.shutdownCalls === 0, String(w.state.shutdownCalls))
+  await new Promise((done) => setTimeout(done, 260))
+  check('用完之后到点才停', w.state.shutdownCalls === 1, String(w.state.shutdownCalls))
+  resetFeiyuServices()
+}
+
+// 43) 不是自己拉起来的进程：只发 shutdown，绝不动手 kill
+{
+  resetFeiyuServices()
+  const w = fakeWorld()
+  w.state.up = true
+  await ensureFeiyuService({
+    baseUrl: 'http://127.0.0.1:19018', autoStart: true, startTimeoutMs: 1000,
+    probeTimeoutMs: 200, idleStopMs: 0, fetchImpl: w.fetchImpl, spawnImpl: w.spawnImpl,
+  })
+  const r = await stopFeiyuService('http://127.0.0.1:19018', { fetchImpl: w.fetchImpl })
+  check('别人的服务 → 只发 shutdown 不 kill', r.reason === 'shutdown-api' && w.state.killed === 0, JSON.stringify(r))
+  check('shutdown 真的发了', w.state.shutdownCalls === 1, String(w.state.shutdownCalls))
+  const unknown = await stopFeiyuService('http://127.0.0.1:19019', { fetchImpl: w.fetchImpl })
+  check('没登记过的地址 → unknown-service', unknown.stopped === false && unknown.reason === 'unknown-service', JSON.stringify(unknown))
+  resetFeiyuServices()
+}
+
+// 44) 自己拉起来的：shutdown 不行才 kill
+{
+  resetFeiyuServices()
+  const w = fakeWorld()
+  const baseUrl = 'http://127.0.0.1:19020'
+  await ensureFeiyuService({
+    baseUrl, serverDir: 'C:\\fake\\server', pythonPath: 'C:\\fake\\python.exe',
+    autoStart: true, startTimeoutMs: 5000, probeTimeoutMs: 200, idleStopMs: 0,
+    fetchImpl: w.fetchImpl, spawnImpl: w.spawnImpl,
+  })
+  const brokenFetch = async (target) => {
+    if (String(target).endsWith('/v1/admin/shutdown')) return new Response('{}', { status: 500 })
+    return new Response('{}', { status: 404 })
+  }
+  const r = await stopFeiyuService(baseUrl, { fetchImpl: brokenFetch, graceMs: 300 })
+  check('shutdown 失败 → kill 自己的进程', r.stopped === true && w.state.killed === 1, JSON.stringify(r))
+  resetFeiyuServices()
+}
+
+// 45) feiyuSynthesize 会先探活：服务没起且没配目录 → 直接失败，不去发 POST
+{
+  resetFeiyuServices()
+  const w = fakeWorld()
+  const r = await feiyuSynthesize('没服务这句', {
+    cacheDir: dir, baseUrl: 'http://127.0.0.1:19021', timeoutMs: 2000, pollIntervalMs: 20,
+    autoStart: true, fetchImpl: w.fetchImpl, spawnImpl: w.spawnImpl,
+  })
+  check('没服务且没配目录 → 失败且原因是 server-dir-missing', r.ok === false && r.reason === 'server-dir-missing', r.reason)
+  resetFeiyuServices()
+}
+
+// 46) 服务没起但配了目录 → 自动拉起后照常合成
+{
+  resetFeiyuServices()
+  const w = fakeWorld()
+  const fullFetch = async (target, init) => {
+    const u = String(target)
+    if (u.endsWith('/health')) return w.fetchImpl(u, init)
+    if (u.endsWith('/v1/speech')) {
+      return new Response(JSON.stringify({ job_id: 'J-AUTO' }), { status: 202, headers: { 'content-type': 'application/json' } })
+    }
+    if (u.endsWith('/v1/jobs/J-AUTO')) {
+      return new Response(JSON.stringify({ status: 'success' }), { status: 200, headers: { 'content-type': 'application/json' } })
+    }
+    if (u.endsWith('/v1/jobs/J-AUTO/audio')) {
+      return new Response(WAV_BYTES, { status: 200, headers: { 'content-type': 'audio/wav' } })
+    }
+    return new Response('{}', { status: 404 })
+  }
+  const r = await feiyuSynthesize('自动拉起这句', {
+    cacheDir: dir, baseUrl: 'http://127.0.0.1:19022',
+    serverDir: 'C:\\fake\\server', pythonPath: 'C:\\fake\\python.exe',
+    autoStart: true, startTimeoutMs: 5000, probeTimeoutMs: 200, idleStopMs: 0,
+    timeoutMs: 5000, pollIntervalMs: 20, fetchImpl: fullFetch, spawnImpl: w.spawnImpl,
+  })
+  check('服务没起 → 自动拉起 → 合成成功', r.ok === true, r.ok ? r.path : r.reason)
+  check('确实 spawn 了服务', w.state.spawns.length === 1, String(w.state.spawns.length))
+  resetFeiyuServices()
+}
+
+// ── 47. feiyu 前缀键必须覆盖同名无前缀键（index.js 会把 edge 的 pythonPath 一起传下来）
+{
+  resetFeiyuServices()
+  const w = fakeWorld()
+  const fullFetch = async (target, init) => {
+    const u = String(target)
+    if (u.endsWith('/health')) return w.fetchImpl(u, init)
+    if (u.endsWith('/v1/speech')) {
+      return new Response(JSON.stringify({ job_id: 'J-PRE' }), { status: 202, headers: { 'content-type': 'application/json' } })
+    }
+    if (u.endsWith('/v1/jobs/J-PRE')) {
+      return new Response(JSON.stringify({ status: 'success' }), { status: 200, headers: { 'content-type': 'application/json' } })
+    }
+    if (u.endsWith('/v1/jobs/J-PRE/audio')) {
+      return new Response(WAV_BYTES, { status: 200, headers: { 'content-type': 'audio/wav' } })
+    }
+    return new Response('{}', { status: 404 })
+  }
+  const r = await synthesize('前缀映射这句', {
+    provider: 'feiyu', voice: 'feiyu', style: 'cute',
+    baseUrl: 'http://127.0.0.1:19023', apiKey: 'k',
+    pythonPath: 'C:\\edge\\tts-venv\\python.exe',
+    feiyuServerDir: 'C:\\fake\\server', feiyuPythonPath: 'C:\\fake\\feiyu-python.exe',
+    feiyuAutoStart: true, feiyuIdleStopMs: 0,
+    startTimeoutMs: 5000, probeTimeoutMs: 200, timeoutMs: 5000, pollIntervalMs: 20,
+    cacheDir: dir, fetchImpl: fullFetch, spawnImpl: w.spawnImpl,
+  })
+  check('feiyu 前缀键生效：合成成功', r.ok === true, r.ok ? r.path : r.reason)
+  const argv = w.state.spawns[0]?.argv ?? []
+  check('拉起肥鱼用 feiyuPythonPath，不是 edge 的 pythonPath',
+    argv[0] === 'C:\\fake\\feiyu-python.exe', JSON.stringify(argv[0] ?? null))
+  check('拉起肥鱼用 feiyuServerDir 当 cwd',
+    w.state.spawns[0]?.cwd === 'C:\\fake\\server', JSON.stringify(w.state.spawns[0]?.cwd ?? null))
+  resetFeiyuServices()
 }
 
 rmSync(dir, { recursive: true, force: true })

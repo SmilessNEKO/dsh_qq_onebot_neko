@@ -1,5 +1,32 @@
 # 更新日志
 
+## v1.1.5 — 2026-11-13
+
+- **新增 `fallbackToOwnerPrivate`（默认关）：没指定发给谁时，改成发主人私聊**。以前「不传群号也不传私聊号」的出站会沿用最后一次入站消息的目的地，在群里聊完就永远发回那个群 —— 想私聊说话只能每次手动传号，漏一次就发到群里。打开这个开关后，兜底目的地直接取 `ownerWhitelist` 的第一个号（主人 QQ），不带引用段（那条消息不在这个目的地里）。
+  - 覆盖三处兜底：`sendToQQ`（工具直发）、`resolveOutboundDest`（marker 块出站）、以及一轮结束时的 marker 发送路径。
+  - **显式指定的目的地不受影响**：传了 `groupId` / `userId`、或者这一轮本来就是被 QQ 消息钉住的回复，照旧发到原处。只有「什么都没说」的那条路径会改。
+  - `ownerWhitelist` 为空时不硬凑，仍旧回落到最后一次入站目的地 —— 宁可发到聊天的那个群，也不让消息凭空消失。
+  - 主人身份只认 `ownerWhitelist[0]`，没有为这个功能另加一个「主人号」设置键，避免两份真相打架。
+  - 设置卡片「唤醒」页加了这个开关，说明里写清关掉时的行为。
+- 自测：`test-smoke.mjs` 新增 6 条兜底用例（非 QQ 轮先要一次确认，一个字不发；开着 → `send_private_msg` 且没有 reply 段；关着 → `send_group_msg` 到群里且照旧引用最后一条入站；开着但主人号为空 → 回落群里，不丢消息），全部通过。
+
+## v1.1.4 — 2026-11-13
+
+- **肥鱼声音服务改成插件自己管：没起就拉起来，闲下来自己停**。以前服务得人手动开着，忘了关就一直占显存；关了呢，发语音又直接降级成文字，看着像插件坏了。现在合成（说话和唱歌）之前都先探一次 `GET /health`（免鉴权）：
+  - 通 → 直接合成；
+  - 不通且 `feiyuAutoStart` 开着（默认开）→ 按 `feiyuServerDir` + `feiyuPythonPath` 把服务拉起来，轮询 `/health` 等它通（最多 60 秒），然后再合成；
+  - 不通且自动启动关着 → 直接失败并降级发文字，原因里写清「自动启动已关闭」。
+  - 新键四个：`feiyuAutoStart`（默认 `true`）、`feiyuServerDir`（空 = 不自动启动）、`feiyuPythonPath`（空 = 用服务目录下的 `.venv`，Windows 找 `Scripts\python.exe`、Linux 找 `bin/python`；找不到就报 `python-missing`，**不拿系统 python 乱试** —— 依赖没装时那种错更难懂）、`feiyuIdleStopMinutes`（默认 10 分钟，0 = 一直开着）。
+  - 同一地址并发请求只拉起一次（`entry.starting` 去重），不会两个进程抢同一个端口。
+  - 空闲自停：合成成功刷新「最后使用时间」，到点先 `POST /v1/admin/shutdown` 让服务自己走 lifespan 收尾（它自己会校验队列空才退，任务不会丢）；接口不认 / 不通 / 有任务在跑才 kill —— **而且只 kill 插件自己 spawn 的那个进程**。别人手工起的服务只发 shutdown，绝不凭空杀掉。
+  - 缓存命中也会刷新计时器（否则整句都命中缓存时，服务会被误判空闲而提前停掉）。
+- **服务端新增 `POST /v1/admin/shutdown`**（`feiyu_voice_service/app.py`）：队列不空闲回 `409`，不是通过打包入口起的（拿不到 `uvicorn.Server`）回 `503`，否则置 `should_exit` 让 uvicorn 正常退出并释放显存。为此 `__main__.py` 从一行 `uvicorn.run(...)` 改成显式 `uvicorn.Config` + `uvicorn.Server` + `app.state.server = server`，这样接口才拿得到 Server 对象。
+- **音质：转码时过一条轻量滤镜链**。以前是裸转 `-b:a 64k`，听着干、偏薄。现在 wav → mp3 走 `highpass=f=80, lowpass=f=12000, equalizer=f=200:t=q:w=1:g=1.5, equalizer=f=3000:t=q:w=1.5:g=1.5, acompressor=threshold=-18dB:ratio=2.5:attack=10:release=150, loudnorm=I=-16:TP=-1.5:LRA=11`，输出 44.1kHz / 96kbps。两个坑记一下：`loudnorm` 内部会把采样率升到 192kHz，所以**必须显式 `-ar 44100` 收回来**，否则 libmp3lame 编不出来；老版本 ffmpeg 缺某个滤镜时**退一步**用无滤镜参数再转一次 —— 宁可音色差一点，也别因为滤镜不支持就发不出声。
+- **去掉硬编码的 ffmpeg 路径**。`voice.js` 里原来写死了 `D:\小丸\tools\ffmpeg.exe`，别人机器上根本没这个位置，「装到别人机器也能用」就是空话。现在只找三处：设置的 `ffmpegPath` → 环境变量 `DSH_TTS_FFMPEG` → PATH 上的 `ffmpeg`；全都没有就原样发 wav（不算合成失败）。
+- **修一个会让自动启停完全失效的键名冲突**。设置里那四个键带 `feiyu` 前缀（`pythonPath` 这个无前缀名在 edge / sherpa 分支里已经被 `ttsPythonPath` 占了），`synthesize()` 分派给 `feiyuSynthesize()` 时要把前缀摘掉。第一版写成了「只在无前缀键为空时才用带前缀的」，结果 `index.js` 不管哪个引擎都会把 edge 的 `pythonPath` 一起传下来 → 肥鱼拿着 edge 那个 venv 去起服务 → 找不到 `feiyu_voice_service` 模块，`exit=1`，报的还是「服务起不来」这种看不出根因的错。现在改成**带前缀的键优先覆盖同名无前缀键**，并补了一条回归用例把这个场景钉死（断言 spawn 的 argv[0] 与 cwd 都来自 `feiyuPythonPath` / `feiyuServerDir`）。
+- 设置卡片「声音」页新增这四个键（`feiyuAutoStart` 是开关，另外三个是输入框），都归在肥鱼那一套里，切到本地那套会一起收起来。
+- 自测：`test-voice.mjs` 新增 12 组共 30 条（滤镜链与输出规格、探活通 / 不通 / 地址非法、自动拉起的 argv 与 cwd 与端口解析、服务活着不 spawn、关掉自动启动 / 没填目录 / 找不到 python 三种原因、并发只拉一次、空闲到点调 shutdown、有活动不被停、别人的服务不 kill、自己拉起的 shutdown 失败才 kill、`feiyuSynthesize` 探活失败不打 POST、探活成功后照常合成），全部通过；假服务统一应答 `GET /health`，测试不碰真服务、不占端口、不真起进程。
+
 ## v1.1.3 — 2026-11-13
 
 - **修暗色主题下设置面板白底白字**。v1.1.2 的浮层面板写的是 `background: var(--dsh-bg-elevated, #fff)`，但宿主根本没有 `--dsh-*` 这套变量（它的设计令牌前缀是 `--dsw-`），于是永远回落到写死的 `#fff`；配合 `color: 'inherit'` 从暗色面板继承来的浅色字，就是截图里那块「整片纯白、字几乎看不见」。现在整张卡片的颜色都改走宿主令牌：

@@ -30,6 +30,7 @@
 - 被 @、命中昵称、被戳一戳一定叫醒。其余消息按 `wakeProbability`（默认 `0.05`）抽样，没抽中只记录。
 - 主人的私聊（`ownerWhitelist` 里的号）一律叫醒、不参与抽签；`alwaysWakePrivate` 置 `false` 可关掉。别人的私聊和所有群不受影响。
 - 发回 QQ 的内容由 `replyMode` 决定。在 DSH 界面里聊同一个会话时，正文不会进群。
+- 没指定发给谁（既没传群号/私聊号，也没有被 QQ 消息钉住）时，默认沿用最后一次入站消息的目的地；打开 `fallbackToOwnerPrivate` 改成一律发主人私聊。改写目的地时不会带原来那个群的引用。
 - 一轮里写多个 `[QQ]` 块时分条发出，相邻两条之间隔 `replyGapMinMs`–`replyGapMaxMs`（默认 1.2–2.8 秒随机），不会一口气刷屏。
 - 插件中途重载（改设置、更新插件）不会让正在回答的那一轮消息丢掉：待回复的目的地会落一份到状态文件，重载后照样发得出去。
 
@@ -57,12 +58,15 @@
   1. **本地合成**：可选 `edge`（本机 `edge-tts`）或 `sherpa`（本机离线模型）；
   2. **肥鱼声音服务**：本机 HTTP 服务，声音更像人，也是唯一能唱歌的一条。
 
-  选中哪一套就只显示哪一套的字段（本地那套：`ttsVoice` / `ttsRate` / `ttsPitch` / `ttsPythonPath` / `ttsSid` / `ttsSpeed` / `ttsModelDir`；肥鱼那套：`feiyuBaseUrl` / `feiyuApiKey` / `feiyuVoice` / `feiyuStyle` / 三个超时 / `voiceMaxSongChars`）。另一套只是收起来，**值不会被清空**，切回去还在。存储上仍然只有一个键 `ttsProvider`（`edge` / `sherpa` / `feiyu`），老配置文件照旧生效。
+  选中哪一套就只显示哪一套的字段（本地那套：`ttsVoice` / `ttsRate` / `ttsPitch` / `ttsPythonPath` / `ttsSid` / `ttsSpeed` / `ttsModelDir`；肥鱼那套：`feiyuBaseUrl` / `feiyuApiKey` / `feiyuVoice` / `feiyuStyle` / 三个超时 / `voiceMaxSongChars` / 四个自动启停键）。另一套只是收起来，**值不会被清空**，切回去还在。存储上仍然只有一个键 `ttsProvider`（`edge` / `sherpa` / `feiyu`），老配置文件照旧生效。
 - 具体引擎（`ttsProvider` 三选一的那三个值）：
   - `edge`（默认）：合成走本机的 `edge-tts`（`ttsPythonPath` 指向装了它的解释器），音色 / 语速 / 音高是 `ttsVoice` / `ttsRate` / `ttsPitch`，产物是 mp3。不动这个键时行为跟以前完全一样。
   - `sherpa`：合成走本机的离线模型（`sherpa_onnx`，不联网），模型目录 `ttsModelDir`（留空 = `$DSH_HOME/tts-models/vits-melo-tts-zh_en`），说话人 `ttsSid`（默认 0）、语速倍数 `ttsSpeed`（默认 1），音色名仍读 `ttsVoice`，产物是 mp3；解释器同样用 `ttsPythonPath`。
   - `feiyu`：合成走你自己部署的**肥鱼声音服务**（本机 HTTP 服务）——先把服务起起来，再把 `ttsProvider` 选成 `feiyu`。地址是 `feiyuBaseUrl`（默认 `http://127.0.0.1:9880`，带路径前缀也行），服务要鉴权就把 Bearer 口令填进 `feiyuApiKey`（留空 = 不带鉴权头；卡片上不回显已存的口令，留空即不改）。音色 `feiyuVoice` 是**下拉**（默认 `feiyu`），语气 `feiyuStyle` 二选一（`cute` 软萌 / `gentle` 温柔）。下拉的清单不是写死的：设置卡片会去打服务的 `GET /v1/capabilities`，把 `tts[]` / `rvc[]` 里注册的音色投影成选项（标签上带每个音色支持的语气，RVC 包标「换声」，`available: false` 的标「当前不可用」）；服务没起、口令不对或一个音色都没注册时退回内置的 `feiyu` 一项，并在下拉下面写一句原因 —— 卡片不会因此变空或报错。配置里存着的音色若不在清单里，会保留成「当前值，不在清单里」的兜底项，不会被静默清空。产物是 wav：有 ffmpeg 就转成 mp3 再发（`ffmpegPath` 留空时先找 PATH 上的 `ffmpeg`，再找本机约定的那个；都没有 / 转失败就原样发 wav，不算合成失败）。
   - 肥鱼首次请求要加载模型，所以整体超时给得大：`feiyuTimeoutMs` 默认 180000，任务状态按 `feiyuPollIntervalMs` 轮询（默认 1000）。服务没起来 / 口令不对 / 任务失败都**降级发文字**，不会卡住也不整条消失。
+  - **服务自动启停**（插件自己管，不用人盯着）：每次合成前先探一下 `GET /health`（这个接口免鉴权）。通就直接合成；不通且 `feiyuAutoStart` 开着，就按 `feiyuServerDir` + `feiyuPythonPath` 把服务拉起来（等 `/health` 通，最多 `60` 秒），然后再合成。合成成功会刷新「最后使用时间」，空闲到 `feiyuIdleStopMinutes`（默认 10 分钟，填 `0` = 一直开着）就停服务：先发 `POST /v1/admin/shutdown` 让它自己走完收尾（释放显存、等队列排空才退），接口不认或不通才 kill **插件自己启动的那个进程**；别人手工起的服务只发 shutdown，绝不动手杀。同一地址并发请求只拉起一次，不会两个进程抢同一个端口。
+  - **音质**：wav 转 mp3 时会过一条轻量滤镜链（80Hz 高通 / 12kHz 低通 / 200Hz 与 3kHz 各 +1.5dB / 2.5:1 轻压缩 / `loudnorm` 到 -16 LUFS），输出 44.1kHz、96kbps。ffmpeg 太老缺某个滤镜时**退一步**用无滤镜参数再转一次 —— 宁可音色差一点，也别发不出声。
+  - **ffmpeg 怎么找**：设置的 `ffmpegPath` → 环境变量 `DSH_TTS_FFMPEG` → PATH 上的 `ffmpeg`。**包里不再内置任何本机绝对路径**，换台机器装也能用；全都没有就原样发 wav（不算合成失败）。
 - 单条语音上限 `voiceMaxChars`（默认 120 字）。
 - 合成失败或超长时**降级发文字**（正文前加「（语音没合成出来）」），不会整条消失。同一句话 + 同一引擎 + 同一组参数只合成一次，缓存在 `voiceCacheDir`。关着开关时标记原样当文字发，不静默吞字。
 
@@ -161,6 +165,7 @@ DSH 0.2 的卡片把值写进 `$DSH_HOME/qq-bridge-neko-settings.json`。这份�
 | `whitelist` | `[]` | 哪些私聊可以叫醒。留空 = 都不叫醒 |
 | `groupWhitelist` | `[]` | 哪些群可以叫醒。留空 = 都不叫醒。卡片里查到群名时，群号旁边有名字和头像 |
 | `ownerWhitelist` | `[]` | 卡片里叫「主人 QQ」。留空 = 不能在 QQ 里改群白名单 |
+| `fallbackToOwnerPrivate` | `false` | 没指定发给谁时，默认发给主人私聊（`ownerWhitelist` 第一个号）。关着 = 沿用最后一次入站消息的目的地，在群里聊就发回那个群。显式传 `groupId` / `userId`、或被 QQ 消息钉住的回复不受影响；改写目的地时不再带那条群的引用 |
 | `onebotUrl` | 空 | NapCat 正向 WebSocket，例如 `ws://127.0.0.1:3001`。留空 = 不连接 |
 | `onebotPort` | `3001` | 卡片里那套 NapCat 配置要用的端口。自己另装的 NapCat 要跟这边一致 |
 | `accessTokenEnv` | 空 | 存 access_token 的环境变量名。不写明文 token |
@@ -199,7 +204,7 @@ DSH 0.2 的卡片把值写进 `$DSH_HOME/qq-bridge-neko-settings.json`。这份�
 | `ttsSpeed` | `1` | `sherpa` 的语速倍数，1 = 原速 |
 | `voiceMaxChars` | `120` | 单条语音最多多少字，超了就降级发文字 |
 | `voiceCacheDir` | 空 | 合成好的音频放哪；留空 = `$DSH_HOME/qq-bridge-neko-voice`。同一句话 + 同一引擎 + 同一组参数只合成一次 |
-| `ffmpegPath` | 空 | 转码用的 ffmpeg（肥鱼产的是 wav，发之前尽量转 mp3）；留空 = 先试 PATH 上的 `ffmpeg`，再试本机约定位置。都没有就原样发 wav |
+| `ffmpegPath` | 空 | 转码用的 ffmpeg（肥鱼产的是 wav，发之前尽量转 mp3）；留空 = 先试环境变量 `DSH_TTS_FFMPEG`，再试 PATH 上的 `ffmpeg`。都没有就原样发 wav（不算失败）。包里不内置任何本机绝对路径 |
 | `feiyuBaseUrl` | `http://127.0.0.1:9880` | 肥鱼声音服务地址（`ttsProvider = feiyu` 时用）。也支持带一段路径前缀 |
 | `feiyuApiKey` | 空 | 肥鱼服务的 Bearer 口令；留空 = 不带鉴权头。只存在本机设置里，日志与文档都不打印它 |
 | `feiyuVoice` | `feiyu` | 肥鱼引擎用哪个音色。卡片上是下拉，选项来自服务的 `GET /v1/capabilities`（服务离线时只列内置的 `feiyu`，并注明原因）；存着的值不在清单里会保留成兜底项 |
@@ -208,6 +213,10 @@ DSH 0.2 的卡片把值写进 `$DSH_HOME/qq-bridge-neko-settings.json`。这份�
 | `feiyuPollIntervalMs` | `1000` | 轮询肥鱼任务状态的间隔（毫秒），50–60000 |
 | `feiyuSingTimeoutMs` | `600000` | 唱歌整体超时（毫秒）。唱歌要走 SVS + RVC + 混音，比说话慢一个量级，10000–3600000 |
 | `voiceMaxSongChars` | `400` | 一首歌最多多少唱字（一个音符一个字），1–4000；超了直接拒唱并说明 |
+| `feiyuAutoStart` | `true` | 肥鱼服务没起时，插件自己按 `feiyuServerDir` 把它拉起来再合成。关掉后服务没起就直接降级发文字 |
+| `feiyuServerDir` | 空 | 肥鱼服务端目录（里面有 `.venv` 与 `configs/voice_service.json`）。自动启动要用它；留空 = 不自动启动 |
+| `feiyuPythonPath` | 空 | 跑肥鱼服务的 python。留空 = 服务目录下的 `.venv`（Windows 的 `Scripts\python.exe` / Linux 的 `bin/python`）；找不到就报 `python-missing`，不拿系统 python 乱试 |
+| `feiyuIdleStopMinutes` | `10` | 空闲多少分钟自动停服务、释放显存，0–1440；填 `0` = 一直开着。只停插件自己启动的那个进程，别人的服务只发 shutdown |
 | `autoStartNapcat` | `false` | DSH 启动后自动拉起**已装好**的 NapCat。只启动，绝不下载 / 安装 / 写配置 |
 | `autoStartNapcatDelayMs` | `20000` | 自动启动前的等待毫秒数（0–600000）；填 0 = 起来就立刻尝试 |
 | `napcatInstallDir` | 空 | NapCat 安装目录；留空 = `$DSH_HOME/napcat` |

@@ -75,12 +75,340 @@ export const DEFAULT_FFMPEG_TIMEOUT_MS = 30000
  */
 export const DEFAULT_FEIYU_SING_TIMEOUT_MS = 600000
 /**
- * 找不到 ffmpeg 时最后试一次的本机路径。
+ * 肥鱼服务空闲多久就自己停掉（分钟）。0 = 不停。
  *
- * 本机 ffmpeg 常被放在 PATH 之外（例如随某套工具一起解压出来的），
- * 这里给一个约定位置兜底；设置的 `ffmpegPath` 一旦填了就只用填的那个。
+ * 服务是常驻 GPU 进程：没人用的时候占着显存不放，别人的机器上尤其难受。
+ * 插件每次合成完重置计时器，到点把**自己拉起来的**那个进程停掉。
  */
-export const FFMPEG_FALLBACK_PATH = 'D:\\小丸\\tools\\ffmpeg.exe'
+export const DEFAULT_FEIYU_IDLE_STOP_MINUTES = 10
+/**
+ * 拉服务起来之后，等它 `/health` 通的最长时间（毫秒）。
+ *
+ * 首次启动要 import torch、扫模型目录，实测 10–30 秒；给 60 秒余量。
+ */
+export const DEFAULT_FEIYU_START_TIMEOUT_MS = 60000
+/** 探测 `/health` 的单次超时（毫秒）。服务没起时本机会立刻 ECONNREFUSED，不用等太久。 */
+export const DEFAULT_FEIYU_PROBE_TIMEOUT_MS = 3000
+
+// ── 肥鱼服务的自动启停 ───────────────────────────────────────────────────────
+//
+// 为什么要插件自己管：服务是个常驻 GPU 进程，没人用也占着显存；而「没起服务就
+// 发不出语音」又会让人以为插件坏了。所以两条一起做：
+//   1. 合成前先探 `GET /health`（免鉴权），不通就按配置把服务拉起来，等它通；
+//   2. 每次合成成功刷新「最后使用时间」，空闲到点就停 —— 优先走服务端的
+//      `POST /v1/admin/shutdown`（它自己会校验队列空才退，任务不会丢），
+//      退回才 kill 我们自己 spawn 的那个进程。
+//
+// 只停自己拉起来的？不。**只要能探通就纳入计时**：手工起的服务同样是占显存的
+// 那个进程，主人抱怨的正是「起了一直不停」。想让它常驻就把
+// `feiyuIdleStopMinutes` 设成 0 —— 这是唯一的开关，不额外加隐藏行为。
+//
+// 每个 baseUrl 一份状态，互不影响（同时配两个地址也不会串）。
+
+/** baseUrl → 状态。 */
+const feiyuServices = new Map()
+
+/** 状态键：去掉末尾斜杠，`http://a/` 与 `http://a` 算同一个。 */
+function serviceKey(baseUrl) {
+  return String(baseUrl ?? '').trim().replace(/\/+$/, '') || DEFAULT_FEIYU_BASE_URL
+}
+
+/** 清掉某个地址的计时器（不杀进程）。 */
+function clearIdleTimer(entry) {
+  if (entry?.timer) {
+    clearTimeout(entry.timer)
+    entry.timer = null
+  }
+}
+
+/**
+ * 探测服务是否活着。
+ *
+ * 用 `/health`（免鉴权、极轻），而不是 `/v1/capabilities`：后者要带口令，
+ * 口令错的时候会跟「服务没起」混成一个原因，排障时分不清。
+ *
+ * @param {{ baseUrl?: string, timeoutMs?: number, fetchImpl?: typeof fetch }} [options]
+ * @returns {Promise<{ ok: boolean, reason?: string, version?: string }>}
+ */
+export async function probeFeiyuService(options) {
+  const {
+    baseUrl = DEFAULT_FEIYU_BASE_URL,
+    timeoutMs = DEFAULT_FEIYU_PROBE_TIMEOUT_MS,
+    fetchImpl,
+  } = options ?? {}
+  const doFetch = fetchImpl ?? globalThis.fetch
+  if (typeof doFetch !== 'function') return { ok: false, reason: 'no-fetch' }
+
+  let root
+  try {
+    root = new URL(serviceKey(baseUrl))
+  } catch {
+    return { ok: false, reason: 'bad-base-url' }
+  }
+  if (root.protocol !== 'http:' && root.protocol !== 'https:') {
+    return { ok: false, reason: `bad-base-url: ${root.protocol}` }
+  }
+  const href = root.href.endsWith('/') ? root.href : `${root.href}/`
+  const target = new URL('health', href).toString()
+
+  try {
+    const response = await doFetch(target, {
+      method: 'GET',
+      signal: AbortSignal.timeout(Math.max(1, Number(timeoutMs) || DEFAULT_FEIYU_PROBE_TIMEOUT_MS)),
+    })
+    if (!response.ok) return { ok: false, reason: `health-http-${response.status}` }
+    const payload = await readJsonSafe(response)
+    return { ok: true, version: String(payload?.version ?? '').trim() }
+  } catch (error) {
+    if (error?.name === 'TimeoutError' || error?.name === 'AbortError') {
+      return { ok: false, reason: 'health-timeout' }
+    }
+    const code = error?.cause?.code ?? error?.code ?? ''
+    return { ok: false, reason: `service-down: ${code || String(error?.message ?? error)}` }
+  }
+}
+
+/** 记一次「刚用过」，把空闲计时器往后推。 */
+export function noteFeiyuActivity(options) {
+  const entry = feiyuServices.get(serviceKey(options?.baseUrl))
+  if (!entry) return
+  entry.lastUsedAt = Date.now()
+  scheduleIdleStop(entry, options?.idleStopMs ?? entry.idleStopMs)
+}
+
+/** 排一次空闲自停。`idleStopMs <= 0` 表示不停。 */
+function scheduleIdleStop(entry, idleStopMs) {
+  clearIdleTimer(entry)
+  const budget = Number(idleStopMs)
+  if (!Number.isFinite(budget) || budget <= 0) return
+  entry.idleStopMs = budget
+  const timer = setTimeout(() => {
+    entry.timer = null
+    // 到点时如果刚好又在合成（lastUsedAt 被刷新过），就再等一轮，别掐任务。
+    const since = Date.now() - (entry.lastUsedAt ?? 0)
+    if (since < budget) {
+      scheduleIdleStop(entry, budget - since)
+      return
+    }
+    stopFeiyuService(entry.baseUrl, { reason: 'idle', fetchImpl: entry.fetchImpl }).catch(() => {})
+  }, budget)
+  // 别为了一个计时器把宿主进程吊着不退出（测试里尤其明显）。
+  if (typeof timer.unref === 'function') timer.unref()
+  entry.timer = timer
+}
+
+/**
+ * 停掉服务。
+ *
+ * 先礼后兵：`POST /v1/admin/shutdown` 让服务自己走 lifespan 收尾（释放显存、
+ * 放掉队列锁）；它拒绝（有任务在跑 / 版本不支持 / 口令不对）或不通，再退回到
+ * kill 我们自己 spawn 的那个进程。**不是我们拉起来的进程绝不动手** ——
+ * 别人的服务不该被我们凭空杀掉。
+ *
+ * @param {string} baseUrl
+ * @param {{ reason?: string, apiKey?: string, fetchImpl?: typeof fetch, graceMs?: number }} [options]
+ */
+export async function stopFeiyuService(baseUrl, options) {
+  const key = serviceKey(baseUrl)
+  const entry = feiyuServices.get(key)
+  if (!entry) return { stopped: false, reason: 'unknown-service' }
+  clearIdleTimer(entry)
+  feiyuServices.delete(key)
+
+  const { apiKey = entry.apiKey, fetchImpl = entry.fetchImpl, graceMs = 8000 } = options ?? {}
+  const doFetch = fetchImpl ?? globalThis.fetch
+  let graceful = false
+  if (typeof doFetch === 'function') {
+    try {
+      const root = new URL(key)
+      const href = root.href.endsWith('/') ? root.href : `${root.href}/`
+      const auth = String(apiKey ?? '').trim()
+      const response = await doFetch(new URL('v1/admin/shutdown', href).toString(), {
+        method: 'POST',
+        headers: auth === '' ? {} : { authorization: `Bearer ${auth}` },
+        signal: AbortSignal.timeout(Math.max(1, graceMs)),
+      })
+      graceful = response.ok
+    } catch { /* 服务已经没了，或者版本老没有这个接口 */ }
+  }
+
+  if (!entry.child) {
+    // 不是我们拉起来的：只能靠它自己退。graceful 失败就什么都不做。
+    return { stopped: graceful, reason: graceful ? 'shutdown-api' : 'not-owned', graceful }
+  }
+
+  const child = entry.child
+  if (graceful) {
+    const exited = await waitChildExit(child, graceMs)
+    if (exited) return { stopped: true, reason: 'shutdown-api', graceful: true }
+  }
+  try { child.kill() } catch { /* 已经退了 */ }
+  const exited = await waitChildExit(child, 5000)
+  return { stopped: exited, reason: exited ? 'killed' : 'kill-failed', graceful }
+}
+
+/** 等子进程退出；超时回 false。 */
+function waitChildExit(child, timeoutMs) {
+  if (!child || child.exitCode !== null || child.signalCode !== null) return Promise.resolve(true)
+  // 注入的 spawnImpl 可能给一个只有 kill/unref 的简化对象，没有事件就按「已退」处理。
+  if (typeof child.once !== 'function') return Promise.resolve(true)
+  return new Promise((resolve) => {
+    let settled = false
+    const done = (ok) => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      resolve(ok)
+    }
+    const timer = setTimeout(() => done(false), Math.max(1, Number(timeoutMs) || 5000))
+    child.once('exit', () => done(true))
+    child.once('error', () => done(false))
+  })
+}
+
+/** 插件卸载 / 宿主退出时统一收尾：把计时器全清掉，进程交给系统。 */
+export function resetFeiyuServices() {
+  for (const entry of feiyuServices.values()) clearIdleTimer(entry)
+  feiyuServices.clear()
+}
+
+/**
+ * 确保服务可用：探不通就拉起来，等它通。
+ *
+ * 同一个地址同时来多个请求时只拉起一次（第二个直接等第一个的结果），
+ * 免得两句话各起一个服务抢 9880。
+ *
+ * @param {{
+ *   baseUrl?: string, apiKey?: string,
+ *   serverDir?: string, pythonPath?: string, configPath?: string,
+ *   autoStart?: boolean,
+ *   startTimeoutMs?: number, probeTimeoutMs?: number, idleStopMs?: number,
+ *   fetchImpl?: typeof fetch,
+ *   spawnImpl?: (spec: { argv: string[], cwd: string, env?: Record<string,string> }) => any,
+ *   logger?: { warn?: Function, info?: Function },
+ * }} options
+ * @returns {Promise<{ ok: boolean, started?: boolean, reason?: string, python?: string }>}
+ */
+export async function ensureFeiyuService(options) {
+  const {
+    baseUrl = DEFAULT_FEIYU_BASE_URL,
+    apiKey = '',
+    serverDir = '',
+    pythonPath = '',
+    configPath = '',
+    autoStart = true,
+    startTimeoutMs = DEFAULT_FEIYU_START_TIMEOUT_MS,
+    probeTimeoutMs = DEFAULT_FEIYU_PROBE_TIMEOUT_MS,
+    idleStopMs = DEFAULT_FEIYU_IDLE_STOP_MINUTES * 60000,
+    fetchImpl,
+    spawnImpl,
+    logger,
+  } = options ?? {}
+
+  const key = serviceKey(baseUrl)
+  let entry = feiyuServices.get(key)
+  if (!entry) {
+    entry = { baseUrl: key, apiKey: '', child: null, owned: false, lastUsedAt: 0, timer: null, starting: null, idleStopMs }
+    feiyuServices.set(key, entry)
+  }
+  entry.apiKey = String(apiKey ?? '').trim()
+  entry.idleStopMs = Number(idleStopMs)
+  // 记住这次用的 fetch：空闲计时器到点时是它自己去停服务，那条路径上没有调用方
+  // 传 fetchImpl，只能靠这里存的那一份（否则会退回全局 fetch，测试里会打真网络）。
+  if (typeof fetchImpl === 'function') entry.fetchImpl = fetchImpl
+
+  const alive = await probeFeiyuService({ baseUrl: key, timeoutMs: probeTimeoutMs, fetchImpl })
+  if (alive.ok) {
+    entry.lastUsedAt = Date.now()
+    scheduleIdleStop(entry, entry.idleStopMs)
+    return { ok: true, started: false, version: alive.version }
+  }
+
+  if (autoStart !== true) {
+    return { ok: false, reason: `service-down: ${alive.reason ?? 'unreachable'}（自动启动已关闭）` }
+  }
+  // 已经在拉了：等那一次，别再起第二个。
+  if (entry.starting) return await entry.starting
+
+  const dir = String(serverDir ?? '').trim()
+  if (dir === '') return { ok: false, reason: 'server-dir-missing' }
+
+  const python = resolvePython(dir, pythonPath)
+  if (python === '') return { ok: false, reason: `python-missing: 在 ${dir} 下找不到 python` }
+
+  const cfg = String(configPath ?? '').trim() || join(dir, 'configs', 'voice_service.json')
+  let port = '9880'
+  let host = '127.0.0.1'
+  try {
+    const parsed = new URL(key)
+    if (parsed.port) port = parsed.port
+    if (parsed.hostname) host = parsed.hostname
+  } catch { /* 上面探活已经校验过 URL，这里不该失败 */ }
+
+  const argv = [python, '-B', '-m', 'feiyu_voice_service', '--host', host, '--port', port, '--config', cfg]
+
+  const start = (async () => {
+    let child = null
+    try {
+      child = spawnImpl
+        ? spawnImpl({ argv, cwd: dir })
+        : spawn(argv[0], argv.slice(1), { cwd: dir, windowsHide: true, stdio: 'ignore' })
+    } catch (error) {
+      return { ok: false, reason: `spawn-failed: ${error?.message ?? error}` }
+    }
+    entry.child = child ?? null
+    entry.owned = true
+    if (typeof child?.unref === 'function') child.unref()
+
+    const deadline = Date.now() + Math.max(1000, Number(startTimeoutMs) || DEFAULT_FEIYU_START_TIMEOUT_MS)
+    while (Date.now() < deadline) {
+      const now = await probeFeiyuService({ baseUrl: key, timeoutMs: probeTimeoutMs, fetchImpl })
+      if (now.ok) {
+        entry.lastUsedAt = Date.now()
+        scheduleIdleStop(entry, entry.idleStopMs)
+        logger?.info?.(`肥鱼声音服务已启动（${python}，端口 ${port}）`)
+        return { ok: true, started: true, python, version: now.version }
+      }
+      if (child && (child.exitCode !== null && child.exitCode !== undefined)) {
+        return { ok: false, reason: `service-exited: exit=${child.exitCode}` }
+      }
+      await sleep(700)
+    }
+    try { child?.kill() } catch { /* 已经退了 */ }
+    entry.child = null
+    entry.owned = false
+    return { ok: false, reason: `start-timeout: ${startTimeoutMs}ms` }
+  })()
+
+  entry.starting = start
+  try {
+    return await start
+  } finally {
+    entry.starting = null
+  }
+}
+
+/**
+ * 猜 python 解释器。
+ *
+ * 顺序：设置里填的 → 服务目录下的 `.venv`（Windows 的 `Scripts\python.exe`、
+ * 类 Unix 的 `bin/python`）→ 空（让调用方报「找不到 python」，别拿系统 python 乱试：
+ * 依赖没装会给出更难懂的错）。
+ */
+function resolvePython(serverDir, pythonPath) {
+  const configured = String(pythonPath ?? '').trim()
+  if (configured !== '') return configured
+  const candidates = [
+    join(serverDir, '.venv', 'Scripts', 'python.exe'),
+    join(serverDir, '.venv', 'bin', 'python'),
+  ]
+  for (const c of candidates) {
+    try {
+      if (existsSync(c)) return c
+    } catch { /* 没权限当不存在 */ }
+  }
+  return ''
+}
 
 /**
  * provider 归一化：只认 `edge` / `sherpa` / `feiyu`，其它（含空）一律回落 `edge`。
@@ -283,6 +611,15 @@ export async function feiyuSynthesize(text, options) {
     pollIntervalMs = DEFAULT_FEIYU_POLL_INTERVAL_MS,
     ffmpegPath = '',
     ffmpegTimeoutMs = DEFAULT_FFMPEG_TIMEOUT_MS,
+    serverDir = '',
+    pythonPath = '',
+    configPath = '',
+    autoStart = true,
+    startTimeoutMs = DEFAULT_FEIYU_START_TIMEOUT_MS,
+    probeTimeoutMs = DEFAULT_FEIYU_PROBE_TIMEOUT_MS,
+    idleStopMs = DEFAULT_FEIYU_IDLE_STOP_MINUTES * 60000,
+    spawnImpl,
+    logger,
     fetchImpl,
   } = options ?? {}
 
@@ -323,7 +660,28 @@ export async function feiyuSynthesize(text, options) {
   }
 
   // 同一句话 + 同音色 + 同语气：缓存里有就不再打扰服务。
-  if (wavReady) return await finish(true)
+  // 但仍然算一次「使用」——否则整句都命中缓存时，服务会一直没被重置计时器而提前停掉。
+  if (wavReady) {
+    noteFeiyuActivity({ baseUrl, idleStopMs })
+    return await finish(true)
+  }
+
+  // 服务没起就先拉起来（`serverDir` 为空 = 用户没配自动启动，直接探活失败后报错）。
+  const ready = await ensureFeiyuService({
+    baseUrl,
+    apiKey,
+    serverDir,
+    pythonPath,
+    configPath,
+    autoStart: autoStart !== false,
+    startTimeoutMs,
+    probeTimeoutMs,
+    idleStopMs,
+    fetchImpl,
+    spawnImpl,
+    logger,
+  })
+  if (!ready.ok) return { ok: false, reason: ready.reason ?? 'service-unavailable' }
 
   const doFetch = fetchImpl ?? globalThis.fetch
   if (typeof doFetch !== 'function') return { ok: false, reason: 'no-fetch' }
@@ -425,6 +783,7 @@ export async function feiyuSynthesize(text, options) {
   } catch (error) {
     return { ok: false, reason: `cache-write-failed: ${error?.message ?? error}` }
   }
+  noteFeiyuActivity({ baseUrl, idleStopMs })
   return await finish(false)
 }
 
@@ -472,6 +831,15 @@ export async function feiyuSing(options) {
     pollIntervalMs = DEFAULT_FEIYU_POLL_INTERVAL_MS,
     ffmpegPath = '',
     ffmpegTimeoutMs = DEFAULT_FFMPEG_TIMEOUT_MS,
+    serverDir = '',
+    pythonPath = '',
+    configPath = '',
+    autoStart = true,
+    startTimeoutMs = DEFAULT_FEIYU_START_TIMEOUT_MS,
+    probeTimeoutMs = DEFAULT_FEIYU_PROBE_TIMEOUT_MS,
+    idleStopMs = DEFAULT_FEIYU_IDLE_STOP_MINUTES * 60000,
+    spawnImpl,
+    logger,
     fetchImpl,
   } = options ?? {}
 
@@ -520,7 +888,26 @@ export async function feiyuSing(options) {
     }
   }
 
-  if (existsSync(outPath) && statSync(outPath).size > 0) return await finish(true)
+  if (existsSync(outPath) && statSync(outPath).size > 0) {
+    noteFeiyuActivity({ baseUrl, idleStopMs })
+    return await finish(true)
+  }
+
+  const ready = await ensureFeiyuService({
+    baseUrl,
+    apiKey,
+    serverDir,
+    pythonPath,
+    configPath,
+    autoStart: autoStart !== false,
+    startTimeoutMs,
+    probeTimeoutMs,
+    idleStopMs,
+    fetchImpl,
+    spawnImpl,
+    logger,
+  })
+  if (!ready.ok) return { ok: false, reason: ready.reason ?? 'service-unavailable' }
 
   const doFetch = fetchImpl ?? globalThis.fetch
   if (typeof doFetch !== 'function') return { ok: false, reason: 'no-fetch' }
@@ -649,6 +1036,7 @@ export async function feiyuSing(options) {
   } catch (error) {
     return { ok: false, reason: `cache-write-failed: ${error?.message ?? error}` }
   }
+  noteFeiyuActivity({ baseUrl, idleStopMs })
   return await finish(false, seconds)
 }
 
@@ -662,7 +1050,8 @@ function cacheKeyOfScore(bytes) {
  *
  * 实测 NapCat 吃 mp3；肥鱼服务产的是 WAV，所以这里用本机 ffmpeg 转一份 mp3。
  * 找 ffmpeg 的顺序：设置的 `ffmpegPath` →（没填时）环境变量 `DSH_TTS_FFMPEG`
- * → PATH 上的 `ffmpeg` → `FFMPEG_FALLBACK_PATH`。
+ * → PATH 上的 `ffmpeg`。**不再内置任何本机绝对路径** —— 那是装插件的人机器上
+ * 不存在的位置，写死只会让「别人的机器也能用」变成一句空话。
  * 规则：不是 wav 就原样返回；是 wav 才试着转，**都找不到 / 转失败就回落到原 WAV**
  * （而不是当作合成失败）—— 能发出去总比因为转码工具没装就降级发文字好。
  * 任何一步都不抛。
@@ -687,7 +1076,7 @@ export async function ensureRecordAudio(absPath, options) {
   const configured = String(ffmpegPath ?? '').trim()
   const candidates = configured !== ''
     ? [configured]
-    : [process.env.DSH_TTS_FFMPEG || '', 'ffmpeg', FFMPEG_FALLBACK_PATH].filter((x) => x !== '')
+    : [process.env.DSH_TTS_FFMPEG || '', 'ffmpeg'].filter((x) => x !== '')
 
   let lastReason = 'ffmpeg-missing: 找不到可用的 ffmpeg'
   for (const bin of candidates) {
@@ -712,7 +1101,34 @@ export async function ensureRecordAudio(absPath, options) {
 }
 
 /**
+ * 语音转码用的滤镜链。
+ *
+ * 干、薄、忽大忽小，是「TTS 直出」听起来的通病；这一串都是很轻的手：
+ *   - highpass 80 / lowpass 12000：掐掉低频嗡声与齿音外的毛刺；
+ *   - 200Hz +1.5dB、3000Hz +1.5dB：补一点胸腔与清晰度，不至于发闷或刺耳；
+ *   - acompressor：把忽大忽小的音量压平（阈值 -18dB、比 2.5，轻压不糊）；
+ *   - loudnorm：整体拉到 -16 LUFS / 峰值 -1.5dBTP，跟常见语音内容一个响度。
+ *
+ * 注意 loudnorm 内部会升到 192kHz 采样，所以后面必须显式 `-ar` 收回来，
+ * 否则 libmp3lame 编不出来。
+ */
+export const VOICE_FILTER_CHAIN = [
+  'highpass=f=80',
+  'lowpass=f=12000',
+  'equalizer=f=200:t=q:w=1:g=1.5',
+  'equalizer=f=3000:t=q:w=1.5:g=1.5',
+  'acompressor=threshold=-18dB:ratio=2.5:attack=10:release=150',
+  'loudnorm=I=-16:TP=-1.5:LRA=11',
+].join(',')
+/** 转码输出的采样率与码率。语音 96k 足够，再高只是白占体积。 */
+export const VOICE_OUTPUT_SAMPLE_RATE = 44100
+export const VOICE_OUTPUT_BITRATE = '96k'
+
+/**
  * 跑一次 ffmpeg 把 wav 转成 mp3。**不抛**，失败回 `{ok:false, reason}`。
+ *
+ * 滤镜失败（老版本 ffmpeg 缺某个滤镜）时**退一步**用最朴素的方式再转一次：
+ * 宁可音色差一点，也别因为滤镜不支持就发不出声音。
  *
  * @param {string} bin
  * @param {string} src
@@ -720,12 +1136,24 @@ export async function ensureRecordAudio(absPath, options) {
  * @param {number} timeoutMs
  */
 async function runFfmpeg(bin, src, dst, timeoutMs) {
+  const encode = ['-ar', String(VOICE_OUTPUT_SAMPLE_RATE), '-codec:a', 'libmp3lame', '-b:a', VOICE_OUTPUT_BITRATE, dst]
+  const first = await runFfmpegOnce(bin, ['-y', '-i', src, '-af', VOICE_FILTER_CHAIN, ...encode], timeoutMs)
+  if (first.ok) return first
+  // 滤镜链跑不动（缺滤镜 / 参数不被支持）才退；找不到 ffmpeg 就没必要再试一遍。
+  if (/^ffmpeg-(missing|spawn-failed|timeout)/.test(String(first.reason ?? ''))) return first
+  const plain = await runFfmpegOnce(bin, ['-y', '-i', src, ...encode], timeoutMs)
+  if (plain.ok) return { ok: true, filtered: false }
+  return plain
+}
+
+/** 跑一次 ffmpeg（给定的完整参数）。**不抛**。 */
+async function runFfmpegOnce(bin, args, timeoutMs) {
   return await new Promise((resolve) => {
     let settled = false
     let stderr = ''
     let child
     try {
-      child = spawn(bin, ['-y', '-i', src, '-codec:a', 'libmp3lame', '-b:a', '64k', dst], {
+      child = spawn(bin, args, {
         windowsHide: true,
       })
     } catch (error) {
@@ -753,7 +1181,7 @@ async function runFfmpeg(bin, src, dst, timeoutMs) {
         resolve({ ok: false, reason: `ffmpeg-exit-${code}: ${stderr.trim().slice(-200)}` })
         return
       }
-      resolve({ ok: true })
+      resolve({ ok: true, filtered: true })
     })
   })
 }
@@ -789,7 +1217,20 @@ export async function synthesize(text, options) {
 
   // 肥鱼走 HTTP，超时/轮询参数跟子进程那套完全不同，所以先分派出去再解构。
   if (normalizeVoiceProvider(options?.provider) === 'feiyu') {
-    return await feiyuSynthesize(said, options)
+    // 自动启停那几个键从设置里下来时带 `feiyu` 前缀（避免和 edge/sherpa 的
+    // `pythonPath` 撞名），这里换成 feiyuSynthesize 认的无前缀名。
+    // **`feiyu*` 必须覆盖同名无前缀键**：index.js 无论哪个引擎都会把 edge 的
+    // `pythonPath`（ttsPythonPath）一起传下来，若只在「无前缀为空」时才映射，
+    // 肥鱼就会拿着 edge 那个 venv 去起服务 —— 找不到 `feiyu_voice_service` 模块，
+    // 直接 exit=1。踩过。
+    const o = options ?? {}
+    return await feiyuSynthesize(said, {
+      ...o,
+      ...(o.feiyuServerDir !== undefined ? { serverDir: o.feiyuServerDir } : {}),
+      ...(o.feiyuPythonPath !== undefined ? { pythonPath: o.feiyuPythonPath } : {}),
+      ...(o.feiyuAutoStart !== undefined ? { autoStart: o.feiyuAutoStart } : {}),
+      ...(o.feiyuIdleStopMs !== undefined ? { idleStopMs: o.feiyuIdleStopMs } : {}),
+    })
   }
 
   const {
