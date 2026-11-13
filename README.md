@@ -53,7 +53,12 @@
 
 - 打开 `voiceEnabled`（默认关）后，正文里写 `[语音]要念的台词[/语音]`，这句话会被合成成语音发出去（一个语音块 = 一条 QQ 消息，文字块照旧分条），语音前后的文字还是正常文字。
 - 也可以直接调 `qq_bridge_neko_voice` 工具，用 `voice` / `rate` / `pitch` / `style` 单次覆盖参数，`provider` 单次切换引擎。
-- **三套引擎，`ttsProvider` 选一个**：
+- **两套声音，二选一**（设置卡片「声音」页最上面那两块）：
+  1. **本地合成**：可选 `edge`（本机 `edge-tts`）或 `sherpa`（本机离线模型）；
+  2. **肥鱼声音服务**：本机 HTTP 服务，声音更像人，也是唯一能唱歌的一条。
+
+  选中哪一套就只显示哪一套的字段（本地那套：`ttsVoice` / `ttsRate` / `ttsPitch` / `ttsPythonPath` / `ttsSid` / `ttsSpeed` / `ttsModelDir`；肥鱼那套：`feiyuBaseUrl` / `feiyuApiKey` / `feiyuVoice` / `feiyuStyle` / 三个超时 / `voiceMaxSongChars`）。另一套只是收起来，**值不会被清空**，切回去还在。存储上仍然只有一个键 `ttsProvider`（`edge` / `sherpa` / `feiyu`），老配置文件照旧生效。
+- 具体引擎（`ttsProvider` 三选一的那三个值）：
   - `edge`（默认）：合成走本机的 `edge-tts`（`ttsPythonPath` 指向装了它的解释器），音色 / 语速 / 音高是 `ttsVoice` / `ttsRate` / `ttsPitch`，产物是 mp3。不动这个键时行为跟以前完全一样。
   - `sherpa`：合成走本机的离线模型（`sherpa_onnx`，不联网），模型目录 `ttsModelDir`（留空 = `$DSH_HOME/tts-models/vits-melo-tts-zh_en`），说话人 `ttsSid`（默认 0）、语速倍数 `ttsSpeed`（默认 1），音色名仍读 `ttsVoice`，产物是 mp3；解释器同样用 `ttsPythonPath`。
   - `feiyu`：合成走你自己部署的**肥鱼声音服务**（本机 HTTP 服务）——先把服务起起来，再把 `ttsProvider` 选成 `feiyu`。地址是 `feiyuBaseUrl`（默认 `http://127.0.0.1:9880`，带路径前缀也行），服务要鉴权就把 Bearer 口令填进 `feiyuApiKey`（留空 = 不带鉴权头；卡片上不回显已存的口令，留空即不改）。音色 `feiyuVoice` 是**下拉**（默认 `feiyu`），语气 `feiyuStyle` 二选一（`cute` 软萌 / `gentle` 温柔）。下拉的清单不是写死的：设置卡片会去打服务的 `GET /v1/capabilities`，把 `tts[]` / `rvc[]` 里注册的音色投影成选项（标签上带每个音色支持的语气，RVC 包标「换声」，`available: false` 的标「当前不可用」）；服务没起、口令不对或一个音色都没注册时退回内置的 `feiyu` 一项，并在下拉下面写一句原因 —— 卡片不会因此变空或报错。配置里存着的音色若不在清单里，会保留成「当前值，不在清单里」的兜底项，不会被静默清空。产物是 wav：有 ffmpeg 就转成 mp3 再发（`ffmpegPath` 留空时先找 PATH 上的 `ffmpeg`，再找本机约定的那个；都没有 / 转失败就原样发 wav，不算合成失败）。
@@ -73,7 +78,8 @@
 
 **设置卡片与 NapCat**
 
-- 设置卡片在 **设置 → 插件 → 插件配置 → QQ 桥接 Neko**。可以检查更新；有新正式版时一键安装，并重启面板。
+- **入口在左下角**：侧栏脚部、Settings 上面那个「🐟 QQ 桥接 Neko」，点开就是一个居中面板，不用再钻进「设置 → 插件」里翻。（原来那几处入口还在：设置 → 插件 → 插件配置 → QQ 桥接 Neko。）可以检查更新；有新正式版时一键安装，并重启面板。
+- **设置分页**：六十多个键铺成一长条谁也看不下去，现在按主题分成「连接 / 唤醒 / 会话 / 回复 / 声音 / 看图 / 模型 / NapCat / 关于」几页，顶上点页签切换，一次只看一页。新加的键漏了归类会自动落进「其他」页，不会出现「哪页都点不到」。切换页签不影响未保存的改动，保存仍是整张卡片一起存。
 - 可以按需下载、配置、启停 NapCat（`qq_bridge_neko_napcat`，action = `status` / `download` / `configure` / `launch` / `stop`）。下载 / 安装 / 写配置默认都要显式触发，插件加载时不会自己下载或安装。
 - **DSH 启动后自动拉起 NapCat**：打开 `autoStartNapcat`（默认关），DSH 启动延迟 `autoStartNapcatDelayMs`（默认 `20000` = 20 秒，可调 0–600000）后自动启动**已经装好、并登录过一次**的 NapCat。只调用现成的启动逻辑，绝不自动下载 / 安装 / 写配置；到点会重读开关、确认 NapCat 没在运行才启动，等待期间关掉开关、插件被卸载或 NapCat 已在跑都会跳过，启动失败只记一条日志。
 - **识图用下拉选择，不用手写模型名**：`visionMode` 三选一 —— `auto` 自动找一个支持图片输入的模型、`session` 用会话当前模型、`fixed` 从 DSH 已配置的提供商里选一个、再选它下面的模型（两段联动下拉，模型清单带「支持识图」标记）。旧的 `visionModel`（`provider/model`）只是没配新选项时的兜底，卡片上不再给输入框。
@@ -93,7 +99,7 @@
 
 本仓库不发 npm，所以只有这两条装法。
 
-**A. 本地打好的包**（`npm pack` 产物，文件名形如 `fengye_nobug-dsh-qq-bridge-neko-1.1.1.tgz`，`.gitignore` 已忽略 `*.tgz`，不入库）：
+**A. 本地打好的包**（`npm pack` 产物，文件名形如 `fengye_nobug-dsh-qq-bridge-neko-1.1.2.tgz`，`.gitignore` 已忽略 `*.tgz`，不入库）：
 
 ```sh
 dsh plugin --profile web add "<本地 .tgz 的绝对路径>"
@@ -102,7 +108,7 @@ dsh plugin --profile web add "<本地 .tgz 的绝对路径>"
 **B. 从本仓库的 GitHub tag 装**（不用先下载）：
 
 ```sh
-dsh plugin --profile web add github:SmilessNEKO/dsh_qq_onebot_neko#v1.1.1
+dsh plugin --profile web add github:SmilessNEKO/dsh_qq_onebot_neko#v1.1.2
 ```
 
 装完**重启 dsh-web 并刷新页面**（浏览器半的 bundle 只在启动时扫一遍，不重启卡片不会出现；登录口令可能会变）。
@@ -182,7 +188,7 @@ DSH 0.2 的卡片把值写进 `$DSH_HOME/qq-bridge-neko-settings.json`。这份�
 | `burstWaitMs` | `0` | 对方连着发消息时，先等这么多毫秒没人再说才回复；`0` = 立刻回。每个目的地可单独覆盖 |
 | `listenIdleMs` | `120000` | 会话跟随期间，这么久（毫秒）没有新消息就自动停听；默认 2 分钟 |
 | `voiceEnabled` | `false` | 要不要发语音。打开后 `[语音]…[/语音]`（以及 `qq_bridge_neko_voice` 工具）才会合成语音；关着时标记原样当文字发 |
-| `ttsProvider` | `edge` | 用哪个语音引擎：`edge` = 本机 edge-tts（默认，行为跟以前一样）；`sherpa` = 本机离线模型；`feiyu` = 肥鱼声音服务（本机 HTTP，要先把服务起起来）。认不出的值直接失败并降级发文字 |
+| `ttsProvider` | `edge` | 用哪套声音（卡片上是二选一的两块，不是下拉）：本地合成 `edge` = 本机 edge-tts（默认，行为跟以前一样）/ `sherpa` = 本机离线模型；或肥鱼声音服务 `feiyu`（本机 HTTP，要先把服务起起来）。选了哪套就只显示那套的字段，另一套的值不会被清掉。认不出的值直接失败并降级发文字 |
 | `ttsVoice` | `zh-CN-XiaoyiNeural` | 音色名（edge / sherpa 用这个；肥鱼用 `feiyuVoice`）。`zh-CN-YunxiNeural` 是男声 |
 | `ttsRate` | `-8%` | 语速（edge 用这个；sherpa 走 `ttsSpeed`），edge-tts 写法，`+10%` 更快、`-8%` 更慢 |
 | `ttsPitch` | `+12Hz` | 音高（edge 用这个），edge-tts 写法 |
@@ -260,7 +266,7 @@ DSH 0.2 的卡片把值写进 `$DSH_HOME/qq-bridge-neko-settings.json`。这份�
 
 ## 排障
 
-**`dsh plugin add @fengye_nobug/dsh-qq-bridge-neko@1.1.1` 报找不到包** — 正常的，这个包不在 npm 上。用[安装](#安装)里的两条装法之一。
+**`dsh plugin add @fengye_nobug/dsh-qq-bridge-neko@1.1.2` 报找不到包** — 正常的，这个包不在 npm 上。用[安装](#安装)里的两条装法之一。
 
 **设置页里没有卡片** — 先看 `package.json` 的 `dsh.client` 与 `exports["./client"]` 还在不在，然后重启 dsh-web（bundle 只在启动时扫）。仍然没有时调 `qq_bridge_neko_status`，看 `clientHalf` 字段。
 

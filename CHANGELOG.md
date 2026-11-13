@@ -1,5 +1,20 @@
 # 更新日志
 
+## v1.1.2 — 2026-11-13
+
+- **设置页不再是一条长龙：按主题分页，顶上点页签切换**。六十多个键平铺成一列，找任何一项都得滚半天。现在分成「连接 / 唤醒 / 会话 / 回复 / 声音 / 看图 / 模型 / NapCat / 关于」九页，每页只渲染属于它的字段。分页只是**呈现层**：`FIELDS` 的结构、键名、`format()` / `parse()`、保存逻辑一行未改，保存仍是整张卡片一起存，切页签不会丢未保存的改动。
+  - 归类漏了不会消失：`FIELDS` 里存在但没写进任何一组的键，会自动落进追加的「其他」页 —— 防的是以后加字段忘了登记、于是界面静默少一片。
+- **入口挪到左下角侧栏**：走宿主的 `sidebar.footer.action` 座位（`list` 型、可与别人并存）注册了一个「🐟 QQ 桥接 Neko」按钮，位置就在 Settings 上面。点开是一个居中的浮层面板，里面就是这套设置（分类页签 + 当前页字段），Esc 或点遮罩关掉。原来的入口（设置 → 插件 → 插件配置）都还在，只是不用再钻进去找。
+  - 为什么不用 `sidebar.settings` 直接顶掉内置设置页：那个座位是 `single`，已经被宿主自己的 ui-settings 占了，抢不到；`footer.action` 是 `list`，加一个入口是安全的（现在那里已经有 Cordis 面板）。
+- **声音模块从「三选一下拉」改成「两套二选一」**。以前本地那套（`edge` / `sherpa`）和肥鱼那套的字段全铺在同一页，看着像两个模块各管各的，容易配混。现在「声音」页最上面是两块卡片：**本地合成**（里面再选 `edge` / `sherpa`）与**肥鱼声音服务**。选中哪套就只显示哪套的字段：
+  - 本地那套：`ttsVoice` / `ttsRate` / `ttsPitch` / `ttsPythonPath` / `ttsSid` / `ttsSpeed` / `ttsModelDir`
+  - 肥鱼那套：`feiyuBaseUrl` / `feiyuApiKey` / `feiyuVoice` / `feiyuStyle` / `feiyuTimeoutMs` / `feiyuPollIntervalMs` / `feiyuSingTimeoutMs` / `voiceMaxSongChars`
+  - **收起来只是不渲染，值不会被清空**，切回去原样还在；两套共用的 `voiceEnabled` / `voiceMaxChars` / `voiceCacheDir` / `ffmpegPath` 一直显示。
+  - 存储层仍然是**一个键** `ttsProvider`（`edge` / `sherpa` / `feiyu`）。不新开键是有意的：老设置文件里写的就是它，另起一个键会让现有配置静默失效。
+- 实现上是新增 `kind: 'voice-module'` 控件与 `renderVoiceModule()`；`client/client.js` 里新增 `GROUPS` / `LOCAL_ONLY_KEYS` / `FEIYU_ONLY_KEYS` / `usesFeiyu()`，主渲染循环只多做两步过滤（不属于当前页的跳过、不属于当前那套的跳过）。`index.js` 与 `voice.js` **完全没动**——这一版纯前端。
+- 自测：新增 `test-settings-tabs.mjs`，用假 `window.__ModuleLoader__` + 假 react + 假 ctx 把浏览器半**真跑一遍**（不是源码字符串匹配），覆盖 28 条：每个字段都归类且不重复 / 分类里没有不存在的键 / 页签全渲染 / 当前页只显示自己的字段 / 切页后上一页字段消失 / 两套互斥且共用项留着 / `sherpa` 归在本地那套 / `sidebar.footer.action` 注册了且带 id 与 order / 未点开是按钮、点开是「按钮 + 浮层」且浮层里真的是设置本体。全通过；`test-feiyu-voice-options.mjs`、`test-voice.mjs` 原样全通过。
+- `README.md` 设置卡片小节、语音小节与 `ttsProvider` 表格行同步。
+
 ## v1.1.1 — 2026-11-13
 
 - **肥鱼音色 `feiyuVoice` 从文本框改成下拉**：以前要自己敲音色 id，敲错就 `422`；现在卡片直接列服务里注册的音色。选项**不是写死的**：`index.js` 新增 `readFeiyuVoiceOptions()`，打肥鱼服务的 `GET /v1/capabilities`（`Authorization: Bearer <feiyuApiKey>`，2 秒超时），把 `tts[]` / `rvc[]` 投影成 `{id, label, kind, styles, available, engine, reason}`；结果挂在既有 `/api/qq-bridge-neko/catalog` 响应的 `feiyuVoices` 上，client 侧新增 `kind: 'feiyu-voice'` 与 `renderFeiyuVoice()` 渲染下拉。标签会带上每个音色支持的语气（`语气 cute / gentle`）、RVC 包标「换声」、`available: false` 标「当前不可用」并把服务给的原因挂在 `title` 上。
