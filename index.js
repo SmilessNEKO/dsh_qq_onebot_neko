@@ -46,16 +46,37 @@ import { FACE_NAME_TO_ID, textToOneBotSegments } from './faces.js'
 import { syncInstalledReplyStyle } from './reply-style.js'
 import { applyPluginUpdate, checkPluginUpdate } from './updates.js'
 import {
+  DEFAULT_FFMPEG_TIMEOUT_MS,
+  DEFAULT_FEIYU_BASE_URL,
+  DEFAULT_FEIYU_POLL_INTERVAL_MS,
+  DEFAULT_FEIYU_SING_TIMEOUT_MS,
+  DEFAULT_FEIYU_STYLE,
+  DEFAULT_FEIYU_TIMEOUT_MS,
+  DEFAULT_FEIYU_VOICE,
   DEFAULT_TTS_PITCH,
   DEFAULT_TTS_RATE,
   DEFAULT_TTS_VOICE,
   DEFAULT_VOICE_MAX_CHARS,
+  DEFAULT_VOICE_MAX_SONG_CHARS,
+  FEIYU_STYLES,
+  feiyuSing,
   hasVoiceBlock,
+  normalizeFeiyuStyle,
   recordSegment,
   splitVoiceBlocks,
   stripVoiceBlocks,
   synthesize,
 } from './voice.js'
+
+/**
+ * 本地离线 TTS 的默认模型目录（sherpa-onnx 中文 VITS，melotts zh_en）。
+ * 设置里给了 `ttsModelDir` 就用设置的那份。
+ */
+const DEFAULT_SHARPA_MODEL_DIR = join(
+  process.env.DSH_HOME || join(process.env.USERPROFILE || '', '.dsh'),
+  'tts-models',
+  'vits-melo-tts-zh_en',
+)
 
 const require = createRequire(import.meta.url)
 /** 当前安装的包版本。设置页和检查更新都读这一处，避免卡片里手写一份。 */
@@ -248,13 +269,26 @@ export const Config = Schema.object({
   burstWaitMs: Schema.number().default(0).description('对方还在连着发消息时，先等这么多毫秒没人再说才回复。0 = 不等待。每个目的地可以在下面单独覆盖。'),
   // ── 语音消息 ──────────────────────────────────────────────────────────────
   voiceEnabled: Schema.boolean().default(false).description('要不要发语音。打开后正文里的 [语音]台词[/语音] 会合成为语音发出去；关着时标记原样当文字发。默认关。'),
-  ttsProvider: Schema.string().default('edge').description('用哪个 TTS 合成语音。目前只有 edge（微软 edge-tts，本地跑、免费、需要本机装了它）。'),
-  ttsVoice: Schema.string().default(DEFAULT_TTS_VOICE).description('音色名。edge-tts 的写法，例如 zh-CN-XiaoyiNeural（少女音）、zh-CN-YunxiNeural（男声）。'),
-  ttsRate: Schema.string().default(DEFAULT_TTS_RATE).description('语速。edge-tts 写法，例如 -8% 表示慢一点、+10% 表示快一点。'),
-  ttsPitch: Schema.string().default(DEFAULT_TTS_PITCH).description('音高。edge-tts 写法，例如 +12Hz 表示高一点、-5Hz 表示低一点。'),
-  ttsPythonPath: Schema.string().default('').description('装了 edge-tts 的 python 解释器路径。留空 = 用 PATH 里的 python。'),
+  ttsProvider: Schema.union([Schema.const('edge'), Schema.const('sherpa'), Schema.const('feiyu')]).default('edge').description('用哪个 TTS 合成语音：edge = 微软 edge-tts（本机跑、免费、要装了它）；sherpa = 本机离线的 sherpa-onnx 中文模型（要设 ttsModelDir，不联网）；feiyu = 本机肥鱼声音服务（要先起服务，参数见下面 feiyu 那几个键）。默认 edge。'),
+  ttsVoice: Schema.string().default(DEFAULT_TTS_VOICE).description('音色名（edge / sherpa 用这个；肥鱼用 feiyuVoice 那个键）。edge-tts 的写法，例如 zh-CN-XiaoyiNeural（少女音）、zh-CN-YunxiNeural（男声）。'),
+  ttsRate: Schema.string().default(DEFAULT_TTS_RATE).description('语速（edge 用这个；sherpa 走 ttsSpeed）。edge-tts 写法，例如 -8% 表示慢一点、+10% 表示快一点。'),
+  ttsPitch: Schema.string().default(DEFAULT_TTS_PITCH).description('音高（edge 用这个）。edge-tts 写法，例如 +12Hz 表示高一点、-5Hz 表示低一点。'),
+  ttsPythonPath: Schema.string().default('').description('跑 edge-tts / sherpa-onnx 的 python 解释器路径（edge 与 sherpa 用这个；肥鱼走 HTTP，不用 python）。留空 = 用 PATH 里的 python。'),
+  ttsModelDir: Schema.string().default('').description('sherpa 的模型目录（里面有 model.onnx、tokens.txt 那些）。留空 = $DSH_HOME/tts-models/vits-melo-tts-zh_en。只在 ttsProvider 选 sherpa 时用得上。'),
+  ttsSid: Schema.number().default(0).description('sherpa 用模型里第几个说话人（从 0 开始）。默认 0。'),
+  ttsSpeed: Schema.number().default(1).description('sherpa 的语速倍数：1 = 原速，大于 1 更快。默认 1。'),
+  // 下面这一组只在 ttsProvider 选 sherpa / feiyu 时才用得上。
+  ffmpegPath: Schema.string().default('').description('转码用的 ffmpeg 在哪（肥鱼服务产的是 wav，发之前尽量转成 mp3）。留空 = 自动找：先试 PATH 里的 ffmpeg，再试本机约定位置。填了就只用填的这个。'),
+  feiyuBaseUrl: Schema.string().default(DEFAULT_FEIYU_BASE_URL).description('肥鱼声音服务的地址。默认 http://127.0.0.1:9880 —— 本机服务，别填公网地址。'),
+  feiyuApiKey: Schema.string().default('').description('肥鱼声音服务的鉴权口令（Bearer）。留空 = 不带鉴权头。口令只存在设置里，不会写进日志。'),
+  feiyuVoice: Schema.string().default(DEFAULT_FEIYU_VOICE).description('肥鱼服务用哪个音色。默认 feiyu。'),
+  feiyuStyle: Schema.union([Schema.const('cute'), Schema.const('gentle')]).default(DEFAULT_FEIYU_STYLE).description('肥鱼服务的语气：cute = 软一点（默认）、gentle = 温一点。'),
+  feiyuTimeoutMs: Schema.number().default(DEFAULT_FEIYU_TIMEOUT_MS).description('等肥鱼服务合成完的最长时间（毫秒）。默认 180000 —— 首次请求要加载模型，几十秒到几分钟都正常。'),
+  feiyuPollIntervalMs: Schema.number().default(DEFAULT_FEIYU_POLL_INTERVAL_MS).description('问肥鱼服务「好了没」的间隔（毫秒）。默认 1000。'),
+  feiyuSingTimeoutMs: Schema.number().default(DEFAULT_FEIYU_SING_TIMEOUT_MS).description('等肥鱼服务「唱完」的最长时间（毫秒）。唱歌比说话慢得多（SVS 推理 + 换声 + 混音），默认 600000。'),
+  voiceMaxSongChars: Schema.number().default(DEFAULT_VOICE_MAX_SONG_CHARS).description('歌词最多多少字（一个音符一个字，一字多音用 _ 占位）。超过就拒唱。默认 400。'),
   voiceMaxChars: Schema.number().default(DEFAULT_VOICE_MAX_CHARS).description('单条语音最多多少字。超过就合成失败、降级发文字。默认 120。'),
-  voiceCacheDir: Schema.string().default('').description('合成好的 mp3 放哪。留空 = $DSH_HOME/qq-bridge-neko-voice。同一段话同音色只合成一次。'),
+  voiceCacheDir: Schema.string().default('').description('合成好的音频放哪（mp3 / wav）。留空 = $DSH_HOME/qq-bridge-neko-voice。同一段话 + 同引擎同参数只合成一次。'),
   listenIdleMs: Schema.number().default(DEFAULT_LISTEN_IDLE_MS).description('会话跟随期间，这么久没有新消息就自动停听。默认 120000（2 分钟）。'),
   // ── 每个 QQ 目的地的个性化 ────────────────────────────────────────────────
   destinationProfiles: Schema.array(DestinationProfile).default([]).description('按群 / 私聊分别设置休眠时段、24 小时实时回复、等待合并与停听时间。'),
@@ -345,13 +379,26 @@ const BridgeSettings = Schema.object({
   // ── 语音消息 ──────────────────────────────────────────────────────────────
   // sendToQQ 的 [语音]…[/语音] 与 qq_bridge_neko_voice 工具都读这几个键。
   voiceEnabled: Schema.boolean().default(false).description('要不要发语音。打开后正文里的 [语音]台词[/语音] 会合成为语音发出去；关着时标记原样当文字发。默认关。'),
-  ttsProvider: Schema.string().default('edge').description('用哪个 TTS 合成语音。目前只有 edge（微软 edge-tts，本地跑、免费、需要本机装了它）。'),
-  ttsVoice: Schema.string().default(DEFAULT_TTS_VOICE).description('音色名。edge-tts 的写法，例如 zh-CN-XiaoyiNeural（少女音）、zh-CN-YunxiNeural（男声）。'),
-  ttsRate: Schema.string().default(DEFAULT_TTS_RATE).description('语速。edge-tts 写法，例如 -8% 表示慢一点、+10% 表示快一点。'),
-  ttsPitch: Schema.string().default(DEFAULT_TTS_PITCH).description('音高。edge-tts 写法，例如 +12Hz 表示高一点、-5Hz 表示低一点。'),
-  ttsPythonPath: Schema.string().default('').description('装了 edge-tts 的 python 解释器路径。留空 = 用 PATH 里的 python。'),
+  ttsProvider: Schema.union([Schema.const('edge'), Schema.const('sherpa'), Schema.const('feiyu')]).default('edge').description('用哪个 TTS 合成语音：edge = 微软 edge-tts（本机跑、免费、要装了它）；sherpa = 本机离线的 sherpa-onnx 中文模型（要设 ttsModelDir，不联网）；feiyu = 本机肥鱼声音服务（要先起服务，参数见下面 feiyu 那几个键）。默认 edge。'),
+  ttsVoice: Schema.string().default(DEFAULT_TTS_VOICE).description('音色名（edge / sherpa 用这个；肥鱼用 feiyuVoice 那个键）。edge-tts 的写法，例如 zh-CN-XiaoyiNeural（少女音）、zh-CN-YunxiNeural（男声）。'),
+  ttsRate: Schema.string().default(DEFAULT_TTS_RATE).description('语速（edge 用这个；sherpa 走 ttsSpeed）。edge-tts 写法，例如 -8% 表示慢一点、+10% 表示快一点。'),
+  ttsPitch: Schema.string().default(DEFAULT_TTS_PITCH).description('音高（edge 用这个）。edge-tts 写法，例如 +12Hz 表示高一点、-5Hz 表示低一点。'),
+  ttsPythonPath: Schema.string().default('').description('跑 edge-tts / sherpa-onnx 的 python 解释器路径（edge 与 sherpa 用这个；肥鱼走 HTTP，不用 python）。留空 = 用 PATH 里的 python。'),
+  ttsModelDir: Schema.string().default('').description('sherpa 的模型目录（里面有 model.onnx、tokens.txt 那些）。留空 = $DSH_HOME/tts-models/vits-melo-tts-zh_en。只在 ttsProvider 选 sherpa 时用得上。'),
+  ttsSid: Schema.number().default(0).description('sherpa 用模型里第几个说话人（从 0 开始）。默认 0。'),
+  ttsSpeed: Schema.number().default(1).description('sherpa 的语速倍数：1 = 原速，大于 1 更快。默认 1。'),
+  // 下面这一组只在 ttsProvider 选 sherpa / feiyu 时才用得上。
+  ffmpegPath: Schema.string().default('').description('转码用的 ffmpeg 在哪（肥鱼服务产的是 wav，发之前尽量转成 mp3）。留空 = 自动找：先试 PATH 里的 ffmpeg，再试本机约定位置。填了就只用填的这个。'),
+  feiyuBaseUrl: Schema.string().default(DEFAULT_FEIYU_BASE_URL).description('肥鱼声音服务的地址。默认 http://127.0.0.1:9880 —— 本机服务，别填公网地址。'),
+  feiyuApiKey: Schema.string().default('').description('肥鱼声音服务的鉴权口令（Bearer）。留空 = 不带鉴权头。口令只存在设置里，不会写进日志。'),
+  feiyuVoice: Schema.string().default(DEFAULT_FEIYU_VOICE).description('肥鱼服务用哪个音色。默认 feiyu。'),
+  feiyuStyle: Schema.union([Schema.const('cute'), Schema.const('gentle')]).default(DEFAULT_FEIYU_STYLE).description('肥鱼服务的语气：cute = 软一点（默认）、gentle = 温一点。'),
+  feiyuTimeoutMs: Schema.number().default(DEFAULT_FEIYU_TIMEOUT_MS).description('等肥鱼服务合成完的最长时间（毫秒）。默认 180000 —— 首次请求要加载模型，几十秒到几分钟都正常。'),
+  feiyuPollIntervalMs: Schema.number().default(DEFAULT_FEIYU_POLL_INTERVAL_MS).description('问肥鱼服务「好了没」的间隔（毫秒）。默认 1000。'),
+  feiyuSingTimeoutMs: Schema.number().default(DEFAULT_FEIYU_SING_TIMEOUT_MS).description('等肥鱼服务「唱完」的最长时间（毫秒）。唱歌比说话慢得多（SVS 推理 + 换声 + 混音），默认 600000。'),
+  voiceMaxSongChars: Schema.number().default(DEFAULT_VOICE_MAX_SONG_CHARS).description('歌词最多多少字（一个音符一个字，一字多音用 _ 占位）。超过就拒唱。默认 400。'),
   voiceMaxChars: Schema.number().default(DEFAULT_VOICE_MAX_CHARS).description('单条语音最多多少字。超过就降级发文字。默认 120。'),
-  voiceCacheDir: Schema.string().default('').description('合成好的 mp3 放哪。留空 = $DSH_HOME/qq-bridge-neko-voice。同一段话同音色只合成一次。'),
+  voiceCacheDir: Schema.string().default('').description('合成好的音频放哪（mp3 / wav）。留空 = $DSH_HOME/qq-bridge-neko-voice。同一段话 + 同引擎同参数只合成一次。'),
   // ── 每个 QQ 目的地的个性化 ────────────────────────────────────────────────
   destinationProfiles: Schema.array(DestinationProfile).default([]).description('按群 / 私聊分别设置休眠时段、24 小时实时回复、等待合并与停听时间。'),
 })
@@ -1249,6 +1296,15 @@ export function apply(ctx, config) {
         ttsRate: config.ttsRate ?? DEFAULT_TTS_RATE,
         ttsPitch: config.ttsPitch ?? DEFAULT_TTS_PITCH,
         ttsPythonPath: config.ttsPythonPath ?? '',
+        ffmpegPath: config.ffmpegPath ?? '',
+        feiyuBaseUrl: config.feiyuBaseUrl ?? DEFAULT_FEIYU_BASE_URL,
+        feiyuApiKey: config.feiyuApiKey ?? '',
+        feiyuVoice: config.feiyuVoice ?? DEFAULT_FEIYU_VOICE,
+        feiyuStyle: config.feiyuStyle ?? DEFAULT_FEIYU_STYLE,
+        feiyuTimeoutMs: config.feiyuTimeoutMs ?? DEFAULT_FEIYU_TIMEOUT_MS,
+        feiyuPollIntervalMs: config.feiyuPollIntervalMs ?? DEFAULT_FEIYU_POLL_INTERVAL_MS,
+        feiyuSingTimeoutMs: config.feiyuSingTimeoutMs ?? DEFAULT_FEIYU_SING_TIMEOUT_MS,
+        voiceMaxSongChars: config.voiceMaxSongChars ?? DEFAULT_VOICE_MAX_SONG_CHARS,
         voiceMaxChars: config.voiceMaxChars ?? DEFAULT_VOICE_MAX_CHARS,
         voiceCacheDir: config.voiceCacheDir ?? '',
       },
@@ -1320,6 +1376,21 @@ export function apply(ctx, config) {
       ttsRate: String(s.ttsRate ?? config.ttsRate ?? '').trim() || DEFAULT_TTS_RATE,
       ttsPitch: String(s.ttsPitch ?? config.ttsPitch ?? '').trim() || DEFAULT_TTS_PITCH,
       ttsPythonPath: String(s.ttsPythonPath ?? config.ttsPythonPath ?? '').trim(),
+      ffmpegPath: String(s.ffmpegPath ?? config.ffmpegPath ?? '').trim(),
+      feiyuBaseUrl: String(s.feiyuBaseUrl ?? config.feiyuBaseUrl ?? '').trim() || DEFAULT_FEIYU_BASE_URL,
+      // 口令只在这里取一次，不 trim 掉中间字符、也绝不写进日志。
+      feiyuApiKey: String(s.feiyuApiKey ?? config.feiyuApiKey ?? '').trim(),
+      feiyuVoice: String(s.feiyuVoice ?? config.feiyuVoice ?? '').trim() || DEFAULT_FEIYU_VOICE,
+      feiyuStyle: normalizeFeiyuStyle(s.feiyuStyle ?? config.feiyuStyle),
+      feiyuTimeoutMs: clampInt(s.feiyuTimeoutMs ?? config.feiyuTimeoutMs, 1000, 1800000, DEFAULT_FEIYU_TIMEOUT_MS),
+      feiyuPollIntervalMs: clampInt(s.feiyuPollIntervalMs ?? config.feiyuPollIntervalMs, 50, 60000, DEFAULT_FEIYU_POLL_INTERVAL_MS),
+      feiyuSingTimeoutMs: clampInt(s.feiyuSingTimeoutMs ?? config.feiyuSingTimeoutMs, 10000, 3600000, DEFAULT_FEIYU_SING_TIMEOUT_MS),
+      voiceMaxSongChars: clampInt(s.voiceMaxSongChars ?? config.voiceMaxSongChars, 1, 4000, DEFAULT_VOICE_MAX_SONG_CHARS),
+      ttsModelDir: String(s.ttsModelDir ?? config.ttsModelDir ?? '').trim(),
+      ttsSid: Number.isFinite(Number(s.ttsSid ?? config.ttsSid)) ? Number(s.ttsSid ?? config.ttsSid) : 0,
+      ttsSpeed: Number.isFinite(Number(s.ttsSpeed ?? config.ttsSpeed)) && Number(s.ttsSpeed ?? config.ttsSpeed) > 0
+        ? Number(s.ttsSpeed ?? config.ttsSpeed)
+        : 1,
       voiceMaxChars: clampInt(s.voiceMaxChars ?? config.voiceMaxChars, 1, 2000, DEFAULT_VOICE_MAX_CHARS),
       voiceCacheDir: String(s.voiceCacheDir ?? config.voiceCacheDir ?? '').trim(),
       destinationProfiles: normalizeDestinationProfiles(s.destinationProfiles ?? config.destinationProfiles),
@@ -4265,17 +4336,40 @@ export function apply(ctx, config) {
   }
 
   /**
-   * 按设置合成语音。`ttsProvider` 目前只认 edge —— 别偷偷换实现，
+   * 按设置合成语音。`ttsProvider` 认 edge / sherpa / feiyu 三个 —— 别偷偷换实现，
    * 认不出的值直接失败，让调用方降级，而不是无声地用别的东西顶着。
+   *
+   * `overrides` 是给工具调用用的单次覆盖（provider / voice / rate / pitch / style）；
+   * 传空字符串等于没传，免得把设置里的值抹成空。
    */
-  async function synthesizeWithSettings(text, s, cacheDir) {
-    const provider = String(s?.ttsProvider ?? 'edge').trim().toLowerCase() || 'edge'
-    if (provider !== 'edge') return { ok: false, reason: `unsupported-tts-provider: ${provider}` }
+  async function synthesizeWithSettings(text, s, cacheDir, overrides = {}) {
+    const provider = String(overrides.provider ?? s?.ttsProvider ?? 'edge').trim().toLowerCase() || 'edge'
+    if (provider !== 'edge' && provider !== 'sherpa' && provider !== 'feiyu') {
+      return { ok: false, reason: `unsupported-tts-provider: ${provider}` }
+    }
+    // 音色名得按引擎分开取：`ttsVoice` 是 edge / sherpa 的名字（zh-CN-XiaoyiNeural 这种），
+    // 肥鱼只认自己注册的音色 id（`feiyuVoice`，默认 feiyu）。混用会让服务端回 422
+    // 「Requested voice capability is not installed/configured」——踩过一次。
+    const voice = provider === 'feiyu'
+      ? String(overrides.voice ?? s?.feiyuVoice ?? '').trim() || DEFAULT_FEIYU_VOICE
+      : String(overrides.voice ?? s?.ttsVoice ?? '').trim() || DEFAULT_TTS_VOICE
     return await synthesize(text, {
+      provider,
       pythonPath: String(s?.ttsPythonPath ?? '').trim(),
-      voice: String(s?.ttsVoice ?? '').trim() || DEFAULT_TTS_VOICE,
-      rate: String(s?.ttsRate ?? '').trim() || DEFAULT_TTS_RATE,
-      pitch: String(s?.ttsPitch ?? '').trim() || DEFAULT_TTS_PITCH,
+      modelDir: String(s?.ttsModelDir ?? '').trim() || DEFAULT_SHARPA_MODEL_DIR,
+      sid: Number.isFinite(Number(s?.ttsSid)) ? Number(s.ttsSid) : 0,
+      speed: Number.isFinite(Number(s?.ttsSpeed)) && Number(s.ttsSpeed) > 0 ? Number(s.ttsSpeed) : 1,
+      voice,
+      rate: String(overrides.rate ?? s?.ttsRate ?? '').trim() || DEFAULT_TTS_RATE,
+      pitch: String(overrides.pitch ?? s?.ttsPitch ?? '').trim() || DEFAULT_TTS_PITCH,
+      baseUrl: String(s?.feiyuBaseUrl ?? '').trim() || DEFAULT_FEIYU_BASE_URL,
+      apiKey: String(s?.feiyuApiKey ?? '').trim(),
+      style: normalizeFeiyuStyle(overrides.style ?? s?.feiyuStyle),
+      ffmpegPath: String(s?.ffmpegPath ?? '').trim(),
+      pollIntervalMs: Number(s?.feiyuPollIntervalMs) > 0 ? Number(s.feiyuPollIntervalMs) : DEFAULT_FEIYU_POLL_INTERVAL_MS,
+      ...(provider === 'feiyu'
+        ? { timeoutMs: Number(s?.feiyuTimeoutMs) > 0 ? Number(s.feiyuTimeoutMs) : DEFAULT_FEIYU_TIMEOUT_MS }
+        : {}),
       cacheDir,
     })
   }
@@ -5870,16 +5964,107 @@ export function apply(ctx, config) {
   }
 
   /**
+   * 肥鱼声音服务里都能用哪些音色 —— 给设置卡片的「肥鱼音色」下拉供数。
+   *
+   * 用户明确要求：肥鱼音色不能让人手打，得是下拉选项。清单的唯一真相源是
+   * 声音服务自己的 `GET /v1/capabilities`（`tts[]` / `rvc[]` 里每个 `voice`），
+   * 插件这边只做只读投影 —— 不在本地写死一份会过期的名单。
+   *
+   * 服务离线 / 没起 / 口令不对时**不报错也不留空**：
+   * 退回内置的 `feiyu`（当前发布的包确实只注册了这一个音色），
+   * 这样卡片照常能用，用户也不会看到一条空下拉。
+   */
+  async function readFeiyuVoiceOptions() {
+    const fallback = {
+      voices: [{ id: DEFAULT_FEIYU_VOICE, label: DEFAULT_FEIYU_VOICE, styles: [...FEIYU_STYLES], source: 'builtin' }],
+      defaultVoice: DEFAULT_FEIYU_VOICE,
+      styles: [...FEIYU_STYLES],
+      online: false,
+    }
+    const s = readSettings()
+    const base = String(s.feiyuBaseUrl ?? '').trim() || DEFAULT_FEIYU_BASE_URL
+    let root
+    try {
+      root = new URL(base)
+    } catch {
+      return { ...fallback, note: '服务地址不是合法网址' }
+    }
+    if (root.protocol !== 'http:' && root.protocol !== 'https:') {
+      return { ...fallback, note: `服务地址只支持 http(s)：${root.protocol}` }
+    }
+    if (typeof fetch !== 'function') return { ...fallback, note: '这个宿主没有 fetch' }
+
+    const key = String(s.feiyuApiKey ?? '').trim()
+    const headers = key === '' ? {} : { authorization: `Bearer ${key}` }
+    // 探测是「顺手拿个清单」，不能拖住设置卡片：2 秒就够，本机服务没起会立刻 ECONNREFUSED。
+    const href = root.href.endsWith('/') ? root.href : `${root.href}/`
+    const target = new URL('v1/capabilities', href).toString()
+    let payload
+    try {
+      const response = await fetch(target, { headers, signal: AbortSignal.timeout(2000) })
+      if (response.status === 401 || response.status === 403) {
+        return { ...fallback, note: `口令不对（HTTP ${response.status}）` }
+      }
+      if (!response.ok) return { ...fallback, note: `服务回了 HTTP ${response.status}` }
+      payload = await response.json()
+    } catch (error) {
+      const code = error?.cause?.code ?? error?.code ?? ''
+      const why = error?.name === 'TimeoutError' || error?.name === 'AbortError'
+        ? '2 秒没回话'
+        : `${code ? `${code}: ` : ''}${String(error?.message ?? error)}`
+      return { ...fallback, note: `连不上服务（${why}）` }
+    }
+
+    const voices = []
+    const seen = new Set()
+    const add = (row, kind) => {
+      const id = String(row?.voice ?? row?.id ?? '').trim()
+      if (id === '' || seen.has(id)) return
+      seen.add(id)
+      const styles = Array.isArray(row?.styles)
+        ? row.styles.map((x) => String(x ?? '').trim()).filter((x) => x !== '')
+        : []
+      voices.push({
+        id,
+        label: id,
+        kind,
+        styles: styles.length > 0 ? styles : [...FEIYU_STYLES],
+        available: row?.available !== false,
+        ...(row?.engine ? { engine: String(row.engine) } : {}),
+        ...(row?.available === false && row?.reason ? { reason: String(row.reason).slice(0, 200) } : {}),
+      })
+    }
+    for (const row of Array.isArray(payload?.tts) ? payload.tts : []) add(row, 'tts')
+    for (const row of Array.isArray(payload?.rvc) ? payload.rvc : []) add(row, 'rvc')
+    // 服务在线但一个音色都没注册：仍然给出兜底项，别让下拉空掉。
+    if (voices.length === 0) return { ...fallback, online: true, note: '服务在跑，但没有注册任何音色' }
+
+    // 语气清单 = 所有音色声明过的 styles 的并集，再把内置的两个补进去（顺序稳定）。
+    const styles = []
+    for (const row of voices) for (const st of row.styles) if (!styles.includes(st)) styles.push(st)
+    for (const st of FEIYU_STYLES) if (!styles.includes(st)) styles.push(st)
+
+    return {
+      voices,
+      defaultVoice: voices[0].id,
+      styles,
+      online: true,
+      ...(payload?.singing ? { singing: payload.singing } : {}),
+    }
+  }
+
+  /**
    * GET `/api/qq-bridge-neko/catalog` —— 设置卡片要的「可选项」清单。
    *
-   * 用户明确要求：识图服务商、模型优先级链、新会话默认模型都应该是**下拉选择**，
-   * 而不是让人手写 `provider/model`。清单来自宿主自己的 llm 服务（已配置的提供商 / 模型）
-   * 与 agentPresets（人设预设），插件这边只做只读投影。
+   * 用户明确要求：识图服务商、模型优先级链、新会话默认模型、肥鱼音色都应该是**下拉选择**，
+   * 而不是让人手写。清单来自宿主自己的 llm 服务（已配置的提供商 / 模型）、
+   * agentPresets（人设预设）与肥鱼声音服务（`/v1/capabilities`），插件这边只做只读投影。
    *
    * 返回：
    * - `providers`：`[{ id, name, models: [{ id, name, vision }] }]`；
    * - `presets`：`[{ id, name }]`；
    * - `defaultModel`：宿主当前的默认模型（有的话）；
+   * - `feiyuVoices`：`{ voices: [{ id, label, styles, available }], defaultVoice, styles, online }`；
    * - `errors`：某个 provider 列举失败的原因（不影响其它 provider）。
    */
   async function handleCatalogRequest(req, res) {
@@ -5938,11 +6123,26 @@ export function apply(ctx, config) {
       // 没有默认模型不是错误
     }
 
+    // 肥鱼音色清单：服务离线也返回内置项（绝不空下拉），失败原因放进 note 由卡片显示。
+    let feiyuVoices
+    try {
+      feiyuVoices = await readFeiyuVoiceOptions()
+    } catch (error) {
+      errors.push(`feiyu: ${error?.message ?? error}`)
+      feiyuVoices = {
+        voices: [{ id: DEFAULT_FEIYU_VOICE, label: DEFAULT_FEIYU_VOICE, styles: [...FEIYU_STYLES], source: 'builtin' }],
+        defaultVoice: DEFAULT_FEIYU_VOICE,
+        styles: [...FEIYU_STYLES],
+        online: false,
+      }
+    }
+
     return sendJson(res, 200, {
       ok: true,
       providers,
       presets,
       defaultModel,
+      feiyuVoices,
       defaultDir: destSessionCwd(),
       ...(errors.length > 0 ? { errors } : {}),
     })
@@ -6101,15 +6301,18 @@ export function apply(ctx, config) {
     description:
       '把一句话合成为语音发到 QQ（默认发给这一轮钉住的群或私聊）。' +
       '需要先打开设置里的「发语音」（voiceEnabled），否则返回 `reason: "voice-disabled"`，一个字都不发。' +
-      '音色 / 语速 / 音高默认读设置，也可以用 voice / rate / pitch 单次覆盖（edge-tts 写法，例如 zh-CN-XiaoyiNeural、-8%、+12Hz）。' +
+      '音色 / 语速 / 音高 / 引擎 / 语气默认读设置，也可以用 voice / rate / pitch / provider / style 单次覆盖' +
+      '（provider 取 edge | sherpa | feiyu；音色写 edge-tts 那种，例如 zh-CN-XiaoyiNeural、-8%、+12Hz）。' +
       'text 只写要念的内容本体：不要带 [语音] 标记，也不带表情名和 Markdown，那些念不出来。' +
       '合成失败或超过 voiceMaxChars 时**降级发文字**（正文前加「（语音没合成出来）」），不会整条消失。' +
-      '合成好的 mp3 会缓存，同一句同音色只合成一次。',
+      '合成好的音频会缓存（键里含引擎与参数），同一句同一套参数只合成一次。',
     parameters: {
       text: { type: 'string', required: true, description: '要念的内容本体，不要带标记或表情名。' },
-      voice: { type: 'string', description: '音色，覆盖设置里的 ttsVoice。' },
+      provider: { type: 'string', enum: ['edge', 'sherpa', 'feiyu'], description: '这次用哪个引擎，覆盖设置里的 ttsProvider。默认跟设置一致。' },
+      voice: { type: 'string', description: '音色，覆盖设置里的 ttsVoice（肥鱼时覆盖 feiyuVoice）。' },
       rate: { type: 'string', description: '语速，覆盖设置里的 ttsRate，例如 -8%。' },
       pitch: { type: 'string', description: '音高，覆盖设置里的 ttsPitch，例如 +12Hz。' },
+      style: { type: 'string', enum: ['cute', 'gentle'], description: '肥鱼服务的语气，覆盖设置里的 feiyuStyle。' },
       userId: { type: 'string', description: '私聊目标 QQ 号；与 groupId 二选一，都不给则用这一轮钉住的目的地。' },
       groupId: { type: 'string', description: '群号；与 userId 二选一。显式指定时不引用别的群的消息。' },
     },
@@ -6163,12 +6366,14 @@ export function apply(ctx, config) {
 
       // 单次覆盖只对「显式传了」的项生效；空字符串当作没传，免得把设置里的值抹成空。
       const cacheDir = resolveVoiceCacheDir(s)
-      const tts = await synthesize(said, {
-        pythonPath: String(s.ttsPythonPath ?? '').trim(),
-        voice: String(args.voice ?? '').trim() || String(s.ttsVoice ?? '').trim() || DEFAULT_TTS_VOICE,
-        rate: String(args.rate ?? '').trim() || String(s.ttsRate ?? '').trim() || DEFAULT_TTS_RATE,
-        pitch: String(args.pitch ?? '').trim() || String(s.ttsPitch ?? '').trim() || DEFAULT_TTS_PITCH,
-        cacheDir,
+      const provider = String(args.provider ?? '').trim().toLowerCase() || String(s.ttsProvider ?? 'edge').trim().toLowerCase() || 'edge'
+      // 走同一套分派：工具这条路径也得跟设置（含 sherpa / feiyu）一致，别自己拿默认引擎顶着。
+      const tts = await synthesizeWithSettings(said, s, cacheDir, {
+        provider,
+        voice: String(args.voice ?? '').trim(),
+        rate: String(args.rate ?? '').trim(),
+        pitch: String(args.pitch ?? '').trim(),
+        style: String(args.style ?? '').trim(),
       })
 
       let result
@@ -6180,17 +6385,17 @@ export function apply(ctx, config) {
         segments.push(recordSegment(tts.path))
         const ok = await sendSegments(dest, segments)
         result = ok
-          ? { sent: 1, dropped: false, kind: 'voice', destination: dest, cached: tts.cached === true }
+          ? { sent: 1, dropped: false, kind: 'voice', provider, destination: dest, cached: tts.cached === true }
           : { sent: 0, dropped: true, reason: 'send-failed', kind: 'voice' }
       } else {
         // 合成失败：降级发文字，让人至少收到这句话。
-        logger.warn(`qq_bridge_neko_voice 合成失败：${tts.reason}，降级发文字`)
+        logger.warn(`qq_bridge_neko_voice 合成失败（${provider}）：${tts.reason}，降级发文字`)
         const ok = await sendTextPiece(`（语音没合成出来）${said}`, dest, {
           s,
           quoteId: resolved.quoteMessageId,
         })
         result = ok
-          ? { sent: 1, dropped: false, kind: 'text-fallback', destination: dest, voiceError: tts.reason }
+          ? { sent: 1, dropped: false, kind: 'text-fallback', provider, destination: dest, voiceError: tts.reason }
           : { sent: 0, dropped: true, reason: tts.reason, kind: 'text-fallback-failed' }
       }
 
@@ -6208,6 +6413,117 @@ export function apply(ctx, config) {
           reason: result.reason,
           destination: dest,
           sessionId: 'tool:qq_bridge_neko_voice',
+        })
+      }
+      return JSON.stringify(result, null, 2)
+    },
+  }))
+
+  // ── 唱歌：按谱把一首原创小曲唱出来发出去（ABC 谱 + 歌词）───────────────
+  //
+  // 走肥鱼服务的 /v1/singing：谱面主旋律 + 逐字歌词 → SVS 出声 → RVC 换成肥鱼的声音。
+  // 与 qq_bridge_neko_voice 一样要过语音开关与出站门；失败降级成文字说明，不静默丢。
+  ctx.tools.register(defineTool({
+    name: 'qq_bridge_neko_sing',
+    description:
+      '让鲸鲸把一段原创小曲「唱」出来发到 QQ（默认发给这一轮钉住的群或私聊）。' +
+      '需要设置里 ttsProvider=feiyu 且肥鱼声音服务在跑（唱歌 = SVS + RVC，缺一不可）。' +
+      'score 用 ABC 记谱写单音主旋律（一个音符一个字，一字多音用 _ 占位），' +
+      'lyrics 写歌词（只能有汉字；标点空格会被忽略）。' +
+      '谱子必须是原创或公有旋律，别唱别人的版权歌。' +
+      '合成失败或歌词超限时**降级发文字**（正文前加「（歌没唱出来）」），不会整条消失。',
+    parameters: {
+      score: { type: 'string', required: true, description: 'ABC 记谱的谱面正文（单音主旋律、不含和弦与反复记号）。' },
+      lyrics: { type: 'string', required: true, description: '歌词本体：只有汉字，标点空格忽略；字数必须等于音符数（一字多音用 _）。' },
+      transpose: { type: 'number', description: '整体移调半音数，-24 到 24，默认 0。' },
+      bpm: { type: 'number', description: '覆盖谱面速度（BPM），不给就用 ABC 里 Q: 的值。' },
+      pinyin: { type: 'string', description: '可选：逐字拼音（带声调数字），用来纠正多音字。' },
+      userId: { type: 'string', description: '私聊目标 QQ 号；与 groupId 二选一，都不给则用这一轮钉住的目的地。' },
+      groupId: { type: 'string', description: '群号；与 userId 二选一。显式指定时不引用别的群的消息。' },
+    },
+    output: { schema: { type: 'string' }, render: (_a, v) => [{ type: 'text', text: v }] },
+    async execute(args, exec) {
+      const s = readSettings()
+      if (s.voiceEnabled !== true) {
+        return JSON.stringify({ sent: 0, dropped: true, reason: 'voice-disabled' }, null, 2)
+      }
+      const score = String(args.score ?? '').trim()
+      const lyrics = String(args.lyrics ?? '').trim()
+      if (score === '') return JSON.stringify({ sent: 0, dropped: true, reason: 'empty-score' }, null, 2)
+      if (lyrics === '') return JSON.stringify({ sent: 0, dropped: true, reason: 'no-lyrics' }, null, 2)
+      const chars = [...lyrics].filter((c) => /[\u3400-\u9fff_~]/.test(c)).length
+      if (chars > s.voiceMaxSongChars) {
+        return JSON.stringify({
+          sent: 0, dropped: true, reason: 'too-long', limit: s.voiceMaxSongChars, length: chars,
+          error: `歌词 ${chars} 个唱字，超过上限 ${s.voiceMaxSongChars}。剪短一点或 bpm 调快。`,
+        }, null, 2)
+      }
+
+      const denied = explicitOutboundBlock(args)
+      if (denied) return JSON.stringify(denied, null, 2)
+      const blocked = outboundGate('qq_bridge_neko_sing', sessionIdOf(exec?.agent))
+      if (blocked !== null) return blocked
+      const resolved = resolveOutboundDest(args, exec)
+      const dest = resolved.dest
+      if (!dest?.kind) return JSON.stringify({ sent: 0, dropped: true, reason: 'no-destination' }, null, 2)
+
+      if (String(s.ttsProvider).trim().toLowerCase() !== 'feiyu') {
+        // 唱歌只有肥鱼这一条路（SVS + RVC 都在那个服务里），别的引擎唱不了。
+        const said = `（歌没唱出来）现在没接唱歌的引擎，ttsProvider 得是 feiyu 才行`
+        const ok = await sendTextPiece(said, dest, { s, quoteId: resolved.quoteMessageId })
+        return JSON.stringify({ sent: ok ? 1 : 0, dropped: !ok, kind: 'text-fallback', reason: 'singing-needs-feiyu' }, null, 2)
+      }
+
+      const cacheDir = resolveVoiceCacheDir(s)
+      const sing = await feiyuSing({
+        score,
+        scoreName: 'score.abc',
+        lyrics,
+        pinyin: String(args.pinyin ?? '').trim(),
+        transpose: Number.isFinite(Number(args.transpose)) ? Number(args.transpose) : 0,
+        bpm: Number(args.bpm) > 0 ? Number(args.bpm) : undefined,
+        baseUrl: String(s.feiyuBaseUrl ?? '').trim() || DEFAULT_FEIYU_BASE_URL,
+        apiKey: String(s.feiyuApiKey ?? '').trim(),
+        voice: String(s.feiyuVoice ?? '').trim() || DEFAULT_FEIYU_VOICE,
+        cacheDir,
+        timeoutMs: Number(s.feiyuSingTimeoutMs) > 0 ? Number(s.feiyuSingTimeoutMs) : DEFAULT_FEIYU_SING_TIMEOUT_MS,
+        pollIntervalMs: Number(s.feiyuPollIntervalMs) > 0 ? Number(s.feiyuPollIntervalMs) : DEFAULT_FEIYU_POLL_INTERVAL_MS,
+        ffmpegPath: String(s.ffmpegPath ?? '').trim(),
+      })
+
+      let result
+      if (sing.ok) {
+        const segments = []
+        if (s.replyWithQuote && resolved.quoteMessageId) {
+          segments.push({ type: 'reply', data: { id: String(resolved.quoteMessageId) } })
+        }
+        segments.push(recordSegment(sing.path))
+        const ok = await sendSegments(dest, segments)
+        result = ok
+          ? { sent: 1, dropped: false, kind: 'song', destination: dest, cached: sing.cached === true, seconds: sing.seconds }
+          : { sent: 0, dropped: true, reason: 'send-failed', kind: 'song' }
+      } else {
+        logger.warn(`qq_bridge_neko_sing 失败：${sing.reason}，降级发文字`)
+        const ok = await sendTextPiece(`（歌没唱出来）${sing.reason}`, dest, { s, quoteId: resolved.quoteMessageId })
+        result = ok
+          ? { sent: 1, dropped: false, kind: 'text-fallback', voiceError: sing.reason }
+          : { sent: 0, dropped: true, reason: sing.reason, kind: 'text-fallback-failed' }
+      }
+
+      if (result.sent > 0) {
+        recordOutbox({
+          sessionId: 'tool:qq_bridge_neko_sing',
+          via: 'tool',
+          nonQQTurn: !gateOf(sessionIdOf(exec?.agent)).currentTurnFromQQ,
+          to: dest,
+          text: result.kind === 'song' ? `[唱歌] ${[...lyrics].slice(0, 30).join('')}` : `（歌没唱出来）${sing.reason ?? ''}`,
+        })
+      } else {
+        recordDropped({
+          via: 'tool',
+          reason: result.reason,
+          destination: dest,
+          sessionId: 'tool:qq_bridge_neko_sing',
         })
       }
       return JSON.stringify(result, null, 2)

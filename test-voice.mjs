@@ -1,21 +1,39 @@
-// voice.js 单测：切块 / 缓存名 / record 段 / 合成失败路径。纯离线，零依赖。
+// voice.js 单测：切块 / 缓存名 / record 段 / 合成失败路径 / 三套语音引擎（edge / sherpa / feiyu）。纯离线，零依赖。
 // 运行：node test-voice.mjs
-// 合成部分只在 DSH_TTS_TEST_PYTHON 指向装了 edge-tts 的解释器时才真跑，
-// 否则只验「解释器不存在时优雅失败」。
-import { existsSync, mkdtempSync, rmSync, statSync } from 'node:fs'
+// edge / sherpa 合成部分只在 DSH_TTS_TEST_PYTHON 指向装了 edge-tts 的解释器时才真跑，
+// 否则只验「解释器不存在时优雅失败」「模型目录不存在时直接失败」。
+// 肥鱼引擎用 Node 内置 http 起**假服务**真跑 HTTP 全流程（不依赖真肥鱼服务在不在）：
+// 成功 / 任务失败 / 鉴权不过 / 连不上 / 超时 / 缓存命中不重复请求 / 带没带鉴权头。
+import { createServer } from 'node:http'
+import { existsSync, mkdtempSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 import {
+  DEFAULT_FFMPEG_TIMEOUT_MS,
+  DEFAULT_FEIYU_BASE_URL,
+  DEFAULT_FEIYU_POLL_INTERVAL_MS,
+  DEFAULT_FEIYU_SING_TIMEOUT_MS,
+  DEFAULT_FEIYU_STYLE,
+  DEFAULT_FEIYU_TIMEOUT_MS,
+  DEFAULT_FEIYU_VOICE,
   DEFAULT_TTS_PITCH,
   DEFAULT_TTS_RATE,
   DEFAULT_TTS_VOICE,
+  DEFAULT_VOICE_MAX_SONG_CHARS,
+  DEFAULT_VOICE_PROVIDER,
+  ensureRecordAudio,
+  feiyuSing,
+  feiyuSynthesize,
   hasVoiceBlock,
+  normalizeFeiyuStyle,
+  normalizeVoiceProvider,
   recordSegment,
   splitVoiceBlocks,
   stripVoiceBlocks,
   synthesize,
   voiceCacheName,
+  VOICE_PROVIDERS,
 } from './voice.js'
 
 let failed = 0
@@ -143,6 +161,479 @@ const dir = mkdtempSync(join(tmpdir(), 'qq-bridge-neko-voice-'))
       check('第二次命中缓存（cached=true）', r2.ok === true && r2.cached === true)
     }
   }
+}
+
+// 15) 缓存名：引擎进哈希，edge / sherpa / feiyu 三家互不撞
+{
+  const names = voiceCacheName('同一句话', { provider: 'feiyu', voice: 'feiyu', style: 'cute' })
+  check('肥鱼产物是 16 位十六进制 .wav', /^[0-9a-f]{16}\.wav$/.test(names), names)
+  check('同输入 → 同缓存名（肥鱼）', names === voiceCacheName('同一句话', { provider: 'feiyu', voice: 'feiyu', style: 'cute' }))
+  check('换语气 → 换名字', voiceCacheName('同一句话', { provider: 'feiyu', voice: 'feiyu', style: 'gentle' }) !== names)
+  check('换音色 → 换名字', voiceCacheName('同一句话', { provider: 'feiyu', voice: 'other', style: 'cute' }) !== names)
+  check('认不出的语气回落 cute（名字不变）', voiceCacheName('同一句话', { provider: 'feiyu', voice: 'feiyu', style: '乱写' }) === names)
+  const edge = voiceCacheName('同一句话', { provider: 'edge', voice: 'feiyu', style: 'cute', rate: '-8%', pitch: '+12Hz' })
+  const sherpa = voiceCacheName('同一句话', { provider: 'sherpa', voice: 'feiyu', style: 'cute', rate: '-8%', pitch: '+12Hz' })
+  check('edge 产物是 .mp3', /^[0-9a-f]{16}\.mp3$/.test(edge), edge)
+  check('sherpa 产物是 .mp3', /^[0-9a-f]{16}\.mp3$/.test(sherpa), sherpa)
+  check(
+    '三家同名不同产物（哈希互不相同）',
+    new Set([edge.slice(0, 16), sherpa.slice(0, 16), names.slice(0, 16)]).size === 3,
+    `${edge} / ${sherpa} / ${names}`,
+  )
+  check('认不出的引擎回落 edge（.mp3）', voiceCacheName('同一句话', { provider: 'nope' }).endsWith('.mp3'))
+  check('ext 可以覆盖后缀', voiceCacheName('同一句话', { provider: 'feiyu', ext: 'mp3' }).endsWith('.mp3'))
+}
+
+// 16) 默认值：默认引擎必须是 edge（升级后行为不变）
+{
+  check('默认引擎是 edge', DEFAULT_VOICE_PROVIDER === 'edge')
+  check('三个引擎都在名单里', VOICE_PROVIDERS.join(',') === 'edge,sherpa,feiyu', VOICE_PROVIDERS.join(','))
+  check(
+    'normalizeVoiceProvider 认 feiyu / sherpa（大小写无所谓）',
+    normalizeVoiceProvider('FEIYU') === 'feiyu' && normalizeVoiceProvider('Sherpa') === 'sherpa',
+  )
+  check('normalizeVoiceProvider 认不出就回落 edge', normalizeVoiceProvider('whatever') === 'edge' && normalizeVoiceProvider(undefined) === 'edge')
+  check('normalizeFeiyuStyle 认 gentle', normalizeFeiyuStyle('Gentle') === 'gentle')
+  check('normalizeFeiyuStyle 认不出回落 cute', normalizeFeiyuStyle('') === 'cute')
+  check('默认地址是本机 9880', DEFAULT_FEIYU_BASE_URL === 'http://127.0.0.1:9880')
+  check('默认等 180 秒（首次加载模型要慢）', DEFAULT_FEIYU_TIMEOUT_MS === 180000)
+  check('默认每秒问一次', DEFAULT_FEIYU_POLL_INTERVAL_MS === 1000)
+  check('转码最多 30 秒', DEFAULT_FFMPEG_TIMEOUT_MS === 30000)
+  check('默认语气 cute、默认音色 feiyu', DEFAULT_FEIYU_STYLE === 'cute' && DEFAULT_FEIYU_VOICE === 'feiyu')
+  check('唱歌默认等 10 分钟（SVS + RVC + 混音慢一个量级）', DEFAULT_FEIYU_SING_TIMEOUT_MS === 600000)
+  check('一首歌默认最多 400 个唱字', DEFAULT_VOICE_MAX_SONG_CHARS === 400)
+}
+
+// ── 假肥鱼服务：用 Node 内置 http 起一个真服务，测完整 HTTP 路径 ──────────────
+const WAV_BYTES = Buffer.concat([Buffer.from('RIFF'), Buffer.alloc(4), Buffer.from('WAVEfmt '), Buffer.alloc(32, 7)])
+
+/** 起一个假服务；handler(entry, res, state) 决定怎么答。用 0 端口，不占固定端口。 */
+function startFeiyu(handler) {
+  const requests = []
+  const server = createServer((req, res) => {
+    let body = ''
+    req.on('data', (chunk) => { body += String(chunk) })
+    req.on('end', () => {
+      const entry = { method: req.method, url: req.url, headers: req.headers, body }
+      requests.push(entry)
+      try {
+        handler(entry, res, requests)
+      } catch (error) {
+        res.statusCode = 500
+        res.end(String(error?.message ?? error))
+      }
+    })
+  })
+  return new Promise((resolve, reject) => {
+    server.once('error', reject)
+    server.listen(0, '127.0.0.1', () => {
+      const { port } = server.address()
+      resolve({
+        baseUrl: `http://127.0.0.1:${port}`,
+        requests,
+        close: () => new Promise((done) => server.close(() => done())),
+      })
+    })
+  })
+}
+
+/** 一个「正常」的假服务：提交 → running → success → 给 WAV。 */
+function happyHandler(entry, res, requests) {
+  if (entry.method === 'POST' && entry.url === '/v1/speech') {
+    res.writeHead(202, { 'content-type': 'application/json' })
+    res.end(JSON.stringify({ job_id: 'J-OK' }))
+    return
+  }
+  if (entry.url === '/v1/jobs/J-OK') {
+    // 第一次轮询 running、第二次才 success —— 顺便验证真的会等
+    const seen = requests.filter((r) => r.url === '/v1/jobs/J-OK').length
+    res.writeHead(200, { 'content-type': 'application/json' })
+    res.end(JSON.stringify({ status: seen < 2 ? 'running' : 'success' }))
+    return
+  }
+  if (entry.url === '/v1/jobs/J-OK/audio') {
+    res.writeHead(200, { 'content-type': 'audio/wav' })
+    res.end(WAV_BYTES)
+    return
+  }
+  res.statusCode = 404
+  res.end('{}')
+}
+
+// 17) 参数校验：不起请求就该失败
+{
+  const r1 = await feiyuSynthesize('   ', { cacheDir: dir, baseUrl: 'http://127.0.0.1:1' })
+  check('空文本 → empty-text', r1.ok === false && r1.reason === 'empty-text')
+  const r2 = await feiyuSynthesize('一句话', { cacheDir: '', baseUrl: 'http://127.0.0.1:1' })
+  check('没有缓存目录 → no-cache-dir', r2.ok === false && r2.reason === 'no-cache-dir')
+  const r3 = await feiyuSynthesize('一句话', { cacheDir: dir, baseUrl: 'ftp://x' })
+  check('认不出的协议 → bad-base-url', r3.ok === false && r3.reason.startsWith('bad-base-url'), r3.reason)
+  const r4 = await feiyuSynthesize('一句话', { cacheDir: dir, baseUrl: '不是个地址' })
+  check('地址不是 URL → bad-base-url', r4.ok === false && r4.reason.startsWith('bad-base-url'), r4.reason)
+}
+
+// 18) 成功路径：POST → 轮询 → 下 WAV，落盘 + 鉴权头 + 请求体
+{
+  const svc = await startFeiyu(happyHandler)
+  const text = '肥鱼测试第一句'
+  const r = await feiyuSynthesize(text, {
+    cacheDir: dir,
+    baseUrl: svc.baseUrl,
+    apiKey: 'test-key',
+    voice: 'feiyu',
+    style: 'gentle',
+    timeoutMs: 8000,
+    pollIntervalMs: 20,
+  })
+  check('肥鱼合成成功', r.ok === true, r.ok ? r.path : r.reason)
+  if (r.ok) {
+    check('产物文件存在且有内容', existsSync(r.path) && statSync(r.path).size === WAV_BYTES.length, String(statSync(r.path).size))
+    check('产物是 .wav', r.path.endsWith('.wav'), r.path)
+    check('第一次是现合成（cached=false）', r.cached === false)
+  }
+  const post = svc.requests[0]
+  check('第一个请求是 POST /v1/speech', post?.method === 'POST' && post?.url === '/v1/speech', `${post?.method} ${post?.url}`)
+  check('带 Bearer 鉴权头', post?.headers?.authorization === 'Bearer test-key')
+  const sent = JSON.parse(post?.body ?? '{}')
+  check('请求体带 voice/text/style', sent.voice === 'feiyu' && sent.text === text && sent.style === 'gentle', post?.body)
+  check('轮询请求走 GET /v1/jobs/J-OK', svc.requests.some((q) => q.method === 'GET' && q.url === '/v1/jobs/J-OK'))
+  check('最后下音频 /v1/jobs/J-OK/audio', svc.requests.at(-1)?.url === '/v1/jobs/J-OK/audio', svc.requests.at(-1)?.url)
+  check('轮询超过一次（真的等了 running）', svc.requests.filter((q) => q.url === '/v1/jobs/J-OK').length >= 2)
+  check('失败原因里没有 API key', !JSON.stringify(r).includes('test-key'))
+  await svc.close()
+}
+
+// 19) 任务失败：status=failed → job-failed + 对端给的原因
+{
+  const svc = await startFeiyu((entry, res) => {
+    if (entry.method === 'POST') {
+      res.writeHead(202, { 'content-type': 'application/json' })
+      res.end(JSON.stringify({ id: 'J-BAD' }))
+      return
+    }
+    if (entry.url === '/v1/jobs/J-BAD') {
+      res.writeHead(200, { 'content-type': 'application/json' })
+      res.end(JSON.stringify({ status: 'failed', error: '模型没加载' }))
+      return
+    }
+    res.statusCode = 500
+    res.end('x')
+  })
+  const r = await feiyuSynthesize('任务失败这句', {
+    cacheDir: dir, baseUrl: svc.baseUrl, timeoutMs: 5000, pollIntervalMs: 20,
+  })
+  check('任务 failed → job-failed', r.ok === false && r.reason === 'job-failed: 模型没加载', r.reason)
+  check('失败时不请求音频接口', !svc.requests.some((q) => q.url.endsWith('/audio')))
+  await svc.close()
+}
+
+// 20) 任务被打断 / 鉴权不过 / 非 2xx
+{
+  const svc = await startFeiyu((entry, res) => {
+    if (entry.method === 'POST') { res.writeHead(202, { 'content-type': 'application/json' }); res.end('{"id":"J-I"}'); return }
+    res.writeHead(200, { 'content-type': 'application/json' })
+    res.end('{"status":"interrupted"}')
+  })
+  const r = await feiyuSynthesize('被打断这句', { cacheDir: dir, baseUrl: svc.baseUrl, timeoutMs: 5000, pollIntervalMs: 20 })
+  check('任务 interrupted → job-interrupted', r.ok === false && r.reason === 'job-interrupted', r.reason)
+  await svc.close()
+
+  const auth = await startFeiyu((entry, res) => { res.writeHead(401); res.end('nope') })
+  const ra = await feiyuSynthesize('鉴权不过这句', { cacheDir: dir, baseUrl: auth.baseUrl, apiKey: 'wrong', timeoutMs: 5000 })
+  check('401 → auth-failed: 401', ra.ok === false && ra.reason === 'auth-failed: 401', ra.reason)
+  await auth.close()
+
+  const boom = await startFeiyu((entry, res) => { res.writeHead(500); res.end('{}') })
+  const rb = await feiyuSynthesize('服务报错这句', { cacheDir: dir, baseUrl: boom.baseUrl, timeoutMs: 5000 })
+  check('500 → speech-http-500', rb.ok === false && rb.reason === 'speech-http-500', rb.reason)
+  await boom.close()
+
+  const noId = await startFeiyu((entry, res) => { res.writeHead(202, { 'content-type': 'application/json' }); res.end('{}') })
+  const rn = await feiyuSynthesize('没任务号这句', { cacheDir: dir, baseUrl: noId.baseUrl, timeoutMs: 5000 })
+  check('202 但没任务号 → no-job-id', rn.ok === false && rn.reason === 'no-job-id', rn.reason)
+  await noId.close()
+}
+
+// 21) 连不上：地址没人听，失败但不抛
+{
+  const dead = await startFeiyu((entry, res) => { res.end('') })
+  const deadUrl = dead.baseUrl
+  await dead.close()   // 端口关掉了，连它必失败
+  const r = await feiyuSynthesize('连不上这句', { cacheDir: dir, baseUrl: deadUrl, timeoutMs: 5000, pollIntervalMs: 20 })
+  check('连不上 → connect-failed（不抛）', r.ok === false && r.reason.startsWith('connect-failed'), r.reason)
+}
+
+// 22) 超时：任务永远 running，到点必须放弃
+{
+  const svc = await startFeiyu((entry, res) => {
+    if (entry.method === 'POST') { res.writeHead(202, { 'content-type': 'application/json' }); res.end('{"id":"J-SLOW"}'); return }
+    res.writeHead(200, { 'content-type': 'application/json' })
+    res.end('{"status":"running"}')
+  })
+  const r = await feiyuSynthesize('超时这句', { cacheDir: dir, baseUrl: svc.baseUrl, timeoutMs: 200, pollIntervalMs: 30 })
+  check('一直 running → timeout: 200ms', r.ok === false && r.reason === 'timeout: 200ms', r.reason)
+  await svc.close()
+}
+
+// 23) 缓存命中：同一句话第二次不再打任何请求
+{
+  const first = await startFeiyu(happyHandler)
+  const text = '缓存命中这句'
+  const r1 = await feiyuSynthesize(text, { cacheDir: dir, baseUrl: first.baseUrl, timeoutMs: 8000, pollIntervalMs: 20 })
+  check('首次合成成功', r1.ok === true, r1.ok ? r1.path : r1.reason)
+  const used = first.requests.length
+  await first.close()
+
+  // 换一个「怎么问都 500」的服务：真去打请求就必然失败，命中缓存才不会失败。
+  const poisoned = await startFeiyu((entry, res) => { res.writeHead(500); res.end('{}') })
+  const r2 = await feiyuSynthesize(text, { cacheDir: dir, baseUrl: poisoned.baseUrl, timeoutMs: 3000, pollIntervalMs: 20 })
+  check('第二次命中缓存（cached=true）', r2.ok === true && r2.cached === true, r2.ok ? String(r2.cached) : r2.reason)
+  check('命中缓存时一个请求都没发', poisoned.requests.length === 0, String(poisoned.requests.length))
+  check('首次真的发过请求', used > 0, String(used))
+  await poisoned.close()
+}
+
+// 24) 统一入口 synthesize 的分派：三个引擎各走各的，谁也不冒充谁
+{
+  const feiyu = await synthesize('分派测试', { provider: 'feiyu', cacheDir: dir, baseUrl: 'ftp://x' })
+  check('provider=feiyu 走肥鱼实现', feiyu.ok === false && feiyu.reason.startsWith('bad-base-url'), feiyu.reason)
+  const sherpa = await synthesize('分派测试', { provider: 'sherpa', cacheDir: dir })
+  check('provider=sherpa 走本地模型，缺模型目录直接失败', sherpa.ok === false && sherpa.reason === 'sherpa-model-dir-missing', sherpa.reason)
+  const bogus = await synthesize('分派测试', { provider: 'nope', cacheDir: dir })
+  check('认不出的引擎直接失败（不悄悄换实现）', bogus.ok === false && bogus.reason === 'unsupported-tts-provider: nope', bogus.reason)
+  const edge = await synthesize('分派测试', {
+    provider: 'edge', cacheDir: dir, pythonPath: join(dir, 'definitely-not-a-python.exe'), timeoutMs: 8000,
+  })
+  check('provider=edge 走 edge 实现（解释器不存在时优雅失败）', edge.ok === false && typeof edge.reason === 'string', edge.reason)
+  const dflt = await synthesize('   ', { cacheDir: dir })
+  check('不传引擎当 edge（空文本 → empty-text）', dflt.ok === false && dflt.reason === 'empty-text')
+}
+
+// 24b) 不带口令时不应该发出鉴权头
+{
+  const svc = await startFeiyu(happyHandler)
+  const r = await feiyuSynthesize('没口令这句', { cacheDir: dir, baseUrl: svc.baseUrl, timeoutMs: 8000, pollIntervalMs: 20 })
+  check('不给口令也能合成', r.ok === true, r.ok ? r.path : r.reason)
+  check('没口令 → 一个鉴权头都不带', svc.requests.every((q) => q.headers.authorization === undefined), JSON.stringify(svc.requests[0]?.headers ?? {}))
+  await svc.close()
+}
+
+// 25) ensureRecordAudio：只有 wav 才转，失败一律回落原文件
+{
+  const plain = join(dir, 'plain.mp3')
+  writeFileSync(plain, 'x')
+  const e1 = await ensureRecordAudio(plain)
+  check('非 wav 原样返回', e1.path === plain && e1.converted === false)
+
+  const e2 = await ensureRecordAudio('')
+  check('空路径 → empty-path', e2.path === '' && e2.reason === 'empty-path')
+
+  const wav = join(dir, 'need-convert.wav')
+  writeFileSync(wav, WAV_BYTES)
+  const e3 = await ensureRecordAudio(wav, { ffmpegPath: join(dir, 'no-such-ffmpeg.exe'), timeoutMs: 5000 })
+  check('没 ffmpeg 时回落原 wav（不抛、不算失败）', e3.path === wav && e3.converted === false && typeof e3.reason === 'string', e3.reason)
+  check('回落原因带前缀', /^ffmpeg-(missing|spawn-failed|exit)/.test(e3.reason), e3.reason)
+
+  const cachedMp3 = join(dir, 'already-done.wav')
+  writeFileSync(cachedMp3, WAV_BYTES)
+  writeFileSync(join(dir, 'already-done.mp3'), 'mp3-bytes')
+  const e4 = await ensureRecordAudio(cachedMp3)
+  check('已有同名 mp3 时直接用（converted=true）', e4.path === join(dir, 'already-done.mp3') && e4.converted === true)
+
+  const seg = recordSegment(wav)
+  check('wav 路径也能进 record 段', seg.type === 'record' && seg.data.file.startsWith('file:///'))
+}
+
+// 26) ensureRecordAudio：真装 ffmpeg 的机器上，wav → mp3 真转一次
+{
+  // 造一段真的 8kHz 单声道 PCM WAV（不是上面那种假字节，ffmpeg 解得开）
+  const frames = 1600
+  const pcm = Buffer.alloc(frames * 2)
+  for (let i = 0; i < frames; i++) pcm.writeInt16LE(Math.round(Math.sin(i / 8) * 3000), i * 2)
+  const header = Buffer.alloc(44)
+  header.write('RIFF', 0)
+  header.writeUInt32LE(36 + pcm.length, 4)
+  header.write('WAVE', 8)
+  header.write('fmt ', 12)
+  header.writeUInt32LE(16, 16)
+  header.writeUInt16LE(1, 20)
+  header.writeUInt16LE(1, 22)
+  header.writeUInt32LE(8000, 24)
+  header.writeUInt32LE(16000, 28)
+  header.writeUInt16LE(2, 32)
+  header.writeUInt16LE(16, 34)
+  header.write('data', 36)
+  header.writeUInt32LE(pcm.length, 40)
+  const realWav = join(dir, 'real-tone.wav')
+  writeFileSync(realWav, Buffer.concat([header, pcm]))
+
+  const r = await ensureRecordAudio(realWav, { timeoutMs: 20000 })
+  if (r.converted === true) {
+    check('装了 ffmpeg：wav 真转出 mp3', existsSync(r.path) && statSync(r.path).size > 0, `${r.path} ${statSync(r.path).size}B`)
+    check('转码产物后缀是 .mp3', r.path.endsWith('.mp3'), r.path)
+    const again = await ensureRecordAudio(realWav, { timeoutMs: 20000 })
+    check('再转一次直接用已有 mp3（不重复转码）', again.converted === true && again.path === r.path)
+  } else if (/^ffmpeg-(missing|spawn-failed)/.test(String(r.reason))) {
+    console.log(`SKIP  真转码（本机没装 ffmpeg：${r.reason}）`)
+  } else {
+    check('装了 ffmpeg：wav 真转出 mp3', false, r.reason)
+  }
+}
+
+// ── 唱歌（feiyuSing）：谱 + 歌词 → 假服务走完整 HTTP 路径 ───────────────────
+const ABC = 'X:1\nT:t\nM:4/4\nL:1/4\nK:C\nC D E F|G4|'
+const LYRICS = '一二三四五六'
+
+function singHandler(entry, res, requests) {
+  if (entry.method === 'POST' && entry.url === '/v1/assets') {
+    const n = requests.filter((r) => r.url === '/v1/assets').length
+    res.writeHead(201, { 'content-type': 'application/json' })
+    res.end(JSON.stringify({ id: `A-${n}` }))
+    return
+  }
+  if (entry.method === 'POST' && entry.url === '/v1/singing') {
+    res.writeHead(202, { 'content-type': 'application/json' })
+    res.end(JSON.stringify({ job_id: 'J-SING' }))
+    return
+  }
+  if (entry.url === '/v1/jobs/J-SING') {
+    const seen = requests.filter((r) => r.url === '/v1/jobs/J-SING').length
+    res.writeHead(200, { 'content-type': 'application/json' })
+    res.end(JSON.stringify(seen < 2
+      ? { status: 'running' }
+      : { status: 'success', audio: { seconds: 12.5 } }))
+    return
+  }
+  if (entry.url === '/v1/jobs/J-SING/audio') {
+    res.writeHead(200, { 'content-type': 'audio/wav' })
+    res.end(WAV_BYTES)
+    return
+  }
+  res.statusCode = 404
+  res.end('{}')
+}
+
+// 27) feiyuSing 参数校验：不起请求就该失败
+{
+  const r1 = await feiyuSing({ score: '  ', lyrics: LYRICS, cacheDir: dir, baseUrl: 'http://127.0.0.1:1' })
+  check('空谱子 → empty-score', r1.ok === false && r1.reason === 'empty-score', r1.reason)
+  const r2 = await feiyuSing({ score: ABC, lyrics: '  ', cacheDir: dir, baseUrl: 'http://127.0.0.1:1' })
+  check('空歌词 → no-lyrics', r2.ok === false && r2.reason === 'no-lyrics', r2.reason)
+  const r3 = await feiyuSing({ score: ABC, lyrics: LYRICS, cacheDir: '', baseUrl: 'http://127.0.0.1:1' })
+  check('没有缓存目录 → no-cache-dir', r3.ok === false && r3.reason === 'no-cache-dir', r3.reason)
+  const r4 = await feiyuSing({ score: ABC, lyrics: LYRICS, cacheDir: dir, baseUrl: 'ftp://x' })
+  check('认不出的协议 → bad-base-url', r4.ok === false && r4.reason.startsWith('bad-base-url'), r4.reason)
+}
+
+// 28) 成功路径：两次上传 → /v1/singing → 轮询 → 下 WAV
+{
+  const svc = await startFeiyu(singHandler)
+  const r = await feiyuSing({
+    score: ABC, lyrics: LYRICS, cacheDir: dir, baseUrl: svc.baseUrl,
+    apiKey: 'sing-key', voice: 'feiyu', timeoutMs: 8000, pollIntervalMs: 20,
+  })
+  check('唱歌成功', r.ok === true, r.ok ? r.path : r.reason)
+  if (r.ok) {
+    check('产物文件存在且有内容', existsSync(r.path) && statSync(r.path).size > 0, String(statSync(r.path).size))
+    check('回传了 audio.seconds', r.seconds === 12.5, String(r.seconds))
+    check('第一次是现合成（cached=false）', r.cached === false)
+  }
+  const uploads = svc.requests.filter((q) => q.method === 'POST' && q.url === '/v1/assets')
+  check('谱子和歌词各传一次（共 2 次 /v1/assets）', uploads.length === 2, String(uploads.length))
+  const post = svc.requests.find((q) => q.url === '/v1/singing')
+  check('提交到 POST /v1/singing', post?.method === 'POST')
+  check('唱歌也带 Bearer 鉴权头', post?.headers?.authorization === 'Bearer sing-key')
+  const sent = JSON.parse(post?.body ?? '{}')
+  check('提交体带 voice/score_id/lyrics_id', sent.voice === 'feiyu' && sent.score_id === 'A-1' && sent.lyrics_id === 'A-2', post?.body)
+  check('没传 transpose 时不塞这个字段', sent.transpose === undefined && sent.bpm === undefined, post?.body)
+  check('轮询超过一次（真的等了 running）', svc.requests.filter((q) => q.url === '/v1/jobs/J-SING').length >= 2)
+  check('最后下音频 /v1/jobs/J-SING/audio', svc.requests.at(-1)?.url === '/v1/jobs/J-SING/audio', svc.requests.at(-1)?.url)
+  check('失败原因里没有 API key', !JSON.stringify(r).includes('sing-key'))
+  await svc.close()
+}
+
+// 29) 带拼音 → 传三次资源，提交体里多一个 pinyin_id
+{
+  const svc = await startFeiyu(singHandler)
+  const r = await feiyuSing({
+    score: ABC, lyrics: LYRICS, pinyin: 'yi1 er4 san1 si4', cacheDir: dir, baseUrl: svc.baseUrl,
+    timeoutMs: 8000, pollIntervalMs: 20,
+  })
+  check('带拼音也能唱', r.ok === true, r.ok ? r.path : r.reason)
+  check('三份资源（谱/词/拼音）各传一次', svc.requests.filter((q) => q.url === '/v1/assets').length === 3)
+  const sent = JSON.parse(svc.requests.find((q) => q.url === '/v1/singing')?.body ?? '{}')
+  check('提交体带 pinyin_id', sent.pinyin_id === 'A-3', JSON.stringify(sent))
+  await svc.close()
+}
+
+// 30) transpose / bpm 只在给了正数时才写进提交体
+//     注意：每个用例用不同歌词，否则会命中上一用例的缓存、根本不发请求。
+{
+  const svc = await startFeiyu(singHandler)
+  await feiyuSing({
+    score: ABC, lyrics: '移调速度测试', cacheDir: dir, baseUrl: svc.baseUrl,
+    transpose: -3, bpm: 96, timeoutMs: 8000, pollIntervalMs: 20,
+  })
+  const sent = JSON.parse(svc.requests.find((q) => q.url === '/v1/singing')?.body ?? '{}')
+  check('transpose 写进提交体', sent.transpose === -3, JSON.stringify(sent))
+  check('bpm 写进提交体', sent.bpm === 96, JSON.stringify(sent))
+  await svc.close()
+}
+
+// 31) 任务失败 → job-failed + 对端给的原因
+{
+  const svc = await startFeiyu((entry, res) => {
+    if (entry.method === 'POST' && entry.url === '/v1/assets') {
+      res.writeHead(201, { 'content-type': 'application/json' }); res.end('{"id":"A-x"}'); return
+    }
+    if (entry.method === 'POST') { res.writeHead(202, { 'content-type': 'application/json' }); res.end('{"id":"J-BAD"}'); return }
+    res.writeHead(200, { 'content-type': 'application/json' })
+    res.end('{"status":"failed","error":"谱面解析不出来"}')
+  })
+  const r = await feiyuSing({ score: ABC, lyrics: '任务失败歌词', cacheDir: dir, baseUrl: svc.baseUrl, timeoutMs: 5000, pollIntervalMs: 20 })
+  check('唱歌任务失败 → job-failed 带原因', r.ok === false && r.reason === 'job-failed: 谱面解析不出来', r.reason)
+  await svc.close()
+}
+
+// 32) 鉴权不过 → auth-failed: 401（区分于普通 http 错误）
+{
+  const svc = await startFeiyu((entry, res) => { res.writeHead(401); res.end('{}') })
+  const r = await feiyuSing({ score: ABC, lyrics: '鉴权失败歌词', cacheDir: dir, baseUrl: svc.baseUrl, timeoutMs: 5000, pollIntervalMs: 20 })
+  check('401 → auth-failed: 401', r.ok === false && r.reason === 'auth-failed: 401', r.reason)
+  await svc.close()
+}
+
+// 33) 超时：一直 running，到点必须放弃（唱歌给的时间比说话长得多）
+{
+  const svc = await startFeiyu((entry, res) => {
+    if (entry.method === 'POST' && entry.url === '/v1/assets') {
+      res.writeHead(201, { 'content-type': 'application/json' }); res.end('{"id":"A-y"}'); return
+    }
+    if (entry.method === 'POST') { res.writeHead(202, { 'content-type': 'application/json' }); res.end('{"id":"J-SLOW"}'); return }
+    res.writeHead(200, { 'content-type': 'application/json' }); res.end('{"status":"running"}')
+  })
+  const r = await feiyuSing({ score: ABC, lyrics: '超时歌词', cacheDir: dir, baseUrl: svc.baseUrl, timeoutMs: 250, pollIntervalMs: 30 })
+  check('唱歌一直 running → timeout: 250ms', r.ok === false && r.reason === 'timeout: 250ms', r.reason)
+  await svc.close()
+}
+
+// 34) 缓存命中：同一份谱 + 同一份词，第二次一个请求都不发
+{
+  const first = await startFeiyu(singHandler)
+  const opts = { score: ABC, lyrics: '缓存测试词', cacheDir: dir, baseUrl: first.baseUrl, timeoutMs: 8000, pollIntervalMs: 20 }
+  const r1 = await feiyuSing(opts)
+  check('唱歌首次成功', r1.ok === true, r1.ok ? r1.path : r1.reason)
+  await first.close()
+  const poisoned = await startFeiyu((entry, res) => { res.writeHead(500); res.end('{}') })
+  const r2 = await feiyuSing({ ...opts, baseUrl: poisoned.baseUrl })
+  check('唱歌第二次命中缓存（cached=true）', r2.ok === true && r2.cached === true, r2.ok ? String(r2.cached) : r2.reason)
+  check('命中缓存时一个请求都没发', poisoned.requests.length === 0, String(poisoned.requests.length))
+  await poisoned.close()
+  // 换一句词就是另一首歌，不会误命中
+  const third = await startFeiyu(singHandler)
+  const r3 = await feiyuSing({ ...opts, lyrics: '换一句词', baseUrl: third.baseUrl })
+  check('换歌词 → 不命中旧缓存，真去请求', r3.ok === true && r3.cached === false && third.requests.length > 0)
+  await third.close()
 }
 
 rmSync(dir, { recursive: true, force: true })

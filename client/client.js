@@ -176,8 +176,12 @@ window.__ModuleLoader__.load({
         key: 'ttsProvider',
         label: '语音合成用什么',
         kind: 'select',
-        options: [['edge', 'edge-tts（本地，免费）']],
-        hint: '目前只支持 edge-tts：在你指定的 python 里跑，不联网到付费服务。',
+        options: [
+          ['edge', 'edge-tts（微软的，在本机 python 里跑）'],
+          ['sherpa', 'sherpa（本地离线模型，不联网）'],
+          ['feiyu', '肥鱼声音服务（本机服务，要先把它起起来）'],
+        ],
+        hint: '三选一，默认 edge。edge = 用你指定的 python 跑 edge-tts；sherpa = 本机模型离线合成；feiyu = 调本机那个声音服务（默认 http://127.0.0.1:9880），吐 wav。',
       },
       {
         key: 'ttsVoice',
@@ -203,7 +207,66 @@ window.__ModuleLoader__.load({
         key: 'voiceCacheDir',
         label: '语音缓存放哪',
         kind: 'text',
-        hint: '留空 = $DSH_HOME/qq-bridge-neko-voice。同一句 + 同一组音色参数命中缓存，不会重复合成。',
+        hint: '留空 = $DSH_HOME/qq-bridge-neko-voice。同一段话 + 同一个引擎同一套参数命中缓存，不会重复合成。',
+      },
+      { key: 'ttsSid', label: 'sherpa 用哪个说话人', kind: 'number', hint: '模型里第几个音色，从 0 开始。默认 0。' },
+      { key: 'ttsSpeed', label: 'sherpa 语速倍数', kind: 'number', hint: '1 = 原速，1.2 快一点，0.8 慢一点。默认 1。' },
+      {
+        key: 'ttsModelDir',
+        label: 'sherpa 模型放哪',
+        kind: 'text',
+        hint: '本地离线合成用的模型目录，里面要有 model.onnx、tokens.txt 那几样。留空 = $DSH_HOME/tts-models/vits-melo-tts-zh_en。',
+      },
+      {
+        key: 'ffmpegPath',
+        label: '转 mp3 用哪个 ffmpeg',
+        kind: 'text',
+        hint: '肥鱼吐的是 wav，转成 mp3 更好发。留空 = 先找 PATH 上的 ffmpeg，再找本机自带的 D:\\小丸\\tools\\ffmpeg.exe；都没有就原样发 wav，不算失败。',
+      },
+      {
+        key: 'feiyuBaseUrl',
+        label: '肥鱼声音服务地址',
+        kind: 'text',
+        hint: '本机那个声音服务的地址，默认 http://127.0.0.1:9880。得先把服务起起来，语音才合成得出来。',
+      },
+      {
+        key: 'feiyuApiKey',
+        label: '肥鱼服务口令',
+        kind: 'secret',
+        hint: '服务要求的 Bearer 口令。留空 = 不带鉴权头。存过之后这里不会再显示出来，想换直接重填。',
+      },
+      {
+        key: 'feiyuVoice',
+        label: '肥鱼音色',
+        // 下拉而不是手打：清单由宿主半去打声音服务的 /v1/capabilities 拿（见 catalog 接口）。
+        // 服务没起时退回下面这份内置项 —— 当前发布的包里确实只注册了 feiyu 一个音色。
+        kind: 'feiyu-voice',
+        options: [['feiyu', 'feiyu（默认音色）']],
+        hint: '选声音服务里注册的音色，默认 feiyu。没连上服务时只能选内置的那一个。',
+      },
+      {
+        key: 'feiyuStyle',
+        label: '肥鱼语气',
+        kind: 'select',
+        options: [
+          ['cute', 'cute（软一点）'],
+          ['gentle', 'gentle（温柔一点）'],
+        ],
+        hint: '肥鱼服务的语气风格，默认 cute。只在合成时用得上。',
+      },
+      { key: 'feiyuTimeoutMs', label: '肥鱼最多等多久', kind: 'number', hint: '毫秒。第一次合成本机要加载模型、会慢一些，默认 180000。' },
+      { key: 'feiyuPollIntervalMs', label: '肥鱼隔多久问一次', kind: 'number', hint: '毫秒。任务排队时多久查一次进度，默认 1000。' },
+      {
+        key: 'feiyuSingTimeoutMs',
+        label: '唱歌最多等多久',
+        kind: 'number',
+        hint: '毫秒。唱歌要跑谱面编译 + SVS 出声 + 换声 + 混音，比说话慢一个量级，默认 600000（10 分钟）。',
+      },
+      {
+        key: 'voiceMaxSongChars',
+        label: '一首歌最多几个字',
+        kind: 'number',
+        hint: '一个音符一个字，所以这就是最多唱多少个音符。15 秒的小曲约 10 个字，一分钟一百多字。默认 400。',
       },
       {
         key: 'visionMode',
@@ -438,6 +501,9 @@ window.__ModuleLoader__.load({
       if (isIdList(field.kind)) return Array.isArray(raw) ? raw.join(', ') : raw == null ? '' : String(raw)
       if (field.kind === 'boolean') return raw === true
       if (field.kind === 'number') return raw == null || raw === '' ? '' : String(raw)
+      // 口令类字段不进草稿：快照里有值也不回显、不参与“改没改过”的比较，
+      // 编辑框留空就等于不动它（真要换口令得重新填一遍）。
+      if (field.kind === 'secret') return ''
       // 结构化字段保留原值（数组），卡片按控件渲染；不要在草稿里做字符串化，
       // 否则「改了一行别的字段」会把结构悄悄写坏成一段文本。
       if (isStructured(field.kind)) return Array.isArray(raw) ? raw.map((x) => ({ ...x })) : []
@@ -758,6 +824,9 @@ window.__ModuleLoader__.load({
                   presets: Array.isArray(body.presets) ? body.presets : [],
                   defaultModel: body.defaultModel ?? null,
                   defaultDir: typeof body.defaultDir === 'string' ? body.defaultDir : '',
+                  // 肥鱼音色清单：宿主半探测声音服务得来。拿不到就留空，
+                  // 渲染时退回字段自带的静态 options，下拉不会空掉。
+                  feiyuVoices: body.feiyuVoices && typeof body.feiyuVoices === 'object' ? body.feiyuVoices : null,
                 })
                 const errors = Array.isArray(body.errors) ? body.errors : []
                 setCatalogNote(errors.length > 0 ? `部分清单没读到：${errors[0]}` : '')
@@ -1000,6 +1069,61 @@ window.__ModuleLoader__.load({
         setDraft(next)
         setNote('')
         setError('')
+      }
+
+      /**
+       * 肥鱼音色的下拉。
+       *
+       * 清单来源按优先级：
+       * 1. catalog 里宿主半探测到的 `feiyuVoices.voices`（声音服务在线时的真实注册音色）；
+       * 2. 探测不到（服务没起 / 口令不对 / 本机接口没响应）→ 字段自带的静态 `options`。
+       * 两条都兜住当前值：配置里那个 id 若不在清单里，必须留成选项，
+       * 否则用户一保存就把音色清空了。
+       */
+      function renderFeiyuVoice(field, cur) {
+        const probed = catalog?.feiyuVoices
+        const probedVoices = Array.isArray(probed?.voices) ? probed.voices : []
+        const pairs = []
+        const seen = new Set()
+        const pushOption = (value, label) => {
+          const v = String(value ?? '').trim()
+          if (v === '' || seen.has(v)) return
+          seen.add(v)
+          pairs.push([v, label])
+        }
+        if (probedVoices.length > 0) {
+          for (const row of probedVoices) {
+            const id = String(row?.id ?? '').trim()
+            if (id === '') continue
+            const styles = Array.isArray(row?.styles) ? row.styles.filter((x) => String(x ?? '').trim() !== '') : []
+            const tags = []
+            if (row?.kind === 'rvc') tags.push('换声')
+            if (styles.length > 0) tags.push(`语气 ${styles.map(String).join(' / ')}`)
+            if (row?.available === false) tags.push('当前不可用')
+            pushOption(id, tags.length > 0 ? `${id}（${tags.join('，')}）` : id)
+          }
+        } else {
+          for (const pair of field.options || []) pushOption(pair[0], pair[1])
+        }
+        // 宿主半没探测成功时会给一条 note（连不上 / 口令不对 / 没注册音色）。
+        // 有话就说，但不要把它做成报错 —— 下拉本身照常可用。
+        const note = String(probed?.note ?? '').trim()
+
+        return h(
+          'div',
+          null,
+          h(
+            'select',
+            { style: S.input, value: cur, disabled: !snap.writable || busy, onChange: change(field.key) },
+            [
+              ...pairs.map(([v, text]) => h('option', { key: v, value: v }, text)),
+              ...(cur !== '' && !seen.has(cur)
+                ? [h('option', { key: '__current', value: cur }, `${cur}（当前值，不在清单里）`)]
+                : []),
+            ],
+          ),
+          note !== '' ? h('div', { style: S.hint }, note) : null,
+        )
       }
 
       /**
@@ -1308,6 +1432,8 @@ window.__ModuleLoader__.load({
           const writes = []
           for (const f of FIELDS) {
             if (same(current[f.key], shown[f.key])) continue
+            // 口令类：留空 = 保持原样。不然「打开卡片顺手点保存」就会把存着的口令清掉。
+            if (f.kind === 'secret' && String(shown[f.key] ?? '') === '') continue
             const next = parse(f, shown[f.key])
             if (next === undefined) {
               const blank = f.kind === 'number' && String(shown[f.key] ?? '').trim() === ''
@@ -1408,6 +1534,8 @@ window.__ModuleLoader__.load({
             { style: S.input, value: String(value), disabled: !snap.writable || busy, onChange: change(f.key) },
             (f.options || []).map(([v, text]) => h('option', { key: v, value: v }, text)),
           )
+        } else if (f.kind === 'feiyu-voice') {
+          control = renderFeiyuVoice(f, String(value ?? ''))
         } else if (f.kind === 'session') {
           control = h(
             'select',
@@ -1595,6 +1723,18 @@ window.__ModuleLoader__.load({
           control = renderModelChain(f, Array.isArray(value) ? value : [])
         } else if (f.kind === 'profiles') {
           control = renderProfiles(f, Array.isArray(value) ? value : [])
+        } else if (f.kind === 'secret') {
+          // 口令类：永远不把存着的值回显出来，框里是空的；留空 = 不改。
+          control = h('input', {
+            type: 'password',
+            style: S.input,
+            value: String(value ?? ''),
+            placeholder: overridden ? '（已设置，留空不改）' : '（没设）',
+            autoComplete: 'off',
+            disabled: !snap.writable || busy,
+            onChange: change(f.key),
+            spellCheck: false,
+          })
         } else {
           control = h('input', {
             type: f.kind === 'number' ? 'number' : 'text',
