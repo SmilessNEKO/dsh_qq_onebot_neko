@@ -2,9 +2,8 @@
 //
 // 分工：
 //   * `splitVoiceBlocks()` 纯函数，负责把一段正文切成有序的 text / voice 片段；
-//   * `synthesize()` 是统一入口，按 `provider` 三路分派：
+//   * `synthesize()` 是统一入口，按 `provider` 两路分派：
 //       - `edge`  ：本机 edge-tts（子进程，吐 mp3，**默认**）
-//       - `sherpa`：本机 sherpa-onnx 离线 VITS 模型（子进程 + lameenc，吐 mp3，不联网）
 //       - `feiyu` ：肥鱼声音服务（本机 HTTP，提交任务 → 轮询 → 下 WAV）
 //   * `ensureRecordAudio()` 把产物变成 NapCat 稳吃的 mp3（只有 wav 才转，没 ffmpeg 就原样发）；
 //   * `recordSegment()` 把音频路径变成 OneBot 的 record 段。
@@ -40,16 +39,16 @@ export const DEFAULT_TTS_TIMEOUT_MS = 20000
 
 // ── 肥鱼声音服务（本机 HTTP 服务，端口 9880）──────────────────────────────────
 //
-// 协议（对端由用户自己部署，与 edge-tts / sherpa 并存）：
+// 协议（对端由用户自己部署，与 edge-tts 并存）：
 //   POST /v1/speech                → 202 + 任务号
 //   GET  /v1/jobs/{id}             → queued / running / success / failed / interrupted
 //   GET  /v1/jobs/{id}/audio       → 成功后的 WAV
 // 三个接口都要同一个 `Authorization: Bearer <key>`（没配 key 就不带这个头）。
 
-/** 默认 provider：永远是 edge —— 没显式选肥鱼 / sherpa 就绝不换实现。 */
+/** 默认 provider：永远是 edge —— 没显式选肥鱼就绝不换实现。 */
 export const DEFAULT_VOICE_PROVIDER = 'edge'
 /** 认得出的 provider 名。 */
-export const VOICE_PROVIDERS = ['edge', 'sherpa', 'feiyu']
+export const VOICE_PROVIDERS = ['edge', 'feiyu']
 /** 肥鱼声音服务的默认地址（本机、不对外）。 */
 export const DEFAULT_FEIYU_BASE_URL = 'http://127.0.0.1:9880'
 /** 默认音色名 / 语气。 */
@@ -411,7 +410,7 @@ function resolvePython(serverDir, pythonPath) {
 }
 
 /**
- * provider 归一化：只认 `edge` / `sherpa` / `feiyu`，其它（含空）一律回落 `edge`。
+ * provider 归一化：只认 `edge` / `feiyu`，其它（含空）一律回落 `edge`。
  *
  * 回落而不是报错，是为了老配置里没有这个键、或用户手滑填错时，
  * 行为跟以前完全一样 —— 语音照发，只是用的还是 edge。
@@ -473,8 +472,8 @@ export function stripVoiceBlocks(body) {
 /**
  * 缓存文件名：同一段话 + 同一套引擎与参数只合成一次。
  *
- * 参与哈希的除了文本，还有**引擎**（edge / sherpa / feiyu）和该引擎自己的参数：
- *   - edge / sherpa：voice / rate / pitch → `.mp3`
+ * 参与哈希的除了文本，还有**引擎**（edge / feiyu）和该引擎自己的参数：
+ *   - edge：voice / rate / pitch → `.mp3`
  *   - feiyu：voice / style → `.wav`
  * 引擎进哈希 + 后缀不同，三套实现的产物不会互相撞（同一句话各存各的）。
  *
@@ -1107,7 +1106,7 @@ export async function ensureRecordAudio(absPath, options) {
 
   const { ffmpegPath = '', timeoutMs = DEFAULT_FFMPEG_TIMEOUT_MS, filterChain = '', dst: dstOption = '' } = options ?? {}
   const custom = String(filterChain ?? '').trim()
-  // 不是 wav、也没要求额外处理：原样发（edge / sherpa 的 mp3 走这条）。
+  // 不是 wav、也没要求额外处理：原样发（edge 的 mp3 走这条）。
   if (!/\.wav$/i.test(src) && custom === '') return { path: src, converted: false }
   const explicitDst = String(dstOption ?? '').trim()
   const dst = explicitDst !== ''
@@ -1338,9 +1337,8 @@ async function runFfmpegOnce(bin, args, timeoutMs) {
 /**
  * 调本地 TTS 合成一段语音。
  *
- * `provider` 三选一：
+ * `provider` 二选一：
  *   - `edge`（默认）：调 edge-tts，吐 mp3；
- *   - `sherpa`：调本机 sherpa-onnx 的离线 VITS 模型，吐 mp3（不联网）；
  *   - `feiyu`：转调 `feiyuSynthesize()`（HTTP 服务，吐 wav，会顺手转 mp3）。
  * 认不出的值直接失败（让调用方降级），**不会**偷偷拿别的引擎顶着。
  *
@@ -1349,9 +1347,8 @@ async function runFfmpegOnce(bin, args, timeoutMs) {
  *
  * @param {string} text
  * @param {{
- *   provider?: 'edge' | 'sherpa' | 'feiyu',
+ *   provider?: 'edge' | 'feiyu',
  *   pythonPath?: string,
- *   modelDir?: string, sid?: number, speed?: number,
  *   voice?: string, rate?: string, pitch?: string,
  *   baseUrl?: string, apiKey?: string, style?: 'cute' | 'gentle',
  *   ffmpegPath?: string,
@@ -1366,7 +1363,7 @@ export async function synthesize(text, options) {
 
   // 肥鱼走 HTTP，超时/轮询参数跟子进程那套完全不同，所以先分派出去再解构。
   if (normalizeVoiceProvider(options?.provider) === 'feiyu') {
-    // 自动启停那几个键从设置里下来时带 `feiyu` 前缀（避免和 edge/sherpa 的
+    // 自动启停那几个键从设置里下来时带 `feiyu` 前缀（避免和 edge 的
     // `pythonPath` 撞名），这里换成 feiyuSynthesize 认的无前缀名。
     // **`feiyu*` 必须覆盖同名无前缀键**：index.js 无论哪个引擎都会把 edge 的
     // `pythonPath`（ttsPythonPath）一起传下来，若只在「无前缀为空」时才映射，
@@ -1385,9 +1382,6 @@ export async function synthesize(text, options) {
   const {
     provider = 'edge',
     pythonPath = '',
-    modelDir = '',
-    sid = 0,
-    speed = 1,
     voice = DEFAULT_TTS_VOICE,
     rate = DEFAULT_TTS_RATE,
     pitch = DEFAULT_TTS_PITCH,
@@ -1445,57 +1439,10 @@ export async function synthesize(text, options) {
     'asyncio.run(main())',
   ].join('\n')
 
-  // 本地离线：sherpa-onnx 跑中文 VITS 模型，出 PCM 再用 lameenc 编成 mp3（不联网）。
-  const sherpaScript = [
-    'import os, array',
-    'import sherpa_onnx, lameenc',
-    'md = os.environ["DSH_TTS_MODEL_DIR"]',
-    'def p(n):',
-    '    q = os.path.join(md, n)',
-    '    return q if os.path.exists(q) else ""',
-    'def lex(*names):',
-    '    q = [p(n) for n in names]',
-    '    return ",".join([x for x in q if x])',
-    '# voices.bin 在 = kokoro 多音色模型；否则按 vits 单音色模型处理。',
-    'if os.path.exists(os.path.join(md, "voices.bin")):',
-    '    kokoro = sherpa_onnx.OfflineTtsKokoroModelConfig(',
-    '        model=os.path.join(md, "model.onnx"),',
-    '        voices=os.path.join(md, "voices.bin"),',
-    '        tokens=p("tokens.txt"),',
-    '        lexicon=lex("lexicon-us-en.txt", "lexicon-gb-en.txt", "lexicon-zh.txt", "lexicon.txt"),',
-    '    )',
-    '    model = sherpa_onnx.OfflineTtsModelConfig(kokoro=kokoro, num_threads=2, debug=False, provider="cpu")',
-    'else:',
-    '    vits = sherpa_onnx.OfflineTtsVitsModelConfig(',
-    '        model=os.path.join(md, "model.onnx"),',
-    '        lexicon=p("lexicon.txt"),',
-    '        tokens=p("tokens.txt"),',
-    '        dict_dir=(os.path.join(md, "dict") if os.path.isdir(os.path.join(md, "dict")) else ""),',
-    '    )',
-    '    model = sherpa_onnx.OfflineTtsModelConfig(vits=vits, num_threads=2, debug=False, provider="cpu")',
-    'cfg = sherpa_onnx.OfflineTtsConfig(model=model)',
-    'tts = sherpa_onnx.OfflineTts(cfg)',
-    'audio = tts.generate(os.environ["DSH_TTS_TEXT"],',
-    '                     sid=int(os.environ.get("DSH_TTS_SID", "0")),',
-    '                     speed=float(os.environ.get("DSH_TTS_SPEED", "1.0")))',
-    'vals = [int(max(-32768, min(32767, s * 32767))) for s in audio.samples]',
-    'raw = array.array("h", vals).tobytes()',
-    'enc = lameenc.Encoder()',
-    'enc.set_bit_rate(64)',
-    'enc.set_in_sample_rate(int(audio.sample_rate))',
-    'enc.set_channels(1)',
-    'enc.set_quality(2)',
-    'data = enc.encode(raw) + enc.flush()',
-    'open(os.environ["DSH_TTS_OUT"], "wb").write(data)',
-  ].join('\n')
-
-  const script = kind === 'sherpa' ? sherpaScript : edgeScript
-  if (kind !== 'sherpa' && kind !== 'edge') {
+  if (kind !== 'edge') {
     return { ok: false, reason: `unsupported-tts-provider: ${kind}` }
   }
-  if (kind === 'sherpa' && !String(modelDir ?? '').trim()) {
-    return { ok: false, reason: 'sherpa-model-dir-missing' }
-  }
+  const script = edgeScript
 
   const python = pythonPath || process.env.DSH_TTS_PYTHON || 'python'
 
@@ -1512,9 +1459,6 @@ export async function synthesize(text, options) {
           DSH_TTS_VOICE: voice,
           DSH_TTS_RATE: rate,
           DSH_TTS_PITCH: pitch,
-          DSH_TTS_MODEL_DIR: String(modelDir ?? ''),
-          DSH_TTS_SID: String(sid ?? 0),
-          DSH_TTS_SPEED: String(speed ?? 1),
         },
         windowsHide: true,
       })

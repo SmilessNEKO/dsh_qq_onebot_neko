@@ -55,19 +55,19 @@
 - 打开 `voiceEnabled`（默认关）后，正文里写 `[语音]要念的台词[/语音]`，这句话会被合成成语音发出去（一个语音块 = 一条 QQ 消息，文字块照旧分条），语音前后的文字还是正常文字。
 - 也可以直接调 `qq_bridge_neko_voice` 工具，用 `voice` / `rate` / `pitch` / `style` 单次覆盖参数，`provider` 单次切换引擎。
 - **两套声音，二选一**（设置卡片「声音」页最上面那两块）：
-  1. **本地合成**：可选 `edge`（本机 `edge-tts`）或 `sherpa`（本机离线模型）；
+  1. **本地合成**：`edge`（本机 `edge-tts`，免费备选）；
   2. **肥鱼声音服务**：本机 HTTP 服务，声音更像人，也是唯一能唱歌的一条。
 
-  选中哪一套就只显示哪一套的字段（本地那套：`ttsVoice` / `ttsRate` / `ttsPitch` / `ttsPythonPath` / `ttsSid` / `ttsSpeed` / `ttsModelDir`；肥鱼那套：`feiyuBaseUrl` / `feiyuApiKey` / `feiyuVoice` / `feiyuStyle` / 三个超时 / `voiceMaxSongChars` / 四个自动启停键；两套都共用语气与音色那四个键：`voiceMood` / `voiceTone` / `voicePitchSemitones` / `voiceSpeedFactor`）。另一套只是收起来，**值不会被清空**，切回去还在。存储上仍然只有一个键 `ttsProvider`（`edge` / `sherpa` / `feiyu`），老配置文件照旧生效。
-- 具体引擎（`ttsProvider` 三选一的那三个值）：
+  选中哪一套就只显示哪一套的字段（本地那套：`ttsVoice` / `ttsRate` / `ttsPitch` / `ttsPythonPath`；肥鱼那套：`feiyuBaseUrl` / `feiyuApiKey` / `feiyuVoice` / `feiyuStyle` / 三个超时 / `voiceMaxSongChars` / 四个自动启停键；两套都共用语气与音色那四个键：`voiceMood` / `voiceTone` / `voicePitchSemitones` / `voiceSpeedFactor`）。另一套只是收起来，**值不会被清空**，切回去还在。存储上仍然只有一个键 `ttsProvider`（`edge` / `feiyu`），老配置文件里的 `sherpa` 会回落成 `edge`。
+- 具体引擎（`ttsProvider` 二选一的两个值，肥鱼优先）：
   - `edge`（默认）：合成走本机的 `edge-tts`（`ttsPythonPath` 指向装了它的解释器），音色 / 语速 / 音高是 `ttsVoice` / `ttsRate` / `ttsPitch`，产物是 mp3。不动这个键时行为跟以前完全一样。
-  - `sherpa`：合成走本机的离线模型（`sherpa_onnx`，不联网），模型目录 `ttsModelDir`（留空 = `$DSH_HOME/tts-models/kokoro-multi-lang-v1_1`，103 个音色、24kHz；旧的单音色 melo 模型填 `vits-melo-tts-zh_en`）。模型目录里只要有 `voices.bin` 就按 kokoro 多音色加载，没有就按 vits 单音色加载，换模型不用改配置。说话人 `ttsSid` 是**音色编号**（kokoro 默认 41 = `zf_074`，3~57 是中文女声、58 以后是男声；melo 只有 0），语速倍数 `ttsSpeed`（默认 1），音色名仍读 `ttsVoice`，产物是 mp3；解释器同样用 `ttsPythonPath`。
   - `feiyu`：合成走你自己部署的**肥鱼声音服务**（本机 HTTP 服务）——先把服务起起来，再把 `ttsProvider` 选成 `feiyu`。地址是 `feiyuBaseUrl`（默认 `http://127.0.0.1:9880`，带路径前缀也行），服务要鉴权就把 Bearer 口令填进 `feiyuApiKey`（留空 = 不带鉴权头；卡片上不回显已存的口令，留空即不改）。音色 `feiyuVoice` 是**下拉**（默认 `feiyu`），语气 `feiyuStyle` 二选一（`cute` 软萌 / `gentle` 温柔）。下拉的清单不是写死的：设置卡片会去打服务的 `GET /v1/capabilities`，把 `tts[]` / `rvc[]` 里注册的音色投影成选项（标签上带每个音色支持的语气，RVC 包标「换声」，`available: false` 的标「当前不可用」）；服务没起、口令不对或一个音色都没注册时退回内置的 `feiyu` 一项，并在下拉下面写一句原因 —— 卡片不会因此变空或报错。配置里存着的音色若不在清单里，会保留成「当前值，不在清单里」的兜底项，不会被静默清空。产物是 wav：有 ffmpeg 就转成 mp3 再发（`ffmpegPath` 留空时先找 PATH 上的 `ffmpeg`，再找本机约定的那个；都没有 / 转失败就原样发 wav，不算合成失败）。
   - 肥鱼首次请求要加载模型，所以整体超时给得大：`feiyuTimeoutMs` 默认 180000，任务状态按 `feiyuPollIntervalMs` 轮询（默认 1000）。服务没起来 / 口令不对 / 任务失败都**降级发文字**，不会卡住也不整条消失。
   - **服务自动启停**（插件自己管，不用人盯着）：每次合成前先探一下 `GET /health`（这个接口免鉴权）。通就直接合成；不通且 `feiyuAutoStart` 开着，就按 `feiyuServerDir` + `feiyuPythonPath` 把服务拉起来（等 `/health` 通，最多 `60` 秒），然后再合成。合成成功会刷新「最后使用时间」，空闲到 `feiyuIdleStopMinutes`（默认 10 分钟，填 `0` = 一直开着）就停服务：先发 `POST /v1/admin/shutdown` 让它自己走完收尾（释放显存、等队列排空才退），接口不认或不通才 kill **插件自己启动的那个进程**；别人手工起的服务只发 shutdown，绝不动手杀。同一地址并发请求只拉起一次，不会两个进程抢同一个端口。
   - **音质**：wav 转 mp3 时会过一条轻量滤镜链（80Hz 高通 / 12kHz 低通 / 200Hz 与 3kHz 各 +1.5dB / 2.5:1 轻压缩 / `loudnorm` 到 -16 LUFS），输出 44.1kHz、96kbps。ffmpeg 太老缺某个滤镜时**退一步**用无滤镜参数再转一次 —— 宁可音色差一点，也别发不出声。
   - **ffmpeg 怎么找**：设置的 `ffmpegPath` → 环境变量 `DSH_TTS_FFMPEG` → PATH 上的 `ffmpeg`。**包里不再内置任何本机绝对路径**，换台机器装也能用；全都没有就原样发 wav（不算合成失败）。
-- **音色 / 音高 / 语速**（三个引擎通用，都在插件侧用 ffmpeg 后处理，不动模型）：`voiceTone` 选音色预设（`natural` 自然 / `soft` 柔和 / `warm` 温暖 / `deep` 低沉 / `bright` 明亮，本质是「变调 + 低通 + 8kHz 搁架」的组合）；`voicePitchSemitones` 单独调音高（半音，-12~12，负数更沉、正数更尖）；`voiceSpeedFactor` 单独调语速（0.5~2 倍）。带参数时产物会派生一个新文件（原 wav 不动、不用重新合成），缓存名也带上这三个参数。
+- **试听**：设置卡片「声音」页底部有一块试听面板 —— 写一句想听的话（最多 300 字），调好引擎 / 音色 / 语气 / 音高 / 语速，点「试听」现场合成并直接播放。它走的就是当前这套设置（`POST /api/qq-bridge-neko/voice/preview`，成功时回音频字节），**听到什么，发出去就是什么**。显示哪些控件由接口返回的 `controls` 决定：`edge` 有 `rate` / `pitch`（edge-tts 自己的写法），肥鱼有 `style`，`mood` / `tone` / `semitones` / `speed` 两边都有（ffmpeg 后处理，引擎无关）。试听产物落在 `$DSH_HOME/qq-bridge-neko-voice-preview`，和出站缓存分开，整目录删掉就行。
+- **音色 / 音高 / 语速**（两个引擎通用，都在插件侧用 ffmpeg 后处理，不动模型）：`voiceTone` 选音色预设（`natural` 自然 / `soft` 柔和 / `warm` 温暖 / `deep` 低沉 / `bright` 明亮，本质是「变调 + 低通 + 8kHz 搁架」的组合）；`voicePitchSemitones` 单独调音高（半音，-12~12，负数更沉、正数更尖）；`voiceSpeedFactor` 单独调语速（0.5~2 倍）。带参数时产物会派生一个新文件（原 wav 不动、不用重新合成），缓存名也带上这三个参数。
 - **语气**：`voiceMood` 是一组参数的打包 —— `default` 不改 / `sweet` 撒娇（cute + soft + 升 1 半音 + 0.96 倍速）/ `gentle` 温柔（gentle + warm + 0.9 倍速）/ `lively` 元气（cute + bright + 升 2 半音 + 1.12 倍速）/ `serious` 认真（gentle + 自然音色 + 降 1 半音）/ `sleepy` 困倦（gentle + deep + 降 3 半音 + 0.82 倍速）。语气先给一套默认值，`voiceTone` / `voicePitchSemitones` / `voiceSpeedFactor` 填了就以填的为准；肥鱼的 `style` 优先级是「显式传的 > 语气预设 > `feiyuStyle`」。
 - `qq_bridge_neko_voice` / `qq_bridge_neko_sing` 都支持单次覆盖 `mood` / `tone` / `semitones` / `speed`。
 - 单条语音上限 `voiceMaxChars`（默认 120 字）。
@@ -199,14 +199,11 @@ DSH 0.2 的卡片把值写进 `$DSH_HOME/qq-bridge-neko-settings.json`。这份�
 | `burstWaitMs` | `0` | 对方连着发消息时，先等这么多毫秒没人再说才回复；`0` = 立刻回。每个目的地可单独覆盖 |
 | `listenIdleMs` | `120000` | 会话跟随期间，这么久（毫秒）没有新消息就自动停听；默认 2 分钟 |
 | `voiceEnabled` | `false` | 要不要发语音。打开后 `[语音]…[/语音]`（以及 `qq_bridge_neko_voice` 工具）才会合成语音；关着时标记原样当文字发 |
-| `ttsProvider` | `edge` | 用哪套声音（卡片上是二选一的两块，不是下拉）：本地合成 `edge` = 本机 edge-tts（默认，行为跟以前一样）/ `sherpa` = 本机离线模型；或肥鱼声音服务 `feiyu`（本机 HTTP，要先把服务起起来）。选了哪套就只显示那套的字段，另一套的值不会被清掉。认不出的值直接失败并降级发文字 |
-| `ttsVoice` | `zh-CN-XiaoyiNeural` | 音色名（edge / sherpa 用这个；肥鱼用 `feiyuVoice`）。`zh-CN-YunxiNeural` 是男声 |
-| `ttsRate` | `-8%` | 语速（edge 用这个；sherpa 走 `ttsSpeed`），edge-tts 写法，`+10%` 更快、`-8%` 更慢 |
+| `ttsProvider` | `edge` | 用哪套声音（卡片上是二选一的两块，不是下拉）：`feiyu` = 肥鱼声音服务（首选，也能唱歌）/ `edge` = 本机 edge-tts（免费备选）声音服务 `feiyu`（本机 HTTP，要先把服务起起来）。选了哪套就只显示那套的字段，另一套的值不会被清掉。认不出的值直接失败并降级发文字 |
+| `ttsVoice` | `zh-CN-XiaoyiNeural` | 音色名（`edge` 用这个；肥鱼用 `feiyuVoice`）。`zh-CN-YunxiNeural` 是男声 |
+| `ttsRate` | `-8%` | 语速（`edge` 用这个），edge-tts 写法，`+10%` 更快、`-8%` 更慢 |
 | `ttsPitch` | `+12Hz` | 音高（edge 用这个），edge-tts 写法 |
-| `ttsPythonPath` | 空 | 跑 edge-tts / sherpa-onnx 的 python 解释器路径（`edge` 与 `sherpa` 用它；肥鱼走 HTTP，不用 python）；留空 = 用 PATH 里的 python |
-| `ttsModelDir` | 空 | `sherpa` 的模型目录（要有 `model.onnx`、`tokens.txt` 那些；有 `voices.bin` 就按 kokoro 多音色加载）；留空 = `$DSH_HOME/tts-models/kokoro-multi-lang-v1_1`，想用旧的单音色 melo 就填 `vits-melo-tts-zh_en` |
-| `ttsSid` | `41` | `sherpa` 用哪个音色（编号）。kokoro 默认模型里 3~57 是中文女声、58 以后是男声，41 = `zf_074`（偏清亮的少女音）；melo 模型只有 0 |
-| `ttsSpeed` | `1` | `sherpa` 的语速倍数，1 = 原速。三引擎通用的语速在 `voiceSpeedFactor` |
+| `ttsPythonPath` | 空 | 跑 edge-tts 的 python 解释器路径（肥鱼走 HTTP，不用 python）；留空 = 用 PATH 里的 python |
 | `voiceMaxChars` | `120` | 单条语音最多多少字，超了就降级发文字 |
 | `voiceCacheDir` | 空 | 合成好的音频放哪；留空 = `$DSH_HOME/qq-bridge-neko-voice`。同一句话 + 同一引擎 + 同一组参数只合成一次 |
 | `ffmpegPath` | 空 | 转码用的 ffmpeg（肥鱼产的是 wav，发之前尽量转 mp3）；留空 = 先试环境变量 `DSH_TTS_FFMPEG`，再试 PATH 上的 `ffmpeg`。都没有就原样发 wav（不算失败）。包里不内置任何本机绝对路径 |

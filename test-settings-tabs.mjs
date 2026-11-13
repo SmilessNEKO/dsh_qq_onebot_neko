@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * 设置页分类 + 声音模块二选一 + 左下角入口 —— 离线测试。
+ * 设置页分类 + 声音模块二选一 + 设置页入口 —— 离线测试。
  *
  * 真把浏览器半的 bundle 跑一遍：假 `window.__ModuleLoader__`、假 react、假 ctx。
  * 不做源码字符串匹配，因为这里的失败形态是「界面上静默少一片」：
@@ -212,64 +212,55 @@ function renderAt(groupId, settingsValue = base) {
 
   const localTree = expand(renderAt('voice', { ...base, ttsProvider: 'edge' }))
   const localKeys = shownKeys(localTree)
-  check('选 edge 时显示本地那套（ttsVoice / ttsModelDir）', localKeys.has('ttsVoice') && localKeys.has('ttsModelDir'))
+  check('选 edge 时显示本地那套（ttsVoice / ttsPythonPath）', localKeys.has('ttsVoice') && localKeys.has('ttsPythonPath'))
   check(
     '选 edge 时肥鱼那套收起来',
     !localKeys.has('feiyuBaseUrl') && !localKeys.has('feiyuVoice'),
     [...localKeys].filter((k) => k.startsWith('feiyu')).join(', '),
   )
   check('两个模块都列出来可选', ['本地合成', '肥鱼声音服务'].every((t) => all(localTree).some((n) => textOf(n).includes(t))))
-  check('本地两组引擎都给了按钮', ['edge-tts', 'sherpa'].every((t) => buttons(localTree).some((b) => textOf(b).includes(t))))
+  check('本地合成只剩 edge-tts 一个按钮', buttons(localTree).some((b) => textOf(b).includes('edge-tts')))
+  check('sherpa 按钮已经摘掉', !buttons(localTree).some((b) => textOf(b).includes('sherpa')))
 
   const feiyuTree = expand(renderAt('voice', { ...base, ttsProvider: 'feiyu' }))
   const feiyuKeys = shownKeys(feiyuTree)
   check('选肥鱼时显示肥鱼那套（feiyuBaseUrl / feiyuVoice）', feiyuKeys.has('feiyuBaseUrl') && feiyuKeys.has('feiyuVoice'))
   check(
     '选肥鱼时本地那套收起来',
-    !feiyuKeys.has('ttsVoice') && !feiyuKeys.has('ttsModelDir'),
+    !feiyuKeys.has('ttsVoice') && !feiyuKeys.has('ttsPythonPath'),
     [...feiyuKeys].filter((k) => k.startsWith('tts') && k !== 'ttsProvider').join(', '),
   )
   check('两套共用的 voiceMaxChars 都留着', feiyuKeys.has('voiceMaxChars') && localKeys.has('voiceMaxChars'))
 
   const sherpaTree = expand(renderAt('voice', { ...base, ttsProvider: 'sherpa' }))
   const sherpaKeys = shownKeys(sherpaTree)
-  check('sherpa 归在本地那一套', sherpaKeys.has('ttsVoice') && !sherpaKeys.has('feiyuVoice'))
+  check('旧配置写着 sherpa：按本地那套渲染，不报错', sherpaKeys.has('ttsVoice') && !sherpaKeys.has('feiyuVoice'))
 }
 
-// ── 4. 左下角入口 ─────────────────────────────────────────────────────────
+// ── 4. 设置页入口 ─────────────────────────────────────────────────────────
+// v1.1.7 起主入口从「左下角侧栏按钮」搬到 DSH 设置页左侧导航（settings.section），
+// 原来那个自绘浮层（FootEntry）连同 6 个专用样式一起删掉了。
 {
   renderCard(base)
-  const footer = registry.find((r) => r.options.name === 'sidebar.footer.action')
-  check('注册了 sidebar.footer.action（左下角 Settings 上面那个位置）', Boolean(footer))
+  const section = registry.find((r) => r.options.name === 'settings.section')
+  check('注册了 settings.section（DSH 设置页左侧导航里的一节）', Boolean(section))
   check(
     '入口 id / order 齐全',
-    footer?.options?.id === 'qq-bridge-neko' && typeof footer?.options?.order === 'number',
-    JSON.stringify(footer?.options),
+    section?.options?.id === 'qq-bridge-neko' && typeof section?.options?.order === 'number',
+    JSON.stringify(section?.options),
+  )
+  check('导航项有名字', String(section?.options?.label?.() ?? '').includes('QQ 桥接 Neko'))
+  check(
+    '左下角那个独立按钮已经撤掉',
+    !registry.some((r) => r.options.name === 'sidebar.footer.action'),
+    registry.map((r) => r.options.name).join(', '),
   )
 
-  if (footer) {
-    // 未点开：就是一个按钮
-    stateBuckets.delete(footer.cell.type)
-    const closed = expand(footer.cell({ wide: true }))
-    check('未点开时只是个按钮', closed?.type === 'button', String(closed?.type))
-    check('按钮上有名字', textOf(closed).includes('QQ 桥接 Neko'), textOf(closed))
-
-    // 点开：FootEntry 的第 0 个 state 是 open
-    const entryFn = footer.cell.type
-    const opened = (() => {
-      const probe = footer.cell({ wide: true })
-      const fn = probe.type
-      // 先展开一次把 bucket 建出来，再置 true 重新渲染
-      expand(probe)
-      const bucket = stateBuckets.get(fn)
-      if (bucket) bucket[0] = true
-      return expand(footer.cell({ wide: true }))
-    })()
-    check('点开后是「按钮 + 浮层」两段', Array.isArray(opened?.children) ? opened.children.length >= 2 : opened?.type === 'fragment', String(opened?.type))
-    const sheetKeys = shownKeys(opened)
-    check('浮层里就是设置本体（字段真的渲染了）', sheetKeys.has('onebotUrl') || sheetKeys.has('ttsProvider'), [...sheetKeys].join(', '))
-    check('浮层有关闭入口', buttons(opened).some((b) => textOf(b) === '关闭'))
-    void entryFn
+  if (section) {
+    // 这一节的内容就是 Card 本体（不用再套浮层）
+    const tree = expand(section.cell({ wide: true }))
+    const keys = shownKeys(tree)
+    check('设置页那一节里字段真的渲染了', keys.has('onebotUrl') || keys.has('ttsProvider'), [...keys].join(', '))
   }
 }
 

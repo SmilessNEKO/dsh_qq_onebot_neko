@@ -1,6 +1,6 @@
-// voice.js 单测：切块 / 缓存名 / record 段 / 合成失败路径 / 三套语音引擎（edge / sherpa / feiyu）。纯离线，零依赖。
+// voice.js 单测：切块 / 缓存名 / record 段 / 合成失败路径 / 两套语音引擎（edge / feiyu）。纯离线，零依赖。
 // 运行：node test-voice.mjs
-// edge / sherpa 合成部分只在 DSH_TTS_TEST_PYTHON 指向装了 edge-tts 的解释器时才真跑，
+// edge 合成部分只在 DSH_TTS_TEST_PYTHON 指向装了 edge-tts 的解释器时才真跑，
 // 否则只验「解释器不存在时优雅失败」「模型目录不存在时直接失败」。
 // 肥鱼引擎用 Node 内置 http 起**假服务**真跑 HTTP 全流程（不依赖真肥鱼服务在不在）：
 // 成功 / 任务失败 / 鉴权不过 / 连不上 / 超时 / 缓存命中不重复请求 / 带没带鉴权头。
@@ -184,7 +184,7 @@ const dir = mkdtempSync(join(tmpdir(), 'qq-bridge-neko-voice-'))
   }
 }
 
-// 15) 缓存名：引擎进哈希，edge / sherpa / feiyu 三家互不撞
+// 15) 缓存名：引擎进哈希，edge / feiyu 两家互不撞
 {
   const names = voiceCacheName('同一句话', { provider: 'feiyu', voice: 'feiyu', style: 'cute' })
   check('肥鱼产物是 16 位十六进制 .wav', /^[0-9a-f]{16}\.wav$/.test(names), names)
@@ -193,13 +193,11 @@ const dir = mkdtempSync(join(tmpdir(), 'qq-bridge-neko-voice-'))
   check('换音色 → 换名字', voiceCacheName('同一句话', { provider: 'feiyu', voice: 'other', style: 'cute' }) !== names)
   check('认不出的语气回落 cute（名字不变）', voiceCacheName('同一句话', { provider: 'feiyu', voice: 'feiyu', style: '乱写' }) === names)
   const edge = voiceCacheName('同一句话', { provider: 'edge', voice: 'feiyu', style: 'cute', rate: '-8%', pitch: '+12Hz' })
-  const sherpa = voiceCacheName('同一句话', { provider: 'sherpa', voice: 'feiyu', style: 'cute', rate: '-8%', pitch: '+12Hz' })
   check('edge 产物是 .mp3', /^[0-9a-f]{16}\.mp3$/.test(edge), edge)
-  check('sherpa 产物是 .mp3', /^[0-9a-f]{16}\.mp3$/.test(sherpa), sherpa)
   check(
-    '三家同名不同产物（哈希互不相同）',
-    new Set([edge.slice(0, 16), sherpa.slice(0, 16), names.slice(0, 16)]).size === 3,
-    `${edge} / ${sherpa} / ${names}`,
+    '两家同名不同产物（哈希互不相同）',
+    new Set([edge.slice(0, 16), names.slice(0, 16)]).size === 2,
+    `${edge} / ${names}`,
   )
   check('认不出的引擎回落 edge（.mp3）', voiceCacheName('同一句话', { provider: 'nope' }).endsWith('.mp3'))
   check('ext 可以覆盖后缀', voiceCacheName('同一句话', { provider: 'feiyu', ext: 'mp3' }).endsWith('.mp3'))
@@ -208,11 +206,12 @@ const dir = mkdtempSync(join(tmpdir(), 'qq-bridge-neko-voice-'))
 // 16) 默认值：默认引擎必须是 edge（升级后行为不变）
 {
   check('默认引擎是 edge', DEFAULT_VOICE_PROVIDER === 'edge')
-  check('三个引擎都在名单里', VOICE_PROVIDERS.join(',') === 'edge,sherpa,feiyu', VOICE_PROVIDERS.join(','))
+  check('两个引擎都在名单里', VOICE_PROVIDERS.join(',') === 'edge,feiyu', VOICE_PROVIDERS.join(','))
   check(
-    'normalizeVoiceProvider 认 feiyu / sherpa（大小写无所谓）',
-    normalizeVoiceProvider('FEIYU') === 'feiyu' && normalizeVoiceProvider('Sherpa') === 'sherpa',
+    'normalizeVoiceProvider 认 feiyu（大小写无所谓）',
+    normalizeVoiceProvider('FEIYU') === 'feiyu' && normalizeVoiceProvider('Edge') === 'edge',
   )
+  check('sherpa 已经摘掉：写 sherpa 会回落 edge', normalizeVoiceProvider('sherpa') === 'edge')
   check('normalizeVoiceProvider 认不出就回落 edge', normalizeVoiceProvider('whatever') === 'edge' && normalizeVoiceProvider(undefined) === 'edge')
   check('normalizeFeiyuStyle 认 gentle', normalizeFeiyuStyle('Gentle') === 'gentle')
   check('normalizeFeiyuStyle 认不出回落 cute', normalizeFeiyuStyle('') === 'cute')
@@ -436,8 +435,8 @@ function happyHandler(entry, res, requests) {
 {
   const feiyu = await synthesize('分派测试', { provider: 'feiyu', cacheDir: dir, baseUrl: 'ftp://x' })
   check('provider=feiyu 走肥鱼实现', feiyu.ok === false && feiyu.reason.startsWith('bad-base-url'), feiyu.reason)
-  const sherpa = await synthesize('分派测试', { provider: 'sherpa', cacheDir: dir })
-  check('provider=sherpa 走本地模型，缺模型目录直接失败', sherpa.ok === false && sherpa.reason === 'sherpa-model-dir-missing', sherpa.reason)
+  const sherpa = await synthesize('分派测试', { provider: 'sherpa', cacheDir: dir, pythonPath: join(dir, 'definitely-not-a-python.exe'), timeoutMs: 8000 })
+  check('provider=sherpa 已摘掉：回落到 edge（不是报 sherpa 专属错）', sherpa.ok === false && !String(sherpa.reason).startsWith('sherpa'), sherpa.reason)
   const bogus = await synthesize('分派测试', { provider: 'nope', cacheDir: dir })
   check('认不出的引擎直接失败（不悄悄换实现）', bogus.ok === false && bogus.reason === 'unsupported-tts-provider: nope', bogus.reason)
   const edge = await synthesize('分派测试', {

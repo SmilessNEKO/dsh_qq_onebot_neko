@@ -1,5 +1,13 @@
 # 更新日志
 
+## v1.1.9 — 2026-11-14
+
+- **摘掉 sherpa 引擎**（主人反馈：kokoro 那些音色缺调教、效果差）。`VOICE_PROVIDERS` 变成 `['edge','feiyu']`，`sherpaScript` 整块、`ttsModelDir` / `ttsSid` / `ttsSpeed` 三个设置键、`DEFAULT_SHARPA_MODEL_DIR`、`DSH_TTS_MODEL_DIR` / `DSH_TTS_SID` / `DSH_TTS_SPEED` 三个环境变量全部删掉；`synthesize()` 的 `kind !== 'edge'` 直接回 `unsupported-tts-provider`。老配置里写着 `sherpa` 的会回落成 `edge`（`normalizeVoiceProvider` 的兜底），不会报错、也不会静默不发声。
+- **声音栏新增试听面板**：写一句想听的话（最多 300 字）+ 调引擎 / 音色 / 语气 / 音高 / 语速 → 点「试听」现场合成并直接播放。**显示哪些控件由服务端返回的 `controls` 决定**：`edge` 有 `rate` / `pitch`，肥鱼有 `style`，`mood` / `tone` / `semitones` / `speed` 两边都有（ffmpeg 后处理，引擎无关）。试听走的就是当前设置（与出站共用 `synthesizeWithSettings`），听到什么、发出去就是什么。
+- 新接口 `GET|POST /api/qq-bridge-neko/voice/preview`：`GET` 回每个引擎支持的可调项、音色清单（肥鱼走 `GET /v1/capabilities` 真实探测，服务离线回落内置项）、语气 / 音色走向清单与默认值；`POST` 现场合成，成功时**直接回音频字节**（`audio/mpeg`，`cache-control: no-store`，带 `x-voice-provider`），失败回 JSON。只接受白名单覆盖项，文本上限 300 字。试听产物落在 `$DSH_HOME/qq-bridge-neko-voice-preview`，与出站缓存分开。
+- 设置卡片：引擎下拉从三选一改二选一、**肥鱼排第一**；删掉 `ttsSid` / `ttsSpeed` / `ttsModelDir` 三个字段与「本地合成」组里的 sherpa 按钮；`LOCAL_ONLY_KEYS` 收敛成 `ttsVoice` / `ttsRate` / `ttsPitch` / `ttsPythonPath` 四个。
+- 自测：`test-voice.mjs` 197 条全通过（缓存名用例从「三家」改「两家」，新增「写 sherpa 会回落 edge」两条断言）；`test-smoke.mjs` 698 条、`test-updates.mjs` 113 条同样全通过。
+
 ## v1.1.8 — 2026-11-14
 
 - **修好一条一直静默失效的音质滤镜链**。`equalizer` 的 `t=q` 参数是 ffmpeg 5.x 才有的，本机 ffmpeg 是 2016 年的构建（`N-81989-g7845c13`），一进滤镜就报 `Option 't' not found` → `Error opening filters!`；而转码逻辑是「滤镜失败就退一步无滤镜再转」，于是每次都在无滤镜兜底上静默成功——这就是「声音干、不够圆润」的真实原因。改成 `width_type=q` 后整条链（高通 / 低通 / 两段 EQ / 轻压缩 / `loudnorm`）才真的生效。

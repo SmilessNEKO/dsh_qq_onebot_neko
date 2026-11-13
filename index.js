@@ -80,16 +80,6 @@ import {
   synthesize,
 } from './voice.js'
 
-/**
- * 本地离线 TTS 的默认模型目录（sherpa-onnx kokoro 多语言 v1.1，103 个音色、24kHz）。
- * 设置里给了 `ttsModelDir` 就用设置的那份。
- */
-const DEFAULT_SHARPA_MODEL_DIR = join(
-  process.env.DSH_HOME || join(process.env.USERPROFILE || '', '.dsh'),
-  'tts-models',
-  'kokoro-multi-lang-v1_1',
-)
-
 const require = createRequire(import.meta.url)
 /** 当前安装的包版本。设置页和检查更新都读这一处，避免卡片里手写一份。 */
 export const PLUGIN_VERSION = String(require('./package.json').version || '')
@@ -281,15 +271,12 @@ export const Config = Schema.object({
   burstWaitMs: Schema.number().default(0).description('对方还在连着发消息时，先等这么多毫秒没人再说才回复。0 = 不等待。每个目的地可以在下面单独覆盖。'),
   // ── 语音消息 ──────────────────────────────────────────────────────────────
   voiceEnabled: Schema.boolean().default(false).description('要不要发语音。打开后正文里的 [语音]台词[/语音] 会合成为语音发出去；关着时标记原样当文字发。默认关。'),
-  ttsProvider: Schema.union([Schema.const('edge'), Schema.const('sherpa'), Schema.const('feiyu')]).default('edge').description('用哪个 TTS 合成语音：edge = 微软 edge-tts（本机跑、免费、要装了它）；sherpa = 本机离线的 sherpa-onnx 中文模型（要设 ttsModelDir，不联网）；feiyu = 本机肥鱼声音服务（要先起服务，参数见下面 feiyu 那几个键）。默认 edge。'),
-  ttsVoice: Schema.string().default(DEFAULT_TTS_VOICE).description('音色名（edge / sherpa 用这个；肥鱼用 feiyuVoice 那个键）。edge-tts 的写法，例如 zh-CN-XiaoyiNeural（少女音）、zh-CN-YunxiNeural（男声）。'),
-  ttsRate: Schema.string().default(DEFAULT_TTS_RATE).description('语速（edge 用这个；sherpa 走 ttsSpeed）。edge-tts 写法，例如 -8% 表示慢一点、+10% 表示快一点。'),
+  ttsProvider: Schema.union([Schema.const('edge'), Schema.const('feiyu')]).default('edge').description('用哪个 TTS 合成语音：edge = 微软 edge-tts（本机跑、免费、要装了它）；feiyu = 本机肥鱼声音服务（要先起服务，参数见下面 feiyu 那几个键）。默认 edge。'),
+  ttsVoice: Schema.string().default(DEFAULT_TTS_VOICE).description('音色名（edge 用这个；肥鱼用 feiyuVoice 那个键）。edge-tts 的写法，例如 zh-CN-XiaoyiNeural（少女音）、zh-CN-YunxiNeural（男声）。'),
+  ttsRate: Schema.string().default(DEFAULT_TTS_RATE).description('语速（edge 用这个）。edge-tts 写法，例如 -8% 表示慢一点、+10% 表示快一点。'),
   ttsPitch: Schema.string().default(DEFAULT_TTS_PITCH).description('音高（edge 用这个）。edge-tts 写法，例如 +12Hz 表示高一点、-5Hz 表示低一点。'),
-  ttsPythonPath: Schema.string().default('').description('跑 edge-tts / sherpa-onnx 的 python 解释器路径（edge 与 sherpa 用这个；肥鱼走 HTTP，不用 python）。留空 = 用 PATH 里的 python。'),
-  ttsModelDir: Schema.string().default('').description('sherpa 的模型目录（里面有 model.onnx、tokens.txt 那些）。留空 = $DSH_HOME/tts-models/kokoro-multi-lang-v1_1（103 个音色、24kHz）。想用旧的单音色 melo 模型就填 vits-melo-tts-zh_en 那份目录。只在 ttsProvider 选 sherpa 时用得上。'),
-  ttsSid: Schema.number().default(41).description('sherpa 用模型里第几个音色（从 0 开始）。kokoro 默认模型里 3~57 是中文女声、58 以后是男声，41 = zf_074（偏清亮的少女音）。换成别的数字就是别的音色；换成 melo 模型时只有 0 有效。'),
-  ttsSpeed: Schema.number().default(1).description('sherpa 的语速倍数：1 = 原速，大于 1 更快。默认 1。三引擎通用的语速在 voiceSpeedFactor。'),
-  // 下面这一组只在 ttsProvider 选 sherpa / feiyu 时才用得上。
+  ttsPythonPath: Schema.string().default('').description('跑 edge-tts 的 python 解释器路径（肥鱼走 HTTP，不用 python）。留空 = 用 PATH 里的 python。'),
+  // 下面这一组只在 ttsProvider 选 feiyu 时才用得上。
   ffmpegPath: Schema.string().default('').description('转码用的 ffmpeg 在哪（肥鱼服务产的是 wav，发之前尽量转成 mp3）。留空 = 自动找：先试 PATH 里的 ffmpeg，再试本机约定位置。填了就只用填的这个。'),
   feiyuBaseUrl: Schema.string().default(DEFAULT_FEIYU_BASE_URL).description('肥鱼声音服务的地址。默认 http://127.0.0.1:9880 —— 本机服务，别填公网地址。'),
   feiyuApiKey: Schema.string().default('').description('肥鱼声音服务的鉴权口令（Bearer）。留空 = 不带鉴权头。口令只存在设置里，不会写进日志。'),
@@ -402,15 +389,12 @@ const BridgeSettings = Schema.object({
   // ── 语音消息 ──────────────────────────────────────────────────────────────
   // sendToQQ 的 [语音]…[/语音] 与 qq_bridge_neko_voice 工具都读这几个键。
   voiceEnabled: Schema.boolean().default(false).description('要不要发语音。打开后正文里的 [语音]台词[/语音] 会合成为语音发出去；关着时标记原样当文字发。默认关。'),
-  ttsProvider: Schema.union([Schema.const('edge'), Schema.const('sherpa'), Schema.const('feiyu')]).default('edge').description('用哪个 TTS 合成语音：edge = 微软 edge-tts（本机跑、免费、要装了它）；sherpa = 本机离线的 sherpa-onnx 中文模型（要设 ttsModelDir，不联网）；feiyu = 本机肥鱼声音服务（要先起服务，参数见下面 feiyu 那几个键）。默认 edge。'),
-  ttsVoice: Schema.string().default(DEFAULT_TTS_VOICE).description('音色名（edge / sherpa 用这个；肥鱼用 feiyuVoice 那个键）。edge-tts 的写法，例如 zh-CN-XiaoyiNeural（少女音）、zh-CN-YunxiNeural（男声）。'),
-  ttsRate: Schema.string().default(DEFAULT_TTS_RATE).description('语速（edge 用这个；sherpa 走 ttsSpeed）。edge-tts 写法，例如 -8% 表示慢一点、+10% 表示快一点。'),
+  ttsProvider: Schema.union([Schema.const('edge'), Schema.const('feiyu')]).default('edge').description('用哪个 TTS 合成语音：edge = 微软 edge-tts（本机跑、免费、要装了它）；feiyu = 本机肥鱼声音服务（要先起服务，参数见下面 feiyu 那几个键）。默认 edge。'),
+  ttsVoice: Schema.string().default(DEFAULT_TTS_VOICE).description('音色名（edge 用这个；肥鱼用 feiyuVoice 那个键）。edge-tts 的写法，例如 zh-CN-XiaoyiNeural（少女音）、zh-CN-YunxiNeural（男声）。'),
+  ttsRate: Schema.string().default(DEFAULT_TTS_RATE).description('语速（edge 用这个）。edge-tts 写法，例如 -8% 表示慢一点、+10% 表示快一点。'),
   ttsPitch: Schema.string().default(DEFAULT_TTS_PITCH).description('音高（edge 用这个）。edge-tts 写法，例如 +12Hz 表示高一点、-5Hz 表示低一点。'),
-  ttsPythonPath: Schema.string().default('').description('跑 edge-tts / sherpa-onnx 的 python 解释器路径（edge 与 sherpa 用这个；肥鱼走 HTTP，不用 python）。留空 = 用 PATH 里的 python。'),
-  ttsModelDir: Schema.string().default('').description('sherpa 的模型目录（里面有 model.onnx、tokens.txt 那些）。留空 = $DSH_HOME/tts-models/kokoro-multi-lang-v1_1（103 个音色、24kHz）。想用旧的单音色 melo 模型就填 vits-melo-tts-zh_en 那份目录。只在 ttsProvider 选 sherpa 时用得上。'),
-  ttsSid: Schema.number().default(41).description('sherpa 用模型里第几个音色（从 0 开始）。kokoro 默认模型里 3~57 是中文女声、58 以后是男声，41 = zf_074（偏清亮的少女音）。换成别的数字就是别的音色；换成 melo 模型时只有 0 有效。'),
-  ttsSpeed: Schema.number().default(1).description('sherpa 的语速倍数：1 = 原速，大于 1 更快。默认 1。三引擎通用的语速在 voiceSpeedFactor。'),
-  // 下面这一组只在 ttsProvider 选 sherpa / feiyu 时才用得上。
+  ttsPythonPath: Schema.string().default('').description('跑 edge-tts 的 python 解释器路径（肥鱼走 HTTP，不用 python）。留空 = 用 PATH 里的 python。'),
+  // 下面这一组只在 ttsProvider 选 feiyu 时才用得上。
   ffmpegPath: Schema.string().default('').description('转码用的 ffmpeg 在哪（肥鱼服务产的是 wav，发之前尽量转成 mp3）。留空 = 自动找：先试 PATH 里的 ffmpeg，再试本机约定位置。填了就只用填的这个。'),
   feiyuBaseUrl: Schema.string().default(DEFAULT_FEIYU_BASE_URL).description('肥鱼声音服务的地址。默认 http://127.0.0.1:9880 —— 本机服务，别填公网地址。'),
   feiyuApiKey: Schema.string().default('').description('肥鱼声音服务的鉴权口令（Bearer）。留空 = 不带鉴权头。口令只存在设置里，不会写进日志。'),
@@ -1446,11 +1430,6 @@ export function apply(ctx, config) {
         const raw = Number(s.voiceSpeedFactor ?? config.voiceSpeedFactor)
         return Number.isFinite(raw) && raw >= 0.5 && raw <= 2 ? raw : DEFAULT_VOICE_SPEED_FACTOR
       })(),
-      ttsModelDir: String(s.ttsModelDir ?? config.ttsModelDir ?? '').trim(),
-      ttsSid: Number.isFinite(Number(s.ttsSid ?? config.ttsSid)) ? Number(s.ttsSid ?? config.ttsSid) : 41,
-      ttsSpeed: Number.isFinite(Number(s.ttsSpeed ?? config.ttsSpeed)) && Number(s.ttsSpeed ?? config.ttsSpeed) > 0
-        ? Number(s.ttsSpeed ?? config.ttsSpeed)
-        : 1,
       voiceMaxChars: clampInt(s.voiceMaxChars ?? config.voiceMaxChars, 1, 2000, DEFAULT_VOICE_MAX_CHARS),
       voiceCacheDir: String(s.voiceCacheDir ?? config.voiceCacheDir ?? '').trim(),
       destinationProfiles: normalizeDestinationProfiles(s.destinationProfiles ?? config.destinationProfiles),
@@ -4396,7 +4375,7 @@ export function apply(ctx, config) {
   }
 
   /**
-   * 按设置合成语音。`ttsProvider` 认 edge / sherpa / feiyu 三个 —— 别偷偷换实现，
+   * 按设置合成语音。`ttsProvider` 认 edge / feiyu 两个 —— 别偷偷换实现，
    * 认不出的值直接失败，让调用方降级，而不是无声地用别的东西顶着。
    *
    * `overrides` 是给工具调用用的单次覆盖（provider / voice / rate / pitch / style）；
@@ -4404,10 +4383,10 @@ export function apply(ctx, config) {
    */
   async function synthesizeWithSettings(text, s, cacheDir, overrides = {}) {
     const provider = String(overrides.provider ?? s?.ttsProvider ?? 'edge').trim().toLowerCase() || 'edge'
-    if (provider !== 'edge' && provider !== 'sherpa' && provider !== 'feiyu') {
+    if (provider !== 'edge' && provider !== 'feiyu') {
       return { ok: false, reason: `unsupported-tts-provider: ${provider}` }
     }
-    // 音色名得按引擎分开取：`ttsVoice` 是 edge / sherpa 的名字（zh-CN-XiaoyiNeural 这种），
+    // 音色名得按引擎分开取：`ttsVoice` 是 edge 的名字（zh-CN-XiaoyiNeural 这种），
     // 肥鱼只认自己注册的音色 id（`feiyuVoice`，默认 feiyu）。混用会让服务端回 422
     // 「Requested voice capability is not installed/configured」——踩过一次。
     const voice = provider === 'feiyu'
@@ -4416,9 +4395,7 @@ export function apply(ctx, config) {
     return await synthesize(text, {
       provider,
       pythonPath: String(s?.ttsPythonPath ?? '').trim(),
-      modelDir: String(s?.ttsModelDir ?? '').trim() || DEFAULT_SHARPA_MODEL_DIR,
-      sid: Number.isFinite(Number(s?.ttsSid)) ? Number(s.ttsSid) : 41,
-      speed: Number.isFinite(Number(s?.ttsSpeed)) && Number(s.ttsSpeed) > 0 ? Number(s.ttsSpeed) : 1,
+
       voice,
       rate: String(overrides.rate ?? s?.ttsRate ?? '').trim() || DEFAULT_TTS_RATE,
       pitch: String(overrides.pitch ?? s?.ttsPitch ?? '').trim() || DEFAULT_TTS_PITCH,
@@ -4436,7 +4413,7 @@ export function apply(ctx, config) {
       })(),
       pollIntervalMs: Number(s?.feiyuPollIntervalMs) > 0 ? Number(s.feiyuPollIntervalMs) : DEFAULT_FEIYU_POLL_INTERVAL_MS,
       // 肥鱼服务的自动启停：服务没起就拉起来，闲下来自己停。设置里那四个键都在这儿生效。
-      // 用 `feiyu*` 前缀传：`pythonPath` 这个键名在 edge/sherpa 分支里是 ttsPythonPath，
+      // 用 `feiyu*` 前缀传：`pythonPath` 这个键名在 edge 分支里是 ttsPythonPath，
       // 不能复用；`synthesize()` 会在分派给 feiyuSynthesize 时把它们映射成无前缀名。
       feiyuServerDir: String(s?.feiyuServerDir ?? '').trim(),
       feiyuPythonPath: String(s?.feiyuPythonPath ?? '').trim(),
@@ -6178,6 +6155,157 @@ export function apply(ctx, config) {
    * - `feiyuVoices`：`{ voices: [{ id, label, styles, available }], defaultVoice, styles, online }`；
    * - `errors`：某个 provider 列举失败的原因（不影响其它 provider）。
    */
+  /**
+   * 声音试听接口（卡片「声音」页那个试听按钮用的）。
+   *
+   * - `GET`  → `{ ok, providers: { edge: {...}, feiyu: {...} }, defaults }`
+   *   每个引擎给一份「支持哪些可调项」，卡片按它决定显示哪些控件 ——
+   *   edge 有 rate / pitch（edge-tts 自己的写法），肥鱼有 style（cute / gentle），
+   *   两边都支持 mood / tone / semitones / speed（ffmpeg 后处理，引擎无关）。
+   * - `POST` → `{ text, provider?, ...单次覆盖 }`，现场合成一段，成功时**直接回音频字节**
+   *   （`audio/mpeg`），失败回 JSON。浏览器拿 blob 播放，不落用户的缓存目录。
+   *
+   * 与出站语音共用 `synthesizeWithSettings()`：试听听到的就是真正会发出去的声音，
+   * 不会出现「试听好听、发出去另一个味」。
+   */
+  const VOICE_PREVIEW_CONTROLS = {
+    edge: ['voice', 'rate', 'pitch', 'mood', 'tone', 'semitones', 'speed'],
+    feiyu: ['voice', 'style', 'mood', 'tone', 'semitones', 'speed'],
+  }
+  /** 试听的字数上限：比正式出站松一点（想多听几句），但别让人贴一整章。 */
+  const VOICE_PREVIEW_MAX_CHARS = 300
+  /** edge 常用中文音色。卡片的下拉用这个；填别的名字也照发。 */
+  const EDGE_VOICE_OPTIONS = [
+    ['zh-CN-XiaoyiNeural', '晓伊（少女音，默认）'],
+    ['zh-CN-XiaoxiaoNeural', '晓晓（温柔女声）'],
+    ['zh-CN-XiaobeiNeural', '晓北（东北女声）'],
+    ['zh-CN-XiaoniNeural', '晓妮（陕西女声）'],
+    ['zh-CN-YunxiNeural', '云希（年轻男声）'],
+    ['zh-CN-YunjianNeural', '云健（沉稳男声）'],
+    ['zh-CN-YunyangNeural', '云扬（播报男声）'],
+  ]
+
+  /** 试听用的缓存目录：与出站缓存分开，方便整目录清掉。 */
+  function previewCacheDir() {
+    return join(home, 'qq-bridge-neko-voice-preview')
+  }
+
+  async function voicePreviewCatalog(s) {
+    // 音色清单跟 catalog 接口同一套探测：服务在线读真实注册的音色，离线回落内置项。
+    let feiyuVoices = []
+    try {
+      const probed = await readFeiyuVoiceOptions()
+      if (Array.isArray(probed?.voices)) feiyuVoices = probed.voices
+    } catch {
+      // 探测失败不算错：下面会回落成内置的那一个
+    }
+    return {
+      providers: {
+        edge: {
+          label: 'edge-tts',
+          controls: [...VOICE_PREVIEW_CONTROLS.edge],
+          voices: EDGE_VOICE_OPTIONS.map(([id, label]) => ({ id, label })),
+          styles: [],
+        },
+        feiyu: {
+          label: '肥鱼声音服务',
+          controls: [...VOICE_PREVIEW_CONTROLS.feiyu],
+          voices: feiyuVoices.length
+            ? feiyuVoices
+            : [{ id: DEFAULT_FEIYU_VOICE, label: DEFAULT_FEIYU_VOICE }],
+          styles: [...FEIYU_STYLES],
+        },
+      },
+      tones: Object.keys(VOICE_TONE_PRESETS),
+      moods: Object.keys(VOICE_MOOD_PRESETS),
+      maxChars: VOICE_PREVIEW_MAX_CHARS,
+      defaults: {
+        provider: String(s?.ttsProvider ?? 'edge'),
+        edgeVoice: String(s?.ttsVoice ?? DEFAULT_TTS_VOICE),
+        feiyuVoice: String(s?.feiyuVoice ?? DEFAULT_FEIYU_VOICE),
+        style: normalizeFeiyuStyle(s?.feiyuStyle),
+        mood: normalizeVoiceMood(s?.voiceMood),
+        tone: normalizeVoiceTone(s?.voiceTone),
+        semitones: Number(s?.voicePitchSemitones) || 0,
+        speed: Number(s?.voiceSpeedFactor) || 1,
+      },
+    }
+  }
+
+  async function handleVoicePreviewRequest(req, res) {
+    if (rejectLocalRequest(req, res)) return
+    const method = String(req?.method ?? '').toUpperCase()
+    const s = readSettings()
+
+    if (method === 'GET') {
+      return sendJson(res, 200, { ok: true, ...(await voicePreviewCatalog(s)) })
+    }
+    if (method !== 'POST') {
+      return sendJson(res, 405, { ok: false, error: '这个接口只接受 GET 与 POST。' })
+    }
+
+    let payload
+    try {
+      payload = JSON.parse((await readRequestBody(req)) || '{}')
+    } catch (error) {
+      return sendJson(res, 400, { ok: false, error: `请求体不是合法 JSON（${error?.message ?? error}）。` })
+    }
+
+    const text = String(payload?.text ?? '').trim()
+    if (text === '') return sendJson(res, 400, { ok: false, error: '先写点要试听的内容。' })
+    if ([...text].length > VOICE_PREVIEW_MAX_CHARS) {
+      return sendJson(res, 400, {
+        ok: false,
+        error: `试听最多 ${VOICE_PREVIEW_MAX_CHARS} 个字（当前 ${[...text].length}）。`,
+      })
+    }
+
+    // 只接受白名单里的覆盖项，别的一概忽略 —— 接口不替调用方猜参数。
+    const overrides = {}
+    const takeString = (key) => {
+      const raw = payload?.[key]
+      if (typeof raw === 'string' && raw.trim() !== '') overrides[key] = raw.trim()
+    }
+    takeString('provider')
+    takeString('voice')
+    takeString('rate')
+    takeString('pitch')
+    takeString('style')
+    takeString('mood')
+    takeString('tone')
+    if (Number.isFinite(Number(payload?.semitones))) overrides.semitones = Number(payload.semitones)
+    if (Number.isFinite(Number(payload?.speed))) overrides.speed = Number(payload.speed)
+
+    let result
+    try {
+      result = await synthesizeWithSettings(text, s, previewCacheDir(), overrides)
+    } catch (error) {
+      return sendJson(res, 200, { ok: false, error: String(error?.message ?? error) })
+    }
+    if (result?.ok !== true) {
+      return sendJson(res, 200, {
+        ok: false,
+        error: String(result?.reason ?? '合成失败'),
+        provider: String(overrides.provider ?? s?.ttsProvider ?? 'edge'),
+      })
+    }
+
+    let bytes
+    try {
+      bytes = readFileSync(result.path)
+    } catch (error) {
+      return sendJson(res, 200, { ok: false, error: `产物读不出来（${error?.message ?? error}）。` })
+    }
+    const type = /\.wav$/i.test(result.path) ? 'audio/wav' : 'audio/mpeg'
+    res.writeHead(200, {
+      'content-type': type,
+      'cache-control': 'no-store',
+      'content-length': bytes.length,
+      'x-voice-provider': String(overrides.provider ?? s?.ttsProvider ?? 'edge'),
+    })
+    res.end(bytes)
+  }
+
   async function handleCatalogRequest(req, res) {
     if (rejectLocalRequest(req, res)) return
     const method = String(req?.method ?? '').toUpperCase()
@@ -6337,6 +6465,7 @@ export function apply(ctx, config) {
         ],
         ['/api/qq-bridge-neko/update', handleUpdateRequest],
         ['/api/qq-bridge-neko/groups', handleGroupMetaRequest],
+        ['/api/qq-bridge-neko/voice/preview', handleVoicePreviewRequest],
         ['/api/qq-bridge-neko/catalog', handleCatalogRequest],
         ['/api/qq-bridge-neko/profiles', handleProfilesRequest],
       ]
@@ -6413,13 +6542,13 @@ export function apply(ctx, config) {
       '把一句话合成为语音发到 QQ（默认发给这一轮钉住的群或私聊）。' +
       '需要先打开设置里的「发语音」（voiceEnabled），否则返回 `reason: "voice-disabled"`，一个字都不发。' +
       '音色 / 语速 / 音高 / 引擎 / 语气默认读设置，也可以用 voice / rate / pitch / provider / style / tone / semitones / speed 单次覆盖' +
-      '（provider 取 edge | sherpa | feiyu；音色写 edge-tts 那种，例如 zh-CN-XiaoyiNeural、-8%、+12Hz）。' +
+      '（provider 取 edge | feiyu；音色写 edge-tts 那种，例如 zh-CN-XiaoyiNeural、-8%、+12Hz）。' +
       'text 只写要念的内容本体：不要带 [语音] 标记，也不带表情名和 Markdown，那些念不出来。' +
       '合成失败或超过 voiceMaxChars 时**降级发文字**（正文前加「（语音没合成出来）」），不会整条消失。' +
       '合成好的音频会缓存（键里含引擎与参数），同一句同一套参数只合成一次。',
     parameters: {
       text: { type: 'string', required: true, description: '要念的内容本体，不要带标记或表情名。' },
-      provider: { type: 'string', enum: ['edge', 'sherpa', 'feiyu'], description: '这次用哪个引擎，覆盖设置里的 ttsProvider。默认跟设置一致。' },
+      provider: { type: 'string', enum: ['edge', 'feiyu'], description: '这次用哪个引擎，覆盖设置里的 ttsProvider。默认跟设置一致。' },
       voice: { type: 'string', description: '音色，覆盖设置里的 ttsVoice（肥鱼时覆盖 feiyuVoice）。' },
       rate: { type: 'string', description: '语速，覆盖设置里的 ttsRate，例如 -8%。' },
       pitch: { type: 'string', description: '音高，覆盖设置里的 ttsPitch，例如 +12Hz。' },
@@ -6482,7 +6611,7 @@ export function apply(ctx, config) {
       // 单次覆盖只对「显式传了」的项生效；空字符串当作没传，免得把设置里的值抹成空。
       const cacheDir = resolveVoiceCacheDir(s)
       const provider = String(args.provider ?? '').trim().toLowerCase() || String(s.ttsProvider ?? 'edge').trim().toLowerCase() || 'edge'
-      // 走同一套分派：工具这条路径也得跟设置（含 sherpa / feiyu）一致，别自己拿默认引擎顶着。
+      // 走同一套分派：工具这条路径也得跟设置（含 feiyu）一致，别自己拿默认引擎顶着。
       const tts = await synthesizeWithSettings(said, s, cacheDir, {
         provider,
         voice: String(args.voice ?? '').trim(),
