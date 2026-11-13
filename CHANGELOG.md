@@ -1,5 +1,18 @@
 # 更新日志
 
+## v1.2.0 — 2026-11-14
+
+- **改掉一处说反了的文案**：肥鱼才是**跑在本机、不联网**的那个，`edge-tts` 要**联网**调微软的接口。设置卡片里两块选择卡、`ttsProvider` 的选项与 hint、以及 README 全部按这个改过来（以前写成「本地合成 = edge、声音在本机算不联网」，正好反了）。
+- **设置页重排**（精简、结构可调，字段与键名一个没动）：
+  - 每个页签加一句话说明这页是干什么的；页签改成单行横排 + 横向滚动，不再换行挤成两排。
+  - 当前页的所有字段装进一张带边框的卡里，卡内再分小节（声音页：开关 / 引擎 / 音色与语气 / 通用 / 唱歌 / 服务），小节标题跨整行。
+  - 小节顺序按 `SECTION_ORDER` 排，不再跟着字段声明顺序来回跳（以前「引擎 → 通用 → 引擎」跳两次）。
+  - 保存栏改成吸底（`position: sticky`），滚到哪儿都能直接点保存。
+  - 版本与更新检查卡从常驻标题下挪到只在「关于」页出现。
+  - 标题区重排：标题 15px、右侧版本号（或「有未保存的改动」）单行省略；有未保存改动时多一个橙色小圆点。
+  - 行距 / 标签字重 / hint 行高统一调过，长说明不再糊成一片。
+- 自测：`test-settings-tabs.mjs` 34 条全通过（新增三条文案正确性断言：肥鱼那块必须同时出现「本机」「不联网」、edge 那块必须出现「联网」「微软」、且不许把「不联网」安在 edge 头上）；`test-smoke.mjs` 698 条、`test-updates.mjs` 113 条、`test-voice.mjs` 197 条同样全通过。
+
 ## v1.1.9 — 2026-11-14
 
 - **摘掉 sherpa 引擎**（主人反馈：kokoro 那些音色缺调教、效果差）。`VOICE_PROVIDERS` 变成 `['edge','feiyu']`，`sherpaScript` 整块、`ttsModelDir` / `ttsSid` / `ttsSpeed` 三个设置键、`DEFAULT_SHARPA_MODEL_DIR`、`DSH_TTS_MODEL_DIR` / `DSH_TTS_SID` / `DSH_TTS_SPEED` 三个环境变量全部删掉；`synthesize()` 的 `kind !== 'edge'` 直接回 `unsupported-tts-provider`。老配置里写着 `sherpa` 的会回落成 `edge`（`normalizeVoiceProvider` 的兜底），不会报错、也不会静默不发声。

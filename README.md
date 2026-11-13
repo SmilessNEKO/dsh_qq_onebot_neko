@@ -50,18 +50,25 @@
 - **顺手清掉没用的空白会话**（`pruneBlankSessions`，默认开）：新建 QQ 会话前，把同一个文件夹里「从没跑过一轮」的会话归档掉。原因是 DSH 面板点「新建会话」时会优先**复用**同目录下的空白会话（宿主判据只有一条：有没有 `turn/start`），所以手开过又没聊过的空壳会一直挡在前面，每次点新建都拿回同一条旧的。只碰这个目录、只碰没有 `turn/start` 的、正在跑的和 `sessionByDest` 还指着的都跳过；归档可撤销（面板里取消归档即可恢复），不影响新建本身。关掉它也不会坏事，只是空壳会继续被复用。
 - **会话跟随**：模型可以调 `qq_bridge_neko_listen` 开一段 5–60 分钟的跟随窗口，窗口内同一个群 / 私聊的普通消息也会叫醒，不必每条都 @。`listenIdleMs`（默认 2 分钟）没有新消息就自动停听，不挂着烧 token。
 
+**设置页怎么排的**
+
+- 一页一件事：连接 / 唤醒 / 会话 / 回复 / 声音 / 看图 / 模型 / NapCat / 关于，页签横排、点哪个看哪个，每个页签上方有一句话说明这页是干什么的。
+- 当前页的所有字段装在一张卡里（带边框），保存栏吸在底部 —— 滚到哪儿都能直接点「保存」，不用再翻回上面。
+- 字段多的一页（比如「声音」）在卡内再分小节：开关 / 引擎 / 音色与语气 / 通用 / 唱歌 / 服务，小节标题跨整行，找东西不用一条条读。
+- 版本与更新检查只在「关于」页出现，不再占别的页的地方；标题右侧有个小圆点表示「有未保存的改动」。
+
 **语音**
 
 - 打开 `voiceEnabled`（默认关）后，正文里写 `[语音]要念的台词[/语音]`，这句话会被合成成语音发出去（一个语音块 = 一条 QQ 消息，文字块照旧分条），语音前后的文字还是正常文字。
 - 也可以直接调 `qq_bridge_neko_voice` 工具，用 `voice` / `rate` / `pitch` / `style` 单次覆盖参数，`provider` 单次切换引擎。
 - **两套声音，二选一**（设置卡片「声音」页最上面那两块）：
-  1. **本地合成**：`edge`（本机 `edge-tts`，免费备选）；
-  2. **肥鱼声音服务**：本机 HTTP 服务，声音更像人，也是唯一能唱歌的一条。
+  1. **肥鱼声音服务**：跑在**本机**、不联网，声音更像人，也是唯一能唱歌的一条；
+  2. **edge-tts**：要**联网**调微软的接口，免费备选（本机 python 里得装好 `edge-tts`）。
 
-  选中哪一套就只显示哪一套的字段（本地那套：`ttsVoice` / `ttsRate` / `ttsPitch` / `ttsPythonPath`；肥鱼那套：`feiyuBaseUrl` / `feiyuApiKey` / `feiyuVoice` / `feiyuStyle` / 三个超时 / `voiceMaxSongChars` / 四个自动启停键；两套都共用语气与音色那四个键：`voiceMood` / `voiceTone` / `voicePitchSemitones` / `voiceSpeedFactor`）。另一套只是收起来，**值不会被清空**，切回去还在。存储上仍然只有一个键 `ttsProvider`（`edge` / `feiyu`），老配置文件里的 `sherpa` 会回落成 `edge`。
+  选中哪一套就只显示哪一套的字段（edge 那套：`ttsVoice` / `ttsRate` / `ttsPitch` / `ttsPythonPath`；肥鱼那套：`feiyuBaseUrl` / `feiyuApiKey` / `feiyuVoice` / `feiyuStyle` / 三个超时 / `voiceMaxSongChars` / 四个自动启停键；两套都共用语气与音色那四个键：`voiceMood` / `voiceTone` / `voicePitchSemitones` / `voiceSpeedFactor`）。另一套只是收起来，**值不会被清空**，切回去还在。存储上仍然只有一个键 `ttsProvider`（`edge` / `feiyu`），老配置文件里的 `sherpa` 会回落成 `edge`。
 - 具体引擎（`ttsProvider` 二选一的两个值，肥鱼优先）：
-  - `edge`（默认）：合成走本机的 `edge-tts`（`ttsPythonPath` 指向装了它的解释器），音色 / 语速 / 音高是 `ttsVoice` / `ttsRate` / `ttsPitch`，产物是 mp3。不动这个键时行为跟以前完全一样。
-  - `feiyu`：合成走你自己部署的**肥鱼声音服务**（本机 HTTP 服务）——先把服务起起来，再把 `ttsProvider` 选成 `feiyu`。地址是 `feiyuBaseUrl`（默认 `http://127.0.0.1:9880`，带路径前缀也行），服务要鉴权就把 Bearer 口令填进 `feiyuApiKey`（留空 = 不带鉴权头；卡片上不回显已存的口令，留空即不改）。音色 `feiyuVoice` 是**下拉**（默认 `feiyu`），语气 `feiyuStyle` 二选一（`cute` 软萌 / `gentle` 温柔）。下拉的清单不是写死的：设置卡片会去打服务的 `GET /v1/capabilities`，把 `tts[]` / `rvc[]` 里注册的音色投影成选项（标签上带每个音色支持的语气，RVC 包标「换声」，`available: false` 的标「当前不可用」）；服务没起、口令不对或一个音色都没注册时退回内置的 `feiyu` 一项，并在下拉下面写一句原因 —— 卡片不会因此变空或报错。配置里存着的音色若不在清单里，会保留成「当前值，不在清单里」的兜底项，不会被静默清空。产物是 wav：有 ffmpeg 就转成 mp3 再发（`ffmpegPath` 留空时先找 PATH 上的 `ffmpeg`，再找本机约定的那个；都没有 / 转失败就原样发 wav，不算合成失败）。
+  - `edge`：合成走 `edge-tts`（**要联网**，`ttsPythonPath` 指向装了它的解释器），音色 / 语速 / 音高是 `ttsVoice` / `ttsRate` / `ttsPitch`，产物是 mp3。
+  - `feiyu`（默认，**跑在本机、不联网**）：合成走你自己部署的**肥鱼声音服务**（本机 HTTP 服务）——先把服务起起来，再把 `ttsProvider` 选成 `feiyu`。地址是 `feiyuBaseUrl`（默认 `http://127.0.0.1:9880`，带路径前缀也行），服务要鉴权就把 Bearer 口令填进 `feiyuApiKey`（留空 = 不带鉴权头；卡片上不回显已存的口令，留空即不改）。音色 `feiyuVoice` 是**下拉**（默认 `feiyu`），语气 `feiyuStyle` 二选一（`cute` 软萌 / `gentle` 温柔）。下拉的清单不是写死的：设置卡片会去打服务的 `GET /v1/capabilities`，把 `tts[]` / `rvc[]` 里注册的音色投影成选项（标签上带每个音色支持的语气，RVC 包标「换声」，`available: false` 的标「当前不可用」）；服务没起、口令不对或一个音色都没注册时退回内置的 `feiyu` 一项，并在下拉下面写一句原因 —— 卡片不会因此变空或报错。配置里存着的音色若不在清单里，会保留成「当前值，不在清单里」的兜底项，不会被静默清空。产物是 wav：有 ffmpeg 就转成 mp3 再发（`ffmpegPath` 留空时先找 PATH 上的 `ffmpeg`，再找本机约定的那个；都没有 / 转失败就原样发 wav，不算合成失败）。
   - 肥鱼首次请求要加载模型，所以整体超时给得大：`feiyuTimeoutMs` 默认 180000，任务状态按 `feiyuPollIntervalMs` 轮询（默认 1000）。服务没起来 / 口令不对 / 任务失败都**降级发文字**，不会卡住也不整条消失。
   - **服务自动启停**（插件自己管，不用人盯着）：每次合成前先探一下 `GET /health`（这个接口免鉴权）。通就直接合成；不通且 `feiyuAutoStart` 开着，就按 `feiyuServerDir` + `feiyuPythonPath` 把服务拉起来（等 `/health` 通，最多 `60` 秒），然后再合成。合成成功会刷新「最后使用时间」，空闲到 `feiyuIdleStopMinutes`（默认 10 分钟，填 `0` = 一直开着）就停服务：先发 `POST /v1/admin/shutdown` 让它自己走完收尾（释放显存、等队列排空才退），接口不认或不通才 kill **插件自己启动的那个进程**；别人手工起的服务只发 shutdown，绝不动手杀。同一地址并发请求只拉起一次，不会两个进程抢同一个端口。
   - **音质**：wav 转 mp3 时会过一条轻量滤镜链（80Hz 高通 / 12kHz 低通 / 200Hz 与 3kHz 各 +1.5dB / 2.5:1 轻压缩 / `loudnorm` 到 -16 LUFS），输出 44.1kHz、96kbps。ffmpeg 太老缺某个滤镜时**退一步**用无滤镜参数再转一次 —— 宁可音色差一点，也别发不出声。
@@ -199,7 +206,7 @@ DSH 0.2 的卡片把值写进 `$DSH_HOME/qq-bridge-neko-settings.json`。这份�
 | `burstWaitMs` | `0` | 对方连着发消息时，先等这么多毫秒没人再说才回复；`0` = 立刻回。每个目的地可单独覆盖 |
 | `listenIdleMs` | `120000` | 会话跟随期间，这么久（毫秒）没有新消息就自动停听；默认 2 分钟 |
 | `voiceEnabled` | `false` | 要不要发语音。打开后 `[语音]…[/语音]`（以及 `qq_bridge_neko_voice` 工具）才会合成语音；关着时标记原样当文字发 |
-| `ttsProvider` | `edge` | 用哪套声音（卡片上是二选一的两块，不是下拉）：`feiyu` = 肥鱼声音服务（首选，也能唱歌）/ `edge` = 本机 edge-tts（免费备选）声音服务 `feiyu`（本机 HTTP，要先把服务起起来）。选了哪套就只显示那套的字段，另一套的值不会被清掉。认不出的值直接失败并降级发文字 |
+| `ttsProvider` | `feiyu` | 用哪套声音（卡片上是二选一的两块，不是下拉）：`feiyu` = 肥鱼声音服务（跑在本机、不联网，首选，也能唱歌）/ `edge` = edge-tts（要联网调微软，免费备选）。选了哪套就只显示那套的字段，另一套的值不会被清掉。认不出的值直接失败并降级发文字 |
 | `ttsVoice` | `zh-CN-XiaoyiNeural` | 音色名（`edge` 用这个；肥鱼用 `feiyuVoice`）。`zh-CN-YunxiNeural` 是男声 |
 | `ttsRate` | `-8%` | 语速（`edge` 用这个），edge-tts 写法，`+10%` 更快、`-8%` 更慢 |
 | `ttsPitch` | `+12Hz` | 音高（edge 用这个），edge-tts 写法 |
@@ -216,9 +223,9 @@ DSH 0.2 的卡片把值写进 `$DSH_HOME/qq-bridge-neko-settings.json`。这份�
 | `feiyuSingTimeoutMs` | `600000` | 唱歌整体超时（毫秒）。唱歌要走 SVS + RVC + 混音，比说话慢一个量级，10000–3600000 |
 | `voiceMaxSongChars` | `400` | 一首歌最多多少唱字（一个音符一个字），1–4000；超了直接拒唱并说明 |
 | `voiceMood` | `default` | 语气预设：`default` / `sweet` 撒娇 / `gentle` 温柔 / `lively` 元气 / `serious` 认真 / `sleepy` 困倦。每个预设是一组参数（肥鱼语气 + 音色 + 变调 + 语速），下面三个单参数会覆盖它 |
-| `voiceTone` | `natural` | 音色预设：`natural` 自然 / `soft` 柔和 / `warm` 温暖 / `deep` 低沉 / `bright` 明亮。三个引擎都生效（ffmpeg 后处理） |
+| `voiceTone` | `natural` | 音色预设：`natural` 自然 / `soft` 柔和 / `warm` 温暖 / `deep` 低沉 / `bright` 明亮。两个引擎都生效（ffmpeg 后处理） |
 | `voicePitchSemitones` | `0` | 音高偏移（半音，-12~12）。负数更沉、正数更尖 |
-| `voiceSpeedFactor` | `1` | 语速倍率（0.5~2）。1 = 原速，1.15 = 快一点。三个引擎都生效 |
+| `voiceSpeedFactor` | `1` | 语速倍率（0.5~2）。1 = 原速，1.15 = 快一点。两个引擎都生效 |
 | `feiyuAutoStart` | `true` | 肥鱼服务没起时，插件自己按 `feiyuServerDir` 把它拉起来再合成。关掉后服务没起就直接降级发文字 |
 | `feiyuServerDir` | 空 | 肥鱼服务端目录（里面有 `.venv` 与 `configs/voice_service.json`）。自动启动要用它；留空 = 不自动启动 |
 | `feiyuPythonPath` | 空 | 跑肥鱼服务的 python。留空 = 服务目录下的 `.venv`（Windows 的 `Scripts\python.exe` / Linux 的 `bin/python`）；找不到就报 `python-missing`，不拿系统 python 乱试 |

@@ -218,9 +218,18 @@ function renderAt(groupId, settingsValue = base) {
     !localKeys.has('feiyuBaseUrl') && !localKeys.has('feiyuVoice'),
     [...localKeys].filter((k) => k.startsWith('feiyu')).join(', '),
   )
-  check('两个模块都列出来可选', ['本地合成', '肥鱼声音服务'].every((t) => all(localTree).some((n) => textOf(n).includes(t))))
-  check('本地合成只剩 edge-tts 一个按钮', buttons(localTree).some((b) => textOf(b).includes('edge-tts')))
+  check('两个模块都列出来可选', ['edge-tts', '肥鱼声音服务'].every((t) => all(localTree).some((n) => textOf(n).includes(t))))
+  check('本地那套只剩 edge-tts 一个按钮', buttons(localTree).some((b) => textOf(b).includes('edge-tts')))
   check('sherpa 按钮已经摘掉', !buttons(localTree).some((b) => textOf(b).includes('sherpa')))
+
+  // 谁是本地、谁要联网 —— 这里必须写对：肥鱼跑在本机，edge-tts 连微软。
+  // 只看两张可点的卡（按钮），别把整页说明文字混进来。
+  const choiceButtons = buttons(localTree).map(textOf)
+  const feiyuCard = choiceButtons.find((t) => t.includes('肥鱼声音服务')) ?? ''
+  const edgeCard = choiceButtons.find((t) => t.includes('edge-tts')) ?? ''
+  check('肥鱼那块写着跑在本机 / 不联网', /本机/.test(feiyuCard) && /不联网/.test(feiyuCard), feiyuCard)
+  check('edge-tts 那块写着要联网调微软', /联网/.test(edgeCard) && /微软/.test(edgeCard), edgeCard)
+  check('没有把「不联网」安在 edge-tts 头上', !/不联网/.test(edgeCard), edgeCard)
 
   const feiyuTree = expand(renderAt('voice', { ...base, ttsProvider: 'feiyu' }))
   const feiyuKeys = shownKeys(feiyuTree)

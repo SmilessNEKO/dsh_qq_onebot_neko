@@ -174,66 +174,76 @@ window.__ModuleLoader__.load({
       },
       {
         key: 'voiceEnabled',
+        section: '开关',
         label: '可以发语音',
         kind: 'boolean',
         hint: '打开后，正文里写 [语音]要念的台词[/语音] 就会合成成语音发出去，一个语音块 = 一条消息。关着时这些标记原样当文字发。',
       },
       {
         key: 'ttsProvider',
+        section: '引擎',
         label: '声音模块',
         kind: 'voice-module',
         options: [
-          ['feiyu', '肥鱼声音服务（本机 9880，声音更像人，也能唱歌）'],
-          ['edge', 'edge-tts（微软的，免费备选；要在本机 python 里跑）'],
+          ['feiyu', '肥鱼声音服务（跑在本机，不联网）'],
+          ['edge', 'edge-tts（联网调微软接口，免费备选）'],
         ],
-        hint: '二选一：肥鱼声音服务（首选）或 edge-tts（免费备选）。选哪个就只显示哪一套设置，另一套收起来但值不会丢。',
+        hint: '二选一：肥鱼跑在本机、不联网；edge-tts 要连微软的服务器。选哪个就只显示哪一套设置，另一套收起来但值不会丢。',
       },
       {
         key: 'ttsVoice',
+        section: '引擎',
         label: '音色',
         kind: 'text',
         hint: 'edge-tts 的音色名，例如 zh-CN-XiaoyiNeural（女声，偏软）、zh-CN-XiaoxiaoNeural、zh-CN-YunxiNeural（男声）。',
       },
-      { key: 'ttsRate', label: '语速', kind: 'text', hint: '相对语速，例如 -8%（慢一点）、+0%。' },
-      { key: 'ttsPitch', label: '音高', kind: 'text', hint: '相对音高，例如 +12Hz（高一点）、+0Hz。' },
+      { section: '引擎', key: 'ttsRate', label: '语速', kind: 'text', hint: '相对语速，例如 -8%（慢一点）、+0%。' },
+      { section: '引擎', key: 'ttsPitch', label: '音高', kind: 'text', hint: '相对音高，例如 +12Hz（高一点）、+0Hz。' },
       {
         key: 'ttsPythonPath',
+        section: '引擎',
         label: '哪个 python 能跑 edge-tts',
         kind: 'text',
         hint: '填装好 edge-tts 的 python.exe 绝对路径。留空 = 用 PATH 里的 python（大多数系统 python 没装 edge-tts，会合成失败才降级发文字）。',
       },
       {
         key: 'voiceMaxChars',
+        section: '通用',
         label: '一条语音最多多少字',
         kind: 'number',
         hint: '超过这个字数就不合成、直接发文字（前面加「语音没合成出来」）。默认 120。',
       },
       {
         key: 'voiceCacheDir',
+        section: '通用',
         label: '语音缓存放哪',
         kind: 'text',
         hint: '留空 = $DSH_HOME/qq-bridge-neko-voice。同一段话 + 同一个引擎同一套参数命中缓存，不会重复合成。',
       },
       {
         key: 'ffmpegPath',
+        section: '通用',
         label: '转 mp3 用哪个 ffmpeg',
         kind: 'text',
         hint: '肥鱼吐的是 wav，转成 mp3 更好发。留空 = 先找 PATH 上的 ffmpeg，再找本机自带的 D:\\小丸\\tools\\ffmpeg.exe；都没有就原样发 wav，不算失败。',
       },
       {
         key: 'feiyuBaseUrl',
+        section: '引擎',
         label: '肥鱼声音服务地址',
         kind: 'text',
         hint: '本机那个声音服务的地址，默认 http://127.0.0.1:9880。得先把服务起起来，语音才合成得出来。',
       },
       {
         key: 'feiyuApiKey',
+        section: '引擎',
         label: '肥鱼服务口令',
         kind: 'secret',
         hint: '服务要求的 Bearer 口令。留空 = 不带鉴权头。存过之后这里不会再显示出来，想换直接重填。',
       },
       {
         key: 'feiyuVoice',
+        section: '引擎',
         label: '肥鱼音色',
         // 下拉而不是手打：清单由宿主半去打声音服务的 /v1/capabilities 拿（见 catalog 接口）。
         // 服务没起时退回下面这份内置项 —— 当前发布的包里确实只注册了 feiyu 一个音色。
@@ -243,6 +253,7 @@ window.__ModuleLoader__.load({
       },
       {
         key: 'feiyuStyle',
+        section: '引擎',
         label: '肥鱼语气',
         kind: 'select',
         options: [
@@ -251,22 +262,25 @@ window.__ModuleLoader__.load({
         ],
         hint: '肥鱼服务的语气风格，默认 cute。只在合成时用得上。',
       },
-      { key: 'feiyuTimeoutMs', label: '肥鱼最多等多久', kind: 'number', hint: '毫秒。第一次合成本机要加载模型、会慢一些，默认 180000。' },
-      { key: 'feiyuPollIntervalMs', label: '肥鱼隔多久问一次', kind: 'number', hint: '毫秒。任务排队时多久查一次进度，默认 1000。' },
+      { section: '引擎', key: 'feiyuTimeoutMs', label: '肥鱼最多等多久', kind: 'number', hint: '毫秒。第一次合成本机要加载模型、会慢一些，默认 180000。' },
+      { section: '引擎', key: 'feiyuPollIntervalMs', label: '肥鱼隔多久问一次', kind: 'number', hint: '毫秒。任务排队时多久查一次进度，默认 1000。' },
       {
         key: 'feiyuSingTimeoutMs',
+        section: '唱歌',
         label: '唱歌最多等多久',
         kind: 'number',
         hint: '毫秒。唱歌要跑谱面编译 + SVS 出声 + 换声 + 混音，比说话慢一个量级，默认 600000（10 分钟）。',
       },
       {
         key: 'voiceMaxSongChars',
+        section: '唱歌',
         label: '一首歌最多几个字',
         kind: 'number',
         hint: '一个音符一个字，所以这就是最多唱多少个音符。15 秒的小曲约 10 个字，一分钟一百多字。默认 400。',
       },
       {
         key: 'voiceMood',
+        section: '音色与语气',
         label: '语气',
         kind: 'select',
         options: [
@@ -281,6 +295,7 @@ window.__ModuleLoader__.load({
       },
       {
         key: 'voiceTone',
+        section: '音色与语气',
         label: '音色',
         kind: 'select',
         options: [
@@ -290,40 +305,46 @@ window.__ModuleLoader__.load({
           ['deep', '低沉（明显更沉）'],
           ['bright', '明亮（更清亮）'],
         ],
-        hint: '三个引擎都生效：合成完在本地用 ffmpeg 调一遍。觉得尖就选「温暖」或「低沉」。',
+        hint: '两个引擎都生效：合成完在本地用 ffmpeg 调一遍。觉得尖就选「温暖」或「低沉」。',
       },
       {
         key: 'voicePitchSemitones',
+        section: '音色与语气',
         label: '音高偏移（半音）',
         kind: 'number',
         hint: '负数更沉、正数更尖，范围 -12 ~ 12，默认 0。和「音色」叠加生效；时长会自动补回来，不会变快变慢。',
       },
       {
         key: 'voiceSpeedFactor',
+        section: '音色与语气',
         label: '语速倍率',
         kind: 'number',
-        hint: '1 = 原速，0.9 = 慢一点，1.15 = 快一点，范围 0.5 ~ 2。三个引擎都生效。',
+        hint: '1 = 原速，0.9 = 慢一点，1.15 = 快一点，范围 0.5 ~ 2。两个引擎都生效。',
       },
       {
         key: 'feiyuAutoStart',
+        section: '服务',
         label: '服务没起就自动拉起',
         kind: 'boolean',
         hint: '合成前先问一下本地声音服务；没开就自己把它启动起来再合成。关掉后服务没起就直接降级发文字。',
       },
       {
         key: 'feiyuServerDir',
+        section: '服务',
         label: '声音服务目录',
         kind: 'text',
         hint: '服务端项目目录（里面有 .venv 与 configs/voice_service.json）。自动启动要用它；留空 = 不自动启动。',
       },
       {
         key: 'feiyuPythonPath',
+        section: '服务',
         label: '跑服务的 python',
         kind: 'text',
         hint: '留空 = 用服务目录下的 .venv（Windows 的 Scripts\python.exe、Linux 的 bin/python）。',
       },
       {
         key: 'feiyuIdleStopMinutes',
+        section: '服务',
         label: '空闲多久自动停',
         kind: 'number',
         hint: '分钟。这么久没有合成请求就把服务停掉、释放显存。默认 10；填 0 = 一直开着。只停插件自己启动的那个进程。',
@@ -490,16 +511,19 @@ window.__ModuleLoader__.load({
       {
         id: 'connect',
         label: '连接',
+        desc: 'OneBot 连到哪儿、机器人自己是谁。改完要重连才生效。',
         keys: ['onebotUrl', 'onebotPort', 'accessTokenEnv', 'selfId', 'qqNumber'],
       },
       {
         id: 'wake',
         label: '唤醒',
+        desc: '什么消息会叫醒鲸鲸：昵称、概率、白名单。',
         keys: ['nicknames', 'wakeProbability', 'alwaysWakePrivate', 'fallbackToOwnerPrivate', 'whitelist', 'groupWhitelist', 'ownerWhitelist', 'atOnlyInGroup'],
       },
       {
         id: 'session',
         label: '会话',
+        desc: '接到哪个会话、新会话怎么建、上下文怎么轮换。',
         keys: [
           'sessionScope',
           'targetSessionId',
@@ -517,6 +541,7 @@ window.__ModuleLoader__.load({
       {
         id: 'reply',
         label: '回复',
+        desc: '怎么发出去：分段、引用、字数、间隔。',
         keys: [
           'replyMode',
           'delivery',
@@ -535,6 +560,7 @@ window.__ModuleLoader__.load({
       {
         id: 'voice',
         label: '声音',
+        desc: '说话用哪个引擎、音色与语气，以及现场试听。',
         keys: [
           'voiceEnabled',
           'ttsProvider',
@@ -566,15 +592,27 @@ window.__ModuleLoader__.load({
       {
         id: 'vision',
         label: '看图',
+        desc: '看图走哪个提供商和模型。',
         keys: ['describeImages', 'visionMode', 'visionProvider', 'visionProviderModel'],
       },
-      { id: 'model', label: '模型', keys: ['modelChain', 'modelChainFailures'] },
+      {
+        id: 'model',
+        label: '模型',
+        desc: '模型优先级链：前面的失败就往后退。',
+        keys: ['modelChain', 'modelChainFailures'],
+      },
       {
         id: 'napcat',
         label: 'NapCat',
+        desc: 'NapCat 的安装目录、网页管理地址与自动启动。',
         keys: ['autoStartNapcat', 'autoStartNapcatDelayMs', 'napcatInstallDir', 'napcatWebuiUrl', 'napcatVersion', 'downloadProxy'],
       },
-      { id: 'about', label: '关于', keys: ['checkUpdateOnStart'] },
+      {
+        id: 'about',
+        label: '关于',
+        desc: '版本与更新检查。',
+        keys: ['checkUpdateOnStart'],
+      },
     ]
 
     // 忘了归类的字段兜一层：进「其他」页，绝不出现在任何页都点不到的地方。
@@ -583,7 +621,7 @@ window.__ModuleLoader__.load({
     if (UNGROUPED_KEYS.length > 0) GROUPS.push({ id: 'more', label: '其他', keys: UNGROUPED_KEYS })
 
     /**
-     * 声音有两套，二选一：本地合成（edge）与肥鱼声音服务。
+     * 声音有两套，二选一：edge-tts（联网）与肥鱼声音服务（本机）。
      * 只显示选中那一套的字段 —— 两套混在一起列出来是「以后混乱」的根源。
      * 存储上仍然只有 `ttsProvider` 一个键（'edge' | 'feiyu'），老配置里的 sherpa 会回落成 edge。
      */
@@ -603,7 +641,7 @@ window.__ModuleLoader__.load({
       'feiyuIdleStopMinutes',
     ])
 
-    /** 当前是不是「肥鱼声音服务」那一套。 */
+    /** 当前是不是「肥鱼声音服务」（本机那套）。 */
     function usesFeiyu(shown) {
       return String(shown?.ttsProvider ?? '') === 'feiyu'
     }
@@ -802,12 +840,12 @@ window.__ModuleLoader__.load({
     }
 
     const S = {
-      wrap: { display: 'flex', flexDirection: 'column', gap: '10px' },
+      wrap: { display: 'flex', flexDirection: 'column', gap: '12px' },
       head: { display: 'flex', flexDirection: 'column', gap: '2px' },
-      title: { fontSize: '14px', fontWeight: 600 },
-      sub: { fontSize: '12px', opacity: 0.65, lineHeight: 1.5 },
-      grid: { display: 'grid', gridTemplateColumns: 'minmax(120px, 180px) 1fr', gap: '8px 12px', alignItems: 'start' },
-      label: { fontSize: '13px', paddingTop: '5px' },
+      title: { fontSize: '15px', fontWeight: 600, letterSpacing: '0.2px' },
+      sub: { fontSize: '12px', opacity: 0.55, lineHeight: 1.5, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' },
+      grid: { display: 'grid', gridTemplateColumns: 'minmax(120px, 180px) 1fr', gap: '10px 14px', alignItems: 'start' },
+      label: { fontSize: '13px', fontWeight: 500, paddingTop: '5px', lineHeight: 1.45 },
       input: {
         width: '100%',
         boxSizing: 'border-box',
@@ -819,9 +857,19 @@ window.__ModuleLoader__.load({
         font: 'inherit',
         fontSize: '13px',
       },
-      hint: { fontSize: '11px', opacity: 0.55, marginTop: '3px', lineHeight: 1.5 },
+      hint: { fontSize: '11px', opacity: 0.5, marginTop: '4px', lineHeight: 1.55 },
       check: { display: 'flex', alignItems: 'center', gap: '6px', fontSize: '13px', paddingTop: '4px' },
-      foot: { display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' },
+      foot: {
+        display: 'flex',
+        alignItems: 'center',
+        gap: '10px',
+        flexWrap: 'wrap',
+        position: 'sticky',
+        bottom: 0,
+        padding: '8px 0',
+        background: TOKEN.surface,
+        borderTop: BORDER,
+      },
       btn: {
         padding: '5px 14px',
         borderRadius: '6px',
@@ -838,16 +886,40 @@ window.__ModuleLoader__.load({
         alignItems: 'center',
         gap: '8px',
         width: '100%',
-        padding: '8px 10px',
-        borderRadius: '6px',
-        border: BORDER,
+        padding: '7px 2px',
+        border: 'none',
         background: 'transparent',
         color: TOKEN.text,
         cursor: 'pointer',
         font: 'inherit',
         textAlign: 'left',
       },
-      chevron: { marginLeft: 'auto', opacity: 0.6 },
+      chevron: { marginLeft: 'auto', opacity: 0.6, fontSize: '11px' },
+      // 一页内容装进一张卡：边框 + 内边距，视觉上和页签分开
+      panel: {
+        display: 'flex',
+        flexDirection: 'column',
+        gap: '10px',
+        padding: '12px',
+        borderRadius: '8px',
+        border: BORDER,
+        background: 'transparent',
+      },
+      // 当前页的一句话说明：压在字段上方，字小、不抢戏
+      sectionNote: { fontSize: '12px', opacity: 0.6, lineHeight: 1.5 },
+      // 页内小节标题：跨两列，压在字段上面，字小但加粗
+      sectionHead: {
+        gridColumn: '1 / -1',
+        fontSize: '12px',
+        fontWeight: 600,
+        opacity: 0.75,
+        paddingTop: '2px',
+        marginTop: '2px',
+        borderTop: BORDER,
+      },
+      // 未保存提示点：标题右侧一个小圆点，比整句话省地方
+      dot: { width: '6px', height: '6px', borderRadius: '999px', background: '#e5a53b', flex: '0 0 auto' },
+      headerMain: { display: 'flex', alignItems: 'baseline', gap: '8px', minWidth: 0, flex: '1 1 auto' },
       note: { fontSize: '12px', opacity: 0.7 },
       err: { fontSize: '12px', color: '#e5534b' },
       overridden: { fontSize: '11px', opacity: 0.5, marginLeft: '4px' },
@@ -915,19 +987,21 @@ window.__ModuleLoader__.load({
       profileGrid: { display: 'grid', gridTemplateColumns: 'minmax(96px, 130px) 1fr', gap: '6px 10px', alignItems: 'start' },
       profileLabel: { fontSize: '12px', opacity: 0.7, paddingTop: '6px' },
       // 分类页签：一排能点的小标签，当前页描边加深
-      tabs: { display: 'flex', gap: '6px', flexWrap: 'wrap', paddingBottom: '2px' },
+      tabs: { display: 'flex', gap: '4px', flexWrap: 'nowrap', overflowX: 'auto', paddingBottom: '2px' },
       tab: {
-        padding: '4px 10px',
+        padding: '3px 11px',
         borderRadius: '999px',
-        border: BORDER,
+        border: '1px solid transparent',
         background: 'transparent',
-        color: TOKEN.text,
+        color: TOKEN.textSoft,
         cursor: 'pointer',
         font: 'inherit',
         fontSize: '12px',
-        lineHeight: 1.5,
+        lineHeight: 1.6,
+        whiteSpace: 'nowrap',
+        flex: '0 0 auto',
       },
-      tabActive: { background: 'rgba(127,127,127,0.18)', fontWeight: 600 },
+      tabActive: { background: 'rgba(127,127,127,0.16)', color: TOKEN.text, fontWeight: 600, border: BORDER },
       // 试听面板：一整块，和设置行隔开一点
       preview: { display: 'flex', flexDirection: 'column', gap: '8px', padding: '10px', borderRadius: '6px', border: BORDER },
       previewTitle: { fontSize: '13px', fontWeight: 600 },
@@ -1344,8 +1418,8 @@ window.__ModuleLoader__.load({
        *
        * 原来是三选一的下拉，本地那套（edge）和肥鱼那套的设置项全铺在一页上，
        * 看着像两个模块各管各的，容易配混。这里拆成两组卡片：
-       * - 本地合成：只剩 edge（sherpa 已摘掉）；
-       * - 肥鱼声音服务：本机 9880 那个服务。
+       * - edge-tts：联网调微软的接口，免费备选（sherpa 已摘掉）；
+       * - 肥鱼声音服务：跑在本机 9880，不联网。
        * 选哪组就只显示哪组的字段，另一组的键值不会被清空。
        */
       function renderVoiceModule(field, cur) {
@@ -1389,13 +1463,13 @@ window.__ModuleLoader__.load({
               h(
                 'div',
                 { style: { fontWeight: 600, marginBottom: '6px' } },
-                '本地合成',
-                h('span', { style: S.choiceDesc }, '声音在本机算，不联网'),
+                'edge-tts',
+                h('span', { style: S.choiceDesc }, '联网调微软的接口，免费备选'),
               ),
               h(
                 'div',
                 { style: { display: 'flex', gap: '6px', flexWrap: 'wrap' } },
-                localEngine('edge', 'edge-tts', '微软的语音，靠本机 python 跑'),
+                localEngine('edge', 'edge-tts', '联网调微软的接口；本机 python 里得装好 edge-tts'),
               ),
             ),
             h(
@@ -1407,7 +1481,7 @@ window.__ModuleLoader__.load({
                 onClick: pick('feiyu'),
               },
               '肥鱼声音服务',
-              h('span', { style: S.choiceDesc }, '本机 9880 那个服务，声音更像人，也能唱歌'),
+              h('span', { style: S.choiceDesc }, '跑在本机 9880，不联网；声音更像人，也能唱歌'),
             ),
           ),
         )
@@ -2135,13 +2209,37 @@ window.__ModuleLoader__.load({
         (GROUPS.find((g) => g.id === activeGroup) ?? GROUPS[0] ?? { keys: [] }).keys,
       )
       const feiyu = usesFeiyu(shown)
+      /** 页内小节的显示顺序。没列到的排在最后。 */
+      const SECTION_ORDER = ['开关', '引擎', '音色与语气', '通用', '唱歌', '服务']
+      /** 当前页要显示的字段：按小节顺序稳定排一遍。 */
+      function activeFields() {
+        const rank = (f) => {
+          const at = SECTION_ORDER.indexOf(f.section ?? '')
+          return at < 0 ? SECTION_ORDER.length : at
+        }
+        return FIELDS.map((f, i) => ({ f, i }))
+          .sort((a, b) => rank(a.f) - rank(b.f) || a.i - b.i)
+          .map((x) => x.f)
+      }
+
       const rows = []
-      for (const f of FIELDS) {
+      // 页内小节：字段带 section 时，换节就插一条跨列的小标题。
+      // 顺序按 SECTION_ORDER 稳定排一次 —— 否则「引擎 → 通用 → 引擎」会在页面上来回跳。
+      // 只影响显示顺序与分组，字段归类、保存、测试收集字段 key 都不受影响。
+      const ordered = activeFields()
+      let lastSection = ''
+      for (const f of ordered) {
         if (!activeKeys.has(f.key)) continue
         // 声音二选一：选了肥鱼就藏本地那套字段，反之亦然。
         // 藏起来只是不显示，值仍原样留在配置里 —— 切回去还在。
         if (feiyu && LOCAL_ONLY_KEYS.has(f.key)) continue
         if (!feiyu && FEIYU_ONLY_KEYS.has(f.key)) continue
+        if (f.section && f.section !== lastSection) {
+          lastSection = f.section
+          rows.push(
+            h('div', { key: `section-${f.section}`, style: S.sectionHead }, f.section),
+          )
+        }
         const value = shown[f.key]
         const overridden = Object.prototype.hasOwnProperty.call(user, f.key)
         let control
@@ -2474,8 +2572,13 @@ window.__ModuleLoader__.load({
       const header = h(
         'button',
         { type: 'button', onClick: () => setOpen(!open), 'aria-expanded': open, style: S.header },
-        h('span', { style: S.title }, 'QQ 桥接 Neko'),
-        h('span', { style: S.sub }, dirty ? '有未保存的改动' : pluginVersion ? `当前版本 ${pluginVersion}` : '把固定的 DSH 会话接到 QQ'),
+        h(
+          'span',
+          { style: S.headerMain },
+          h('span', { style: S.title }, 'QQ 桥接 Neko'),
+          h('span', { style: S.sub }, dirty ? '有未保存的改动' : pluginVersion ? `v${pluginVersion}` : '接到 QQ'),
+        ),
+        dirty ? h('span', { style: S.dot }) : null,
         h('span', { style: S.chevron }, open ? '▴' : '▾'),
       )
       const versionLine = pluginVersion
@@ -2544,16 +2647,25 @@ window.__ModuleLoader__.load({
           ),
         ),
       )
+      // 当前这一页是干什么的：一句话，压在字段上方。没有 desc 的分类就不显示。
+      const activeMeta = GROUPS.find((g) => g.id === activeGroup)
+      const sectionNote = activeMeta && activeMeta.desc ? h('div', { style: S.sectionNote }, activeMeta.desc) : null
 
       if (!open) return h('div', { style: S.wrap }, header)
       return h(
         'div',
         { style: S.wrap },
         header,
-        updateBox,
         tabsRow,
-        h('div', { style: S.grid }, rows),
-        activeGroup === 'voice' ? h(VoicePreview, { shown, writable: snap.writable }) : null,
+        // 一页一张卡：说明 + 字段。更新卡只在「关于」页出现，不占别页的地方。
+        h(
+          'div',
+          { style: S.panel },
+          sectionNote,
+          h('div', { style: S.grid }, rows),
+          activeGroup === 'voice' ? h(VoicePreview, { shown, writable: snap.writable }) : null,
+          activeGroup === 'about' ? updateBox : null,
+        ),
         activeGroup === 'napcat' || activeGroup === 'connect' ? napcatOps : null,
         h(
           'div',
