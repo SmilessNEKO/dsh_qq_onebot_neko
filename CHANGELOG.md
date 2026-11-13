@@ -1,5 +1,13 @@
 # 更新日志
 
+## v1.1.7 — 2026-11-13
+
+- **设置入口搬进 DSH 设置页：撤掉左下角侧栏按钮，改注册 `settings.section`**。以前走的是 `sidebar.footer.action`（侧栏脚部、Settings 上面那个「🐟 QQ 桥接 Neko」），点开是一个居中浮层面板。问题是同一个设置有两套入口、两套视觉，找起来反而更乱。现在改成设置页左侧导航里的一节「QQ 桥接 Neko」，和「内置插件」「Vision Router」并列，点进去就是原来那张卡片（分页、保存、检查更新全不变）。
+  - 删掉 `FootEntry` 组件（含 Esc 关闭、点遮罩关闭那套浮层逻辑）与它专用的四个样式（`footEntry` / `footEntryIcon` / `overlay` / `sheet` / `sheetHead` / `sheetTitle`）。
+  - 卡片本身一行未改：`Card` 仍是自带标题与折叠的那张，`settings.section` 的 `label` 只用于导航项文字。
+  - 插件页那几处入口（`settings.plugins.tab` / `settings.plugin.item` / `plugins.tab` / `plugins.detail.section`）原样保留 —— 老宿主没有 `settings.section` 时仍能找到设置。
+- 自测：`test-smoke.mjs` 的 slot 注入断言补上 `settings.section`，五个挂载点数量不变（`sidebar.footer.action` 换成 `settings.section`）；698 条全通过。`test-updates.mjs` 113 条、`test-voice.mjs` 161 条同样全通过。
+
 ## v1.1.6 — 2026-11-13
 
 - **包名去掉作用域：`@fengye_nobug/dsh-qq-bridge-neko` → `dsh-qq-bridge-neko`**。改的是 `package.json` 的 `name`，以及所有靠它做模块解析的地方：`cordis.patch.yml` 里 `qq-bridge-neko` 那一行的 `name`、`index.js` 的 `PACKAGE_NAME`、`updates.js` 的 `PACKAGE_NAME`、`client/client.js` 的 `__ModuleLoader__` `id` 与 `exports.name`。

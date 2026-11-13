@@ -895,48 +895,6 @@ window.__ModuleLoader__.load({
       },
       choiceOn: { background: 'rgba(127,127,127,0.16)', fontWeight: 600 },
       choiceDesc: { display: 'block', fontSize: '11px', opacity: 0.6, marginTop: '3px', fontWeight: 400 },
-      // 左下角入口：侧栏脚部那个小按钮，跟 Settings 挨着
-      footEntry: {
-        display: 'flex',
-        alignItems: 'center',
-        gap: '8px',
-        width: '100%',
-        padding: '6px 10px',
-        borderRadius: '6px',
-        border: 'none',
-        background: 'transparent',
-        color: TOKEN.text,
-        cursor: 'pointer',
-        font: 'inherit',
-        fontSize: '13px',
-        textAlign: 'left',
-      },
-      footEntryIcon: { fontSize: '14px', lineHeight: 1, opacity: 0.85 },
-      // 面板浮层：铺满窗口，中间一块可滚动的设置面板
-      overlay: {
-        position: 'fixed',
-        inset: 0,
-        zIndex: 2147483000,
-        background: 'rgba(0,0,0,0.4)',
-        display: 'flex',
-        alignItems: 'flex-start',
-        justifyContent: 'center',
-        padding: '40px 16px',
-        overflow: 'auto',
-      },
-      sheet: {
-        width: 'min(760px, 100%)',
-        maxHeight: 'calc(100vh - 80px)',
-        overflow: 'auto',
-        borderRadius: '10px',
-        border: BORDER,
-        background: TOKEN.surface,
-        color: TOKEN.text,
-        boxShadow: '0 16px 48px rgba(0,0,0,0.28)',
-        padding: '4px 14px 14px',
-      },
-      sheetHead: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '10px 0 6px' },
-      sheetTitle: { fontSize: '14px', fontWeight: 600 },
     }
 
     function disabled(btn, off) {
@@ -2546,67 +2504,6 @@ window.__ModuleLoader__.load({
       }
     }
 
-    /**
-     * 左下角入口：侧栏脚部、Settings 上面那个小按钮。
-     *
-     * 为什么不用 `sidebar.settings` 自己顶上：那个座位是 single，已经被宿主设置页占了，
-     * 抢不到。`sidebar.footer.action` 是 list，可以并存 —— 于是入口挂在这里，
-     * 点开后是一个居中的浮层面板，里面就是设置本体（分类页签 + 当前页字段）。
-     */
-    function FootEntry(props) {
-      const [open, setOpen] = react.useState(false)
-      const wide = props?.wide !== false
-      // Esc 关掉：浮层铺满窗口，没有键盘退出会让人以为被卡住了。
-      react.useEffect(() => {
-        if (!open) return undefined
-        const onKey = (event) => {
-          if (event?.key === 'Escape') setOpen(false)
-        }
-        window.addEventListener('keydown', onKey)
-        return () => window.removeEventListener('keydown', onKey)
-      }, [open])
-
-      const entry = h(
-        'button',
-        {
-          type: 'button',
-          style: S.footEntry,
-          title: 'QQ 桥接 Neko 设置',
-          onClick: () => setOpen(true),
-        },
-        h('span', { style: S.footEntryIcon }, '🐟'),
-        wide ? h('span', null, 'QQ 桥接 Neko') : null,
-      )
-      if (!open) return entry
-
-      return h(
-        react.Fragment,
-        null,
-        entry,
-        h(
-          'div',
-          {
-            style: S.overlay,
-            onClick: (event) => {
-              // 点遮罩关掉，点面板本身不关。
-              if (event.target === event.currentTarget) setOpen(false)
-            },
-          },
-          h(
-            'div',
-            { style: S.sheet },
-            h(
-              'div',
-              { style: S.sheetHead },
-              h('div', { style: S.sheetTitle }, 'QQ 桥接 Neko'),
-              h('button', { type: 'button', style: S.link, onClick: () => setOpen(false) }, '关闭'),
-            ),
-            typeof props?.render === 'function' ? props.render() : null,
-          ),
-        ),
-      )
-    }
-
     function apply(ctx) {
       // 卡片立刻挂上，不等 settingsScope / webUiSettings。
       // 这两个服务在部分 0.2.x 上不存在，ctx.inject 会一直等，回调永远不跑。
@@ -2665,11 +2562,9 @@ window.__ModuleLoader__.load({
         registerCard('settings.plugins.tab', { id: NS, order: 100, label: () => 'QQ 桥接 Neko' })
         registerCard('settings.plugin.item', { key: NS })
         registerCard('plugins.tab', { id: NS, order: 100, label: () => 'QQ 桥接 Neko' })
-        // 左下角入口：侧栏脚部（Settings 上方）。list 型座位，可以和别人并存。
-        // 点开是个浮层面板，里面就是这套设置 —— 不用再钻进「插件」里翻。
-        registerCard('sidebar.footer.action', { id: NS, order: 100 }, (props) =>
-          h(FootEntry, { wide: props?.wide, render: card }),
-        )
+        // 主入口：DSH「设置」左侧导航里的一节（和「内置插件」「Vision Router」并列）。
+        // label 只用于导航项，节内容由下面的 Card 自己画标题 —— 所以不用再套一层壳。
+        registerCard('settings.section', { id: NS, order: 100, label: () => 'QQ 桥接 Neko' })
         registerCard(
           'plugins.detail.section',
           { id: 'qq-bridge-neko-settings', order: 50, label: () => 'QQ 桥接 Neko 设置' },

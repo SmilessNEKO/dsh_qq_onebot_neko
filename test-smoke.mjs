@@ -1525,13 +1525,13 @@ function sawSentText(s) {
     //   真的 slots.inject 只在那个 slot 存在时才跑 factory，所以两个都注入是安全的。
     check(
       '同时向设置页和插件页的 slot 注入',
-      ['settings.plugin.item', 'settings.plugins.tab', 'plugins.tab', 'plugins.detail.section'].every((name) =>
-        slotInjects.includes(name),
+      ['settings.plugin.item', 'settings.plugins.tab', 'settings.section', 'plugins.tab', 'plugins.detail.section'].every(
+        (name) => slotInjects.includes(name),
       ),
       JSON.stringify(slotInjects),
     )
     // 5 个挂载点：settings.plugins.tab / settings.plugin.item / plugins.tab /
-    // sidebar.footer.action（左下角入口）/ plugins.detail.section。
+    // settings.section（DSH 设置页左侧导航里的一节）/ plugins.detail.section。
     check('五个 slot 各自的卡片都注册了', cards.length === 5, String(cards.length))
     const oldCard = cards.find((c) => c.options.name === 'settings.plugin.item')
     const newCard = cards.find((c) => c.options.name === 'settings.plugins.tab')
