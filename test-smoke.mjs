@@ -1725,7 +1725,7 @@ function sawSentText(s) {
       )
       check(
         '插件详情：本包和旧包名、以及 qq-bridge-neko 这个 id 才显示',
-        Boolean(detail.cell({ subject: { kind: 'bundle', pkg: { name: '@fengye_nobug/dsh-qq-bridge-neko' } } })) &&
+        Boolean(detail.cell({ subject: { kind: 'bundle', pkg: { name: 'dsh-qq-bridge-neko' } } })) &&
           Boolean(detail.cell({ subject: { kind: 'bundle', pkg: { name: 'dsh-qq-bridge-neko' } } })) &&
           Boolean(detail.cell({ subject: { kind: 'bundle', pkg: { name: 'dsh-qq-bridge' } } })) &&
           Boolean(detail.cell({ subject: { kind: 'item', id: 'qq-bridge-neko' } })),

@@ -13,12 +13,12 @@
  *   参考实现：第三方插件 `dshmarket` 的 `client/client.js`（同样是手写/预构建产物）。
  *
  * 与宿主半的约定：
- *   - `id` 必须等于 npm 包名 `@fengye_nobug/dsh-qq-bridge-neko`；
+ *   - `id` 必须等于 npm 包名 `dsh-qq-bridge-neko`；
  *   - 卡片注册进 `settings.plugin.item`，**key 必须等于宿主注册的 settings 命名空间** `qq-bridge-neko`，
  *     否则配置页那一栏里什么都不会出现（它按命名空间派发）。
  */
 window.__ModuleLoader__.load({
-  id: '@fengye_nobug/dsh-qq-bridge-neko',
+  id: 'dsh-qq-bridge-neko',
   factory: (require) => {
     var module = { exports: {} }
     var exports = module.exports
@@ -2704,7 +2704,7 @@ window.__ModuleLoader__.load({
     exports.inject = inject
     // 导出 name：Cordis 用它做插件标识，Slots inspect 里的 registrant 会显示成它
     // （不导的话那边显示的是产物里的 fallback 短名，排障时认不出是谁注册的卡片）。
-    exports.name = '@fengye_nobug/dsh-qq-bridge-neko'
+    exports.name = 'dsh-qq-bridge-neko'
     // 纯函数给离线测试用（test-smoke.mjs 会在假 ctx 里真跑这个 bundle）。
     // Cordis 只认 apply / inject / name / Config，多余的导出它不管。
     exports.__test = { sessionOptions, draftFrom, parse, fields: FIELDS, bindSettings, groupDisplayRows, groups: GROUPS, usesFeiyu, localOnlyKeys: [...LOCAL_ONLY_KEYS], feiyuOnlyKeys: [...FEIYU_ONLY_KEYS] }

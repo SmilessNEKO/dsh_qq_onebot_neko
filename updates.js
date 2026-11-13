@@ -2,7 +2,7 @@
 //
 // checkPluginUpdate 只比较版本、拼白话说明，不下载、不安装、不改配置。
 // 启动时检查必须走这一条，不能调用 applyPluginUpdate。
-// 有新版本时，applyPluginUpdate 先执行 `dsh plugin --profile web add @fengye_nobug/dsh-qq-bridge-neko@x.y.z`，
+// 有新版本时，applyPluginUpdate 先执行 `dsh plugin --profile web add dsh-qq-bridge-neko@x.y.z`，
 // 走这台机器 npm / pnpm 已经配好的 registry（可以是官方，也可以是用户自己的镜像）。
 // 插件不写死第三方镜像。包还没发到 npm，或 registry 里没有这个版本时，才改从 GitHub 下载：
 // 先要 github.com 上的官方源码包，连不上再试同一标签的 codeload。只跟随仍指向同一标签的
@@ -23,10 +23,12 @@ import { isAbsolute, join } from 'node:path'
 import { gunzipSync, gzipSync } from 'node:zlib'
 
 export const UPDATE_REPO = 'SmilessNEKO/dsh_qq_onebot_neko'
-/** npm 上的包名。无作用域的 dsh-qq-bridge-neko 发不出去（和已有的 dsh-qqbot 太像）。本地压缩包文件名仍不带作用域，避免路径里出现斜杠。 */
-export const PACKAGE_NAME = '@fengye_nobug/dsh-qq-bridge-neko'
-/** GitHub 上 v0.2.3 及更早标签的 package.json 仍是这个无作用域名。下载校验认它，不认别的作用域。 */
+/** npm 上的包名。v1.1.6 起去掉 @fengye_nobug/ 前缀，改回无作用域名。本地压缩包文件名同样不带作用域。 */
+export const PACKAGE_NAME = 'dsh-qq-bridge-neko'
+/** 历史无作用域名：v0.2.3 及更早的标签，以及 v1.1.6 起的当前名。下载校验认它，不认别的作用域。 */
 const LEGACY_UNSCOPED_NAME = 'dsh-qq-bridge-neko'
+/** v1.1.5 及更早的作用域包名。老安装仍躺在 node_modules/@fengye_nobug/ 下，升级时两条路径都要认。 */
+export const LEGACY_SCOPED_NAME = '@fengye_nobug/dsh-qq-bridge-neko'
 /** 没读到用户自己的 registry 时用官方源。不把第三方镜像写进默认值。 */
 export const NPM_REGISTRY = 'https://registry.npmjs.org/'
 /** 下载下来的压缩包上限。本仓库是源码包，远小于这个数。 */
@@ -140,7 +142,7 @@ function isOurNpmName(name) {
   return name === PACKAGE_NAME
 }
 
-/** npm 上的安装说明。只拼这个作用域包的正式版，别的名字和预发布都不出命令。 */
+/** npm 上的安装说明。只拼当前包名的正式版，别的名字和预发布都不出命令。 */
 export function npmInstallSpec(version, name = PACKAGE_NAME) {
   const parsed = parseSemver(version)
   if (!parsed || parsed.pre.length > 0) return ''
@@ -153,7 +155,7 @@ export function npmInstallCommand(version, name = PACKAGE_NAME) {
   return spec === '' ? '' : `dsh plugin --profile web add ${spec}`
 }
 
-/** registry 路径把作用域里的斜杠编码成 %2F，@ 保留。 */
+/** registry 路径把作用域里的斜杠编码成 %2F，@ 保留（当前是无作用域名，不需要编码）。 */
 export function npmPackageUrl(registry = NPM_REGISTRY, name = PACKAGE_NAME) {
   const base = normalizeRegistry(registry)
   if (base === '' || !isOurNpmName(name)) return ''
@@ -1649,7 +1651,7 @@ export async function schedulePanelRestart(input = {}) {
 const CORDIS_ID = 'qq-bridge-neko'
 
 function isWritablePackageName(name) {
-  return name === PACKAGE_NAME || name === LEGACY_UNSCOPED_NAME || name === 'dsh-qq-bridge'
+  return name === PACKAGE_NAME || name === LEGACY_UNSCOPED_NAME || name === LEGACY_SCOPED_NAME || name === 'dsh-qq-bridge'
 }
 
 /** profile 目录。profile 名只接受 dsh 自己的那一档，避免把 `..` 拼进路径。 */
@@ -1692,7 +1694,7 @@ function readInstalledManifest(dir) {
 
 /**
  * 只改 `qq-bridge-neko` 这一行的 `name`。config 和别的插件保持原样，包括注释和空行。
- * 只认我们自己的三个包名；别人写的路径或别的包不动。
+ * 只认我们自己的几个包名（含旧的 @fengye_nobug/ 作用域名）；别人写的路径或别的包不动。
  * @param {string} text
  * @param {string} packageName
  * @param {string} [pluginId]
@@ -1761,7 +1763,7 @@ function writeTextAtomic(file, text) {
 export function alignCordisNames(input = {}) {
   const profileDir = String(input.profileDir ?? '')
   if (profileDir === '') return { ok: false, reason: 'no-profile', changed: [], name: '' }
-  const scoped = readInstalledManifest(join(profileDir, 'node_modules', '@fengye_nobug', 'dsh-qq-bridge-neko'))
+  const scoped = readInstalledManifest(join(profileDir, 'node_modules', ...LEGACY_SCOPED_NAME.split('/')))
   const legacy = readInstalledManifest(join(profileDir, 'node_modules', 'dsh-qq-bridge-neko'))
   const candidates = [scoped, legacy].filter(Boolean)
   let installed = null
@@ -1851,7 +1853,7 @@ function installRunSpec(input, extra) {
 function installedMatches(input, version) {
   const profileDir = profileDirOf(input)
   if (profileDir === '' || !version) return false
-  const scoped = readInstalledManifest(join(profileDir, 'node_modules', '@fengye_nobug', 'dsh-qq-bridge-neko'))
+  const scoped = readInstalledManifest(join(profileDir, 'node_modules', ...LEGACY_SCOPED_NAME.split('/')))
   const legacy = readInstalledManifest(join(profileDir, 'node_modules', 'dsh-qq-bridge-neko'))
   return [scoped, legacy].some((item) => item && compareSemver(item.version, version) === 0)
 }
@@ -1888,7 +1890,7 @@ async function failInstall(input, decision, ran, command, install, channel) {
 /**
  * 下载并安装一次检查允许的版本，然后安排重启。
  * 调用方要自己做登录校验。这里不读设置文件，也不碰 NapCat。
- * 先 `dsh plugin add @fengye_nobug/dsh-qq-bridge-neko@版本`。registry 里没有这个版本时，才下载 GitHub 上的同一标签。
+ * 先 `dsh plugin add dsh-qq-bridge-neko@版本`。registry 里没有这个版本时，才下载 GitHub 上的同一标签。
  * @param {{ current: unknown, version?: unknown, force?: boolean, repo?: string, fetchImpl?: typeof fetch, registry?: string, proxy?: string, platform?: string, profile?: string, runCommand?: (spec: object) => Promise<{ ok: boolean, code?: string | number }>, scheduleRestart?: (spec: object) => Promise<{ ok: boolean, error?: string }>, spawnImpl?: typeof spawn, timeoutMs?: number, downloadTimeoutMs?: number, maxBytes?: number }} input
  */
 export async function applyPluginUpdate(input = {}) {

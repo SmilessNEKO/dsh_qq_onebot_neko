@@ -140,7 +140,7 @@ export function injectedMessageSource(legacy) {
   return legacy ? { kind: 'plugin', plugin: PLUGIN_TAG } : { kind: `plugin:${PACKAGE}` }
 }
 /** npm 包名：与 `client/client.js` 里 `__ModuleLoader__.load({id})` 的值必须一致。 */
-const PACKAGE_NAME = '@fengye_nobug/dsh-qq-bridge-neko'
+const PACKAGE_NAME = 'dsh-qq-bridge-neko'
 const MAX_BUFFER = 200
 const MAX_LOG = 200
 const MAX_OUTBOX = 50
@@ -5930,7 +5930,7 @@ export function apply(ctx, config) {
    * GET 只报当前版本，不去 GitHub。
    * POST 不带 action（或 action 为 check）只问 Releases，不下载、不安装。
    * POST `{ action: 'apply', version }` 才安装这次检查允许的更新版本，并安排重启面板。
-   * 安装先走 npm（`dsh plugin add @fengye_nobug/dsh-qq-bridge-neko@版本`）。registry 里没有这一版时才改从 GitHub 下载。
+   * 安装先走 npm（`dsh plugin add dsh-qq-bridge-neko@版本`）。registry 里没有这一版时才改从 GitHub 下载。
    * 启动时检查不会走到 apply。两代宿主都挂：按钮跟“设置存在哪”无关。
    */
   async function handleUpdateRequest(req, res) {

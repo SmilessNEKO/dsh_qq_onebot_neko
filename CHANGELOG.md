@@ -1,5 +1,17 @@
 # 更新日志
 
+## v1.1.6 — 2026-11-13
+
+- **包名去掉作用域：`@fengye_nobug/dsh-qq-bridge-neko` → `dsh-qq-bridge-neko`**。改的是 `package.json` 的 `name`，以及所有靠它做模块解析的地方：`cordis.patch.yml` 里 `qq-bridge-neko` 那一行的 `name`、`index.js` 的 `PACKAGE_NAME`、`updates.js` 的 `PACKAGE_NAME`、`client/client.js` 的 `__ModuleLoader__` `id` 与 `exports.name`。
+  - `npm pack` 产物文件名跟着变成 `dsh-qq-bridge-neko-1.1.6.tgz`（以前是 `fengye_nobug-dsh-qq-bridge-neko-*.tgz`）。
+  - **npm 上两个名字都查不到**（`registry.npmjs.org` 与 `registry.npmmirror.com` 对两个名字都回 404），所以这条改动不影响任何 npm 通道 —— 本来就没有。安装仍旧只走本地 `.tgz` 或 GitHub tag。
+- **兼容老安装**。v1.1.5 及更早装的是带作用域的目录 `node_modules/@fengye_nobug/dsh-qq-bridge-neko`。新增导出 `LEGACY_SCOPED_NAME = '@fengye_nobug/dsh-qq-bridge-neko'`：
+  - `isWritablePackageName()` 认它，所以升级时 `cordis.patch.yml` 里残留的旧作用域名仍会被改写成磁盘上的实际包名（`rewriteCordisPackageName` / `alignCordisNames`）；
+  - `installedMatches()` 与 `alignCordisNames()` 读已安装清单时，两条路径都查（`node_modules/dsh-qq-bridge-neko` 与 `node_modules/@fengye_nobug/dsh-qq-bridge-neko`），老目录照样能升级；
+  - `client/client.js` 的 `bindSettings` 候选命名空间与 `subjectIsOurs()` 也保留旧作用域名，插件详情页对老安装照样认得出自己。
+- **设置卡片不用改**：settings 命名空间一直是 `qq-bridge-neko`（Cordis id），跟包名无关，所以已存的设置、state 文件、API 路径全部沿用。
+- 自测：`test-updates.mjs` 113 条、`test-smoke.mjs` 698 条、`test-voice.mjs` 161 条，全部通过。测试基线里的「当前包名」跟着改成无作用域名；`plantScoped()` 造的是真实升级场景（磁盘上已是新目录、补丁里还留着旧作用域名），用来钉住 `alignCordisNames` 的改写行为。
+
 ## v1.1.5 — 2026-11-13
 
 - **新增 `fallbackToOwnerPrivate`（默认关）：没指定发给谁时，改成发主人私聊**。以前「不传群号也不传私聊号」的出站会沿用最后一次入站消息的目的地，在群里聊完就永远发回那个群 —— 想私聊说话只能每次手动传号，漏一次就发到群里。打开这个开关后，兜底目的地直接取 `ownerWhitelist` 的第一个号（主人 QQ），不带引用段（那条消息不在这个目的地里）。

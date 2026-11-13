@@ -4,7 +4,7 @@
 
 一个**独立身份**的 DSH 插件：Cordis 插件 id `qq-bridge-neko`，设置命名空间 `qq-bridge-neko`，接口 `/api/qq-bridge-neko/...`，工具 `qq_bridge_neko_*`，状态文件 `qq-bridge-neko-*.json`，设置卡片叫「QQ 桥接 Neko」，注入 QQ 消息的来源是 `plugin:dsh-qq-bridge-neko`。可以和旧的 `qq-bridge` 插件并存在同一个 profile 里。
 
-**这个插件不发 npm。** 仓库 `package.json` 里的 `name`（`@fengye_nobug/dsh-qq-bridge-neko`）只用来给安装后的目录命名、让 Cordis 按包名解析到模块，它**从来没有发布到 npm registry**：`npm view @fengye_nobug/dsh-qq-bridge-neko` 会 404。安装只走本地 `.tgz` 或本仓库的 GitHub tag，见[安装](#安装)。
+**这个插件不发 npm。** 仓库 `package.json` 里的 `name`（`dsh-qq-bridge-neko`）只用来给安装后的目录命名、让 Cordis 按包名解析到模块，它**从来没有发布到 npm registry**：`npm view dsh-qq-bridge-neko` 会 404。安装只走本地 `.tgz` 或本仓库的 GitHub tag，见[安装](#安装)。
 
 ---
 
@@ -104,7 +104,7 @@
 
 本仓库不发 npm，所以只有这两条装法。
 
-**A. 本地打好的包**（`npm pack` 产物，文件名形如 `fengye_nobug-dsh-qq-bridge-neko-1.1.3.tgz`，`.gitignore` 已忽略 `*.tgz`，不入库）：
+**A. 本地打好的包**（`npm pack` 产物，文件名形如 `dsh-qq-bridge-neko-1.1.6.tgz`，`.gitignore` 已忽略 `*.tgz`，不入库）：
 
 ```sh
 dsh plugin --profile web add "<本地 .tgz 的绝对路径>"
@@ -132,7 +132,9 @@ dsh plugin --profile web add github:SmilessNEKO/dsh_qq_onebot_neko#v1.1.3
 
 ### 4. 包名与 Cordis 的对应关系
 
-`cordis.patch.yml` 里 `qq-bridge-neko` 这一行的 `name` 必须等于实际安装的包名，也就是 `@fengye_nobug/dsh-qq-bridge-neko`（`package.json` 的 `name`）。写成别的名字时 Cordis 解析不到模块，插件挂不上、`/api/qq-bridge-neko/settings` 返回 HTTP 404。
+`cordis.patch.yml` 里 `qq-bridge-neko` 这一行的 `name` 必须等于实际安装的包名，也就是 `dsh-qq-bridge-neko`（`package.json` 的 `name`）。写成别的名字时 Cordis 解析不到模块，插件挂不上、`/api/qq-bridge-neko/settings` 返回 HTTP 404。
+
+v1.1.5 及更早装的是带作用域的 `@fengye_nobug/dsh-qq-bridge-neko`。从那些版本升上来时，插件会在安装完成后自动把 `cordis.patch.yml` 里的 `name` 改成磁盘上的实际包名（`alignCordisNames`），旧目录 `node_modules/@fengye_nobug/dsh-qq-bridge-neko` 也仍会被识别。
 
 profile 里按 `id: qq-bridge-neko` 写的覆盖可以留着，其中的 `name` 同样用上面的包名。这个包名**不代表 npm 上有这个包**——它只是安装目录与模块解析用的标识。
 
@@ -276,11 +278,11 @@ DSH 0.2 的卡片把值写进 `$DSH_HOME/qq-bridge-neko-settings.json`。这份�
 
 ## 排障
 
-**`dsh plugin add @fengye_nobug/dsh-qq-bridge-neko@1.1.3` 报找不到包** — 正常的，这个包不在 npm 上。用[安装](#安装)里的两条装法之一。
+**`dsh plugin add dsh-qq-bridge-neko@1.1.6` 报找不到包** — 正常的，这个包不在 npm 上。用[安装](#安装)里的两条装法之一。
 
 **设置页里没有卡片** — 先看 `package.json` 的 `dsh.client` 与 `exports["./client"]` 还在不在，然后重启 dsh-web（bundle 只在启动时扫）。仍然没有时调 `qq_bridge_neko_status`，看 `clientHalf` 字段。
 
-**卡片在，但接口 404** — `cordis.patch.yml` 里 `qq-bridge-neko` 的 `name` 和实际安装的包名不一致。改成 `@fengye_nobug/dsh-qq-bridge-neko` 再重启。
+**卡片在，但接口 404** — `cordis.patch.yml` 里 `qq-bridge-neko` 的 `name` 和实际安装的包名不一致。改成 `dsh-qq-bridge-neko`（v1.1.5 及更早是 `@fengye_nobug/dsh-qq-bridge-neko`）再重启。
 
 **装上了但谁都不理** — 白名单默认全空，先填 `groupWhitelist` / `whitelist`。再看 `onebotUrl` 是否指向正在跑正向 WebSocket 的 NapCat。
 

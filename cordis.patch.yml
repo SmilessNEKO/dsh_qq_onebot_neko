@@ -2,13 +2,13 @@
 # 独立发行版：Cordis id / 包名 / settings 命名空间 / API 路径 / 工具名 / state 文件名
 # 全部与旧的 qq-bridge 插件不同，因此可以和它并存在同一个 profile（各自连自己的 OneBot）。
 # name 是 Node 用来加载插件的包名，必须等于实际安装的 npm 包。
-# 无作用域的 dsh-qq-bridge-neko 发不出去；写成那个名字时 Cordis 解析不到模块，
-# qq-bridge-neko 不会挂上，/api/qq-bridge-neko/settings 就是 HTTP 404。
+# 包名就是无作用域的 dsh-qq-bridge-neko（v1.1.6 起去掉 @fengye_nobug/ 前缀）；
+# 写成别的名字时 Cordis 解析不到模块，qq-bridge-neko 不会挂上，/api/qq-bridge-neko/settings 就是 HTTP 404。
 # 用户在 profile 的 cordis.patch.yml 里按 id 覆盖这一行；patch 会替换整份 config，
 # 所以要保留的键请全部重述。覆盖里如果写了 name，也要写成同一个包名。
 - insert:
     - id: qq-bridge-neko
-      name: '@fengye_nobug/dsh-qq-bridge-neko'
+      name: 'dsh-qq-bridge-neko'
       config:
         # 固定目标会话：QQ 的一切都注入这一个会话（保留其上下文）。
         # 留空表示不驱动任何会话。
