@@ -1,5 +1,18 @@
 # 更新日志
 
+## v1.1.3 — 2026-11-13
+
+- **修暗色主题下设置面板白底白字**。v1.1.2 的浮层面板写的是 `background: var(--dsh-bg-elevated, #fff)`，但宿主根本没有 `--dsh-*` 这套变量（它的设计令牌前缀是 `--dsw-`），于是永远回落到写死的 `#fff`；配合 `color: 'inherit'` 从暗色面板继承来的浅色字，就是截图里那块「整片纯白、字几乎看不见」。现在整张卡片的颜色都改走宿主令牌：
+  - `TOKEN.surface` = `var(--dsw-alias-bg-layer-2, var(--dsw-alias-bg-layer-1, #ffffff))` —— 面板底、下拉弹层底
+  - `TOKEN.field` = `var(--dsw-specific-input-major, var(--dsw-alias-bg-layer-1, #ffffff))` —— 输入框底（以前是 `transparent`，暗色下只剩一圈边框）
+  - `TOKEN.text` = `var(--dsw-alias-label-primary, #1a1a1a)` / `TOKEN.textSoft` = `var(--dsw-alias-label-secondary, #4a4a4a)`
+  - `BORDER` 也换成 `var(--dsw-alias-border-l2, rgba(127,127,127,0.35))`
+  宿主这两套值分别定义在 `body{…}`（亮）与 `body[data-ds-dark-theme]{…}`（暗）里，切换主题时跟着变，插件不用自己判断当前是不是暗色。
+- **修原生下拉弹层纯白**。`<option>` 不继承 `<select>` 的 `background` / `color`，弹层底色由浏览器 UA 决定，所以即使 select 自己透明，展开仍然是一块白。现在 `client/client.js` 里**全部 22 处** `h('option', …)` 都带上了 `style: OPTION_STYLE`（`{ background: TOKEN.surface, color: TOKEN.text }`），覆盖 `feiyuVoice` 音色下拉、会话 / 群 / 模型 / 预设等所有选择器。
+- 顺手把 `S.btn` / `S.header` / `S.miniBtn` / `S.tab` / `S.choiceCard` / `S.footEntry` / `S.link` 里残留的 `color: 'inherit'` 一并换成令牌色，避免以后换宿主主题时某个按钮文字跟着背景一起消失。
+- 只动呈现层：`FIELDS`、键名、`format()` / `parse()`、保存逻辑、`index.js`、`voice.js` 全部未改。
+- 自测：`test-settings-tabs.mjs` 28 条全通过；`test-feiyu-voice-options.mjs` 因切函数时带不上模块级常量而报 `ReferenceError: OPTION_STYLE is not defined`，在其 prelude 里补上同名常量后 ALL PASS；`test-voice.mjs` ALL PASS。`README.md` 设置卡片小节新增「跟随主题配色」一条。
+
 ## v1.1.2 — 2026-11-13
 
 - **设置页不再是一条长龙：按主题分页，顶上点页签切换**。六十多个键平铺成一列，找任何一项都得滚半天。现在分成「连接 / 唤醒 / 会话 / 回复 / 声音 / 看图 / 模型 / NapCat / 关于」九页，每页只渲染属于它的字段。分页只是**呈现层**：`FIELDS` 的结构、键名、`format()` / `parse()`、保存逻辑一行未改，保存仍是整张卡片一起存，切页签不会丢未保存的改动。

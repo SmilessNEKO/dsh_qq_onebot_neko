@@ -80,6 +80,7 @@
 
 - **入口在左下角**：侧栏脚部、Settings 上面那个「🐟 QQ 桥接 Neko」，点开就是一个居中面板，不用再钻进「设置 → 插件」里翻。（原来那几处入口还在：设置 → 插件 → 插件配置 → QQ 桥接 Neko。）可以检查更新；有新正式版时一键安装，并重启面板。
 - **设置分页**：六十多个键铺成一长条谁也看不下去，现在按主题分成「连接 / 唤醒 / 会话 / 回复 / 声音 / 看图 / 模型 / NapCat / 关于」几页，顶上点页签切换，一次只看一页。新加的键漏了归类会自动落进「其他」页，不会出现「哪页都点不到」。切换页签不影响未保存的改动，保存仍是整张卡片一起存。
+- **跟随主题配色**：卡片里的底色、文字色、边框全部走宿主的 `--dsw-*` 设计令牌（`--dsw-alias-bg-layer-2` / `--dsw-alias-label-primary` / `--dsw-alias-border-l2` / `--dsw-specific-input-major`），亮色暗色各有一套值自动切换，不再有硬编码 `#fff` 造成的白底白字。原生下拉的弹层不吃 `<select>` 的配色，所以每个 `<option>` 也单独上了 `background` / `color`，展开时同样是暗色而不是纯白。
 - 可以按需下载、配置、启停 NapCat（`qq_bridge_neko_napcat`，action = `status` / `download` / `configure` / `launch` / `stop`）。下载 / 安装 / 写配置默认都要显式触发，插件加载时不会自己下载或安装。
 - **DSH 启动后自动拉起 NapCat**：打开 `autoStartNapcat`（默认关），DSH 启动延迟 `autoStartNapcatDelayMs`（默认 `20000` = 20 秒，可调 0–600000）后自动启动**已经装好、并登录过一次**的 NapCat。只调用现成的启动逻辑，绝不自动下载 / 安装 / 写配置；到点会重读开关、确认 NapCat 没在运行才启动，等待期间关掉开关、插件被卸载或 NapCat 已在跑都会跳过，启动失败只记一条日志。
 - **识图用下拉选择，不用手写模型名**：`visionMode` 三选一 —— `auto` 自动找一个支持图片输入的模型、`session` 用会话当前模型、`fixed` 从 DSH 已配置的提供商里选一个、再选它下面的模型（两段联动下拉，模型清单带「支持识图」标记）。旧的 `visionModel`（`provider/model`）只是没配新选项时的兜底，卡片上不再给输入框。
@@ -99,7 +100,7 @@
 
 本仓库不发 npm，所以只有这两条装法。
 
-**A. 本地打好的包**（`npm pack` 产物，文件名形如 `fengye_nobug-dsh-qq-bridge-neko-1.1.2.tgz`，`.gitignore` 已忽略 `*.tgz`，不入库）：
+**A. 本地打好的包**（`npm pack` 产物，文件名形如 `fengye_nobug-dsh-qq-bridge-neko-1.1.3.tgz`，`.gitignore` 已忽略 `*.tgz`，不入库）：
 
 ```sh
 dsh plugin --profile web add "<本地 .tgz 的绝对路径>"
@@ -108,7 +109,7 @@ dsh plugin --profile web add "<本地 .tgz 的绝对路径>"
 **B. 从本仓库的 GitHub tag 装**（不用先下载）：
 
 ```sh
-dsh plugin --profile web add github:SmilessNEKO/dsh_qq_onebot_neko#v1.1.2
+dsh plugin --profile web add github:SmilessNEKO/dsh_qq_onebot_neko#v1.1.3
 ```
 
 装完**重启 dsh-web 并刷新页面**（浏览器半的 bundle 只在启动时扫一遍，不重启卡片不会出现；登录口令可能会变）。
@@ -266,7 +267,7 @@ DSH 0.2 的卡片把值写进 `$DSH_HOME/qq-bridge-neko-settings.json`。这份�
 
 ## 排障
 
-**`dsh plugin add @fengye_nobug/dsh-qq-bridge-neko@1.1.2` 报找不到包** — 正常的，这个包不在 npm 上。用[安装](#安装)里的两条装法之一。
+**`dsh plugin add @fengye_nobug/dsh-qq-bridge-neko@1.1.3` 报找不到包** — 正常的，这个包不在 npm 上。用[安装](#安装)里的两条装法之一。
 
 **设置页里没有卡片** — 先看 `package.json` 的 `dsh.client` 与 `exports["./client"]` 还在不在，然后重启 dsh-web（bundle 只在启动时扫）。仍然没有时调 `qq_bridge_neko_status`，看 `clientHalf` 字段。
 
