@@ -273,6 +273,48 @@ function renderAt(groupId, settingsValue = base) {
   }
 }
 
+// ── 5. 主题配色 ───────────────────────────────────────────────────────────
+// 暗色主题下的失败形态是「整块纯白、字看不见」：底色写死 #fff 或引用了宿主没有的变量
+// 就会静默回落成白，而字从暗色面板继承成浅色。这里钉住两件事：不出现宿主没有的
+// --dsh-* 变量；原生下拉的每个 option 都自带底色（它不继承 select 的配色）。
+{
+  check('没有引用宿主不存在的 --dsh-* 变量', !source.includes('--dsh-'))
+  check(
+    '每个原生 option 都带 OPTION_STYLE',
+    (source.match(/'option',/g) ?? []).length === (source.match(/'option',\s*\{\s*style:\s*OPTION_STYLE/g) ?? []).length,
+    `${(source.match(/'option',/g) ?? []).length} 处 option`,
+  )
+
+  // 找一个真的会渲染出 <option> 的页：select 只在部分页里出现（声音页是二选一按钮）
+  let options = []
+  for (const group of GROUPS) {
+    const candidate = all(expand(renderAt(group.id, base))).filter((n) => n.type === 'option')
+    if (candidate.length > 0) {
+      options = candidate
+      break
+    }
+  }
+  check('渲染出来的下拉确实有选项', options.length > 0, String(options.length))
+  check(
+    '每个选项都自带底色与字色',
+    options.every((o) => Boolean(o.props?.style?.background) && Boolean(o.props?.style?.color)),
+    JSON.stringify(options.find((o) => !o.props?.style?.background)?.props ?? null),
+  )
+
+  renderCard(base)
+  const footer = registry.find((r) => r.options.name === 'sidebar.footer.action')
+  if (footer) {
+    const probe = footer.cell({ wide: true })
+    expand(probe)
+    const bucket = stateBuckets.get(probe.type)
+    if (bucket) bucket[0] = true
+    const opened = expand(footer.cell({ wide: true }))
+    const sheet = all(opened).find((n) => n.props?.style?.maxHeight === 'calc(100vh - 80px)')
+    check('浮层面板底色走主题令牌（不是写死的白）', String(sheet?.props?.style?.background ?? '').includes('--dsw-'), String(sheet?.props?.style?.background))
+    check('浮层面板字色走主题令牌', String(sheet?.props?.style?.color ?? '').includes('--dsw-'), String(sheet?.props?.style?.color))
+  }
+}
+
 // ── 汇总 ──────────────────────────────────────────────────────────────────
 if (failures.length > 0) {
   console.error(`\n✗ ${failures.length} 条失败：`)
