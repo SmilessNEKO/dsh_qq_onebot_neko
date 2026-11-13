@@ -148,6 +148,8 @@ const renderBody = sliceFunction(clientSource, 'function renderFeiyuVoice(field,
 async function loadRenderer() {
   const prelude = [
     'const S = { input: {}, hint: {} }',
+    // 主题令牌与 option 样式是模块级常量，切函数时要一起带上（否则切片里引用不到）
+    "const OPTION_STYLE = { background: 'surface', color: 'text' }",
     'const snap = { writable: true }',
     'const busy = false',
     'let catalog = null',

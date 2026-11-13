@@ -701,7 +701,19 @@ window.__ModuleLoader__.load({
     const EMPTY_WORKSPACES = { archivedSessionIds: [] }
 
     // ── 样式（内联，跟随主题文字色） ──────────────────────────────────────────
-    const BORDER = '1px solid rgba(127,127,127,0.35)'
+    const BORDER = `1px solid var(--dsw-alias-border-l2, rgba(127,127,127,0.35))`
+    // 宿主给明暗两套主题各定义了一套设计令牌（挂在 body 上）。插件卡片不能写死颜色：
+    // 硬编码 #fff 在暗色主题里就是白底白字，原生下拉的弹层也会跟着变纯白。
+    // 这里的变量两套主题各有值，写 var() 才能跟着宿主一起换。
+    const TOKEN = {
+      surface: 'var(--dsw-alias-bg-layer-2, var(--dsw-alias-bg-layer-1, #ffffff))',
+      field: 'var(--dsw-specific-input-major, var(--dsw-alias-bg-layer-1, #ffffff))',
+      text: 'var(--dsw-alias-label-primary, #1a1a1a)',
+      textSoft: 'var(--dsw-alias-label-secondary, #4a4a4a)',
+      border: 'var(--dsw-alias-border-l2, rgba(127,127,127,0.35))',
+    }
+    // 原生 <option> 不继承 select 的配色，弹层底色由 UA 决定；显式给一层才跟主题走。
+    const OPTION_STYLE = { background: TOKEN.surface, color: TOKEN.text }
     const S = {
       wrap: { display: 'flex', flexDirection: 'column', gap: '10px' },
       head: { display: 'flex', flexDirection: 'column', gap: '2px' },
@@ -715,8 +727,8 @@ window.__ModuleLoader__.load({
         padding: '5px 8px',
         borderRadius: '6px',
         border: BORDER,
-        background: 'transparent',
-        color: 'inherit',
+        background: TOKEN.field,
+        color: TOKEN.text,
         font: 'inherit',
         fontSize: '13px',
       },
@@ -728,7 +740,7 @@ window.__ModuleLoader__.load({
         borderRadius: '6px',
         border: BORDER,
         background: 'transparent',
-        color: 'inherit',
+        color: TOKEN.text,
         cursor: 'pointer',
         font: 'inherit',
         fontSize: '13px',
@@ -743,7 +755,7 @@ window.__ModuleLoader__.load({
         borderRadius: '6px',
         border: BORDER,
         background: 'transparent',
-        color: 'inherit',
+        color: TOKEN.text,
         cursor: 'pointer',
         font: 'inherit',
         textAlign: 'left',
@@ -758,7 +770,7 @@ window.__ModuleLoader__.load({
         padding: '0 4px',
         border: 'none',
         background: 'transparent',
-        color: 'inherit',
+        color: TOKEN.textSoft,
         opacity: 0.75,
         textDecoration: 'underline',
         cursor: 'pointer',
@@ -796,7 +808,7 @@ window.__ModuleLoader__.load({
         borderRadius: '5px',
         border: BORDER,
         background: 'transparent',
-        color: 'inherit',
+        color: TOKEN.text,
         cursor: 'pointer',
         font: 'inherit',
         fontSize: '12px',
@@ -822,7 +834,7 @@ window.__ModuleLoader__.load({
         borderRadius: '999px',
         border: BORDER,
         background: 'transparent',
-        color: 'inherit',
+        color: TOKEN.text,
         cursor: 'pointer',
         font: 'inherit',
         fontSize: '12px',
@@ -838,7 +850,7 @@ window.__ModuleLoader__.load({
         borderRadius: '6px',
         border: BORDER,
         background: 'transparent',
-        color: 'inherit',
+        color: TOKEN.text,
         cursor: 'pointer',
         font: 'inherit',
         fontSize: '13px',
@@ -855,7 +867,7 @@ window.__ModuleLoader__.load({
         borderRadius: '6px',
         border: 'none',
         background: 'transparent',
-        color: 'inherit',
+        color: TOKEN.text,
         cursor: 'pointer',
         font: 'inherit',
         fontSize: '13px',
@@ -880,8 +892,8 @@ window.__ModuleLoader__.load({
         overflow: 'auto',
         borderRadius: '10px',
         border: BORDER,
-        background: 'var(--dsh-bg-elevated, #fff)',
-        color: 'inherit',
+        background: TOKEN.surface,
+        color: TOKEN.text,
         boxShadow: '0 16px 48px rgba(0,0,0,0.28)',
         padding: '4px 14px 14px',
       },
@@ -1381,9 +1393,9 @@ window.__ModuleLoader__.load({
             'select',
             { style: S.input, value: cur, disabled: !snap.writable || busy, onChange: change(field.key) },
             [
-              ...pairs.map(([v, text]) => h('option', { key: v, value: v }, text)),
+              ...pairs.map(([v, text]) => h('option', { style: OPTION_STYLE,  key: v, value: v }, text)),
               ...(cur !== '' && !seen.has(cur)
-                ? [h('option', { key: '__current', value: cur }, `${cur}（当前值，不在清单里）`)]
+                ? [h('option', { style: OPTION_STYLE,  key: '__current', value: cur }, `${cur}（当前值，不在清单里）`)]
                 : []),
             ],
           ),
@@ -1430,10 +1442,10 @@ window.__ModuleLoader__.load({
                     },
                   },
                   [
-                    h('option', { key: '(none)', value: '' }, '（选一个模型）'),
-                    ...options.map(([v, text]) => h('option', { key: v, value: v }, text)),
+                    h('option', { style: OPTION_STYLE,  key: '(none)', value: '' }, '（选一个模型）'),
+                    ...options.map(([v, text]) => h('option', { style: OPTION_STYLE,  key: v, value: v }, text)),
                     ...(!known && value !== ''
-                      ? [h('option', { key: '__current', value }, `${value}（当前值，不在清单里）`)]
+                      ? [h('option', { style: OPTION_STYLE,  key: '__current', value }, `${value}（当前值，不在清单里）`)]
                       : []),
                   ],
                 )
@@ -1551,16 +1563,15 @@ window.__ModuleLoader__.load({
                         onChange: (event) => update(index, { target: event.target.value }),
                       },
                       [
-                        h('option', { key: '(none)', value: '' }, '（选一个群或私聊）'),
+                        h('option', { style: OPTION_STYLE,  key: '(none)', value: '' }, '（选一个群或私聊）'),
                         ...candidates.map((t) =>
                           h(
-                            'option',
-                            { key: t.target, value: t.target },
+                            'option', { style: OPTION_STYLE,  key: t.target, value: t.target },
                             `${t.target.startsWith('group:') ? '群' : '私聊'} ${t.target.split(':')[1]}${t.label ? ` · ${t.label}` : ''}`,
                           ),
                         ),
                         ...(target !== '' && !knownTargets.has(target)
-                          ? [h('option', { key: '__current', value: target }, `${target}（手填，不在已知列表里）`)]
+                          ? [h('option', { style: OPTION_STYLE,  key: '__current', value: target }, `${target}（手填，不在已知列表里）`)]
                           : []),
                       ],
                     )
@@ -1807,7 +1818,7 @@ window.__ModuleLoader__.load({
           control = h(
             'select',
             { style: S.input, value: String(value), disabled: !snap.writable || busy, onChange: change(f.key) },
-            (f.options || []).map(([v, text]) => h('option', { key: v, value: v }, text)),
+            (f.options || []).map(([v, text]) => h('option', { style: OPTION_STYLE,  key: v, value: v }, text)),
           )
         } else if (f.kind === 'voice-module') {
           control = renderVoiceModule(f, String(value ?? ''))
@@ -1818,7 +1829,7 @@ window.__ModuleLoader__.load({
             'select',
             { style: S.input, value: String(value), disabled: !snap.writable || busy, onChange: change(f.key) },
             sessionOptions(sessionList, value, workspaceSnapshot?.archivedSessionIds).map((o) =>
-              h('option', { key: o.value || '(none)', value: o.value }, o.label),
+              h('option', { style: OPTION_STYLE,  key: o.value || '(none)', value: o.value }, o.label),
             ),
           )
         } else if (f.kind === 'group-list') {
@@ -1894,16 +1905,16 @@ window.__ModuleLoader__.load({
                       onChange: change(f.key),
                     },
                     [
-                      h('option', { key: '(blank)', value: '' }, '（留空：用宿主默认 / 优先级链第一个）'),
+                      h('option', { style: OPTION_STYLE,  key: '(blank)', value: '' }, '（留空：用宿主默认 / 优先级链第一个）'),
                       ...providers.map((p) =>
                         h(
                           'optgroup',
                           { key: p.id, label: p.name || p.id },
-                          p.models.map((m) => h('option', { key: `${p.id}/${m.id}`, value: `${p.id}/${m.id}` }, m.name || m.id)),
+                          p.models.map((m) => h('option', { style: OPTION_STYLE,  key: `${p.id}/${m.id}`, value: `${p.id}/${m.id}` }, m.name || m.id)),
                         ),
                       ),
                       ...(String(value ?? '') !== '' && !allRefs.includes(String(value))
-                        ? [h('option', { key: '__current', value: String(value) }, `${value}（当前值，不在清单里）`)]
+                        ? [h('option', { style: OPTION_STYLE,  key: '__current', value: String(value) }, `${value}（当前值，不在清单里）`)]
                         : []),
                     ],
                   ),
@@ -1938,10 +1949,10 @@ window.__ModuleLoader__.load({
                   },
                 },
                 [
-                  h('option', { key: '(none)', value: '' }, '（没选）'),
-                  ...providers.map((p) => h('option', { key: p.id, value: p.id }, p.name || p.id)),
+                  h('option', { style: OPTION_STYLE,  key: '(none)', value: '' }, '（没选）'),
+                  ...providers.map((p) => h('option', { style: OPTION_STYLE,  key: p.id, value: p.id }, p.name || p.id)),
                   ...(providerId !== '' && !providers.some((p) => p.id === providerId)
-                    ? [h('option', { key: '__current', value: providerId }, `${providerId}（当前值，不在清单里）`)]
+                    ? [h('option', { style: OPTION_STYLE,  key: '__current', value: providerId }, `${providerId}（当前值，不在清单里）`)]
                     : []),
                 ],
               )
@@ -1956,12 +1967,12 @@ window.__ModuleLoader__.load({
                   onChange: change(f.key),
                 },
                 [
-                  h('option', { key: '(none)', value: '' }, providerId === '' ? '（先选提供商）' : '（没选）'),
+                  h('option', { style: OPTION_STYLE,  key: '(none)', value: '' }, providerId === '' ? '（先选提供商）' : '（没选）'),
                   ...modelList.map((m) =>
-                    h('option', { key: m.id, value: m.id }, `${m.name || m.id}${m.vision ? ' · 支持识图' : ''}`),
+                    h('option', { style: OPTION_STYLE,  key: m.id, value: m.id }, `${m.name || m.id}${m.vision ? ' · 支持识图' : ''}`),
                   ),
                   ...(modelId !== '' && !modelList.some((m) => m.id === modelId)
-                    ? [h('option', { key: '__current', value: modelId }, `${modelId}（当前值，不在清单里）`)]
+                    ? [h('option', { style: OPTION_STYLE,  key: '__current', value: modelId }, `${modelId}（当前值，不在清单里）`)]
                     : []),
                 ],
               )
@@ -1989,10 +2000,10 @@ window.__ModuleLoader__.load({
               onChange: change(f.key),
             },
             [
-              h('option', { key: '(none)', value: '' }, '（不挂载预设）'),
-              ...presets.map((p) => h('option', { key: p.id, value: p.id }, p.name || p.id)),
+              h('option', { style: OPTION_STYLE,  key: '(none)', value: '' }, '（不挂载预设）'),
+              ...presets.map((p) => h('option', { style: OPTION_STYLE,  key: p.id, value: p.id }, p.name || p.id)),
               ...(cur !== '' && !presets.some((p) => p.id === cur)
-                ? [h('option', { key: '__current', value: cur }, `${cur}（当前值，不在清单里）`)]
+                ? [h('option', { style: OPTION_STYLE,  key: '__current', value: cur }, `${cur}（当前值，不在清单里）`)]
                 : []),
             ],
           )
