@@ -52,9 +52,24 @@
 **语音**
 
 - 打开 `voiceEnabled`（默认关）后，正文里写 `[语音]要念的台词[/语音]`，这句话会被合成成语音发出去（一个语音块 = 一条 QQ 消息，文字块照旧分条），语音前后的文字还是正常文字。
-- 也可以直接调 `qq_bridge_neko_voice` 工具，用 `voice` / `rate` / `pitch` 单次覆盖音色参数。
-- 合成走本机的 `edge-tts`（`ttsPythonPath` 指向装了它的解释器），音色 / 语速 / 音高是 `ttsVoice` / `ttsRate` / `ttsPitch`。单条语音上限 `voiceMaxChars`（默认 120 字）。
-- 合成失败或超长时**降级发文字**（正文前加「（语音没合成出来）」），不会整条消失。同一句话 + 同一组音色参数只合成一次，缓存在 `voiceCacheDir`。关着开关时标记原样当文字发，不静默吞字。
+- 也可以直接调 `qq_bridge_neko_voice` 工具，用 `voice` / `rate` / `pitch` / `style` 单次覆盖参数，`provider` 单次切换引擎。
+- **三套引擎，`ttsProvider` 选一个**：
+  - `edge`（默认）：合成走本机的 `edge-tts`（`ttsPythonPath` 指向装了它的解释器），音色 / 语速 / 音高是 `ttsVoice` / `ttsRate` / `ttsPitch`，产物是 mp3。不动这个键时行为跟以前完全一样。
+  - `sherpa`：合成走本机的离线模型（`sherpa_onnx`，不联网），模型目录 `ttsModelDir`（留空 = `$DSH_HOME/tts-models/vits-melo-tts-zh_en`），说话人 `ttsSid`（默认 0）、语速倍数 `ttsSpeed`（默认 1），音色名仍读 `ttsVoice`，产物是 mp3；解释器同样用 `ttsPythonPath`。
+  - `feiyu`：合成走你自己部署的**肥鱼声音服务**（本机 HTTP 服务）——先把服务起起来，再把 `ttsProvider` 选成 `feiyu`。地址是 `feiyuBaseUrl`（默认 `http://127.0.0.1:9880`，带路径前缀也行），服务要鉴权就把 Bearer 口令填进 `feiyuApiKey`（留空 = 不带鉴权头；卡片上不回显已存的口令，留空即不改）。音色 `feiyuVoice` 是**下拉**（默认 `feiyu`），语气 `feiyuStyle` 二选一（`cute` 软萌 / `gentle` 温柔）。下拉的清单不是写死的：设置卡片会去打服务的 `GET /v1/capabilities`，把 `tts[]` / `rvc[]` 里注册的音色投影成选项（标签上带每个音色支持的语气，RVC 包标「换声」，`available: false` 的标「当前不可用」）；服务没起、口令不对或一个音色都没注册时退回内置的 `feiyu` 一项，并在下拉下面写一句原因 —— 卡片不会因此变空或报错。配置里存着的音色若不在清单里，会保留成「当前值，不在清单里」的兜底项，不会被静默清空。产物是 wav：有 ffmpeg 就转成 mp3 再发（`ffmpegPath` 留空时先找 PATH 上的 `ffmpeg`，再找本机约定的那个；都没有 / 转失败就原样发 wav，不算合成失败）。
+  - 肥鱼首次请求要加载模型，所以整体超时给得大：`feiyuTimeoutMs` 默认 180000，任务状态按 `feiyuPollIntervalMs` 轮询（默认 1000）。服务没起来 / 口令不对 / 任务失败都**降级发文字**，不会卡住也不整条消失。
+- 单条语音上限 `voiceMaxChars`（默认 120 字）。
+- 合成失败或超长时**降级发文字**（正文前加「（语音没合成出来）」），不会整条消失。同一句话 + 同一引擎 + 同一组参数只合成一次，缓存在 `voiceCacheDir`。关着开关时标记原样当文字发，不静默吞字。
+
+**唱歌**
+
+- 调 `qq_bridge_neko_sing` 工具，把一段**原创小曲**唱出来发到 QQ：`score` 给 ABC 记谱的单音主旋律，`lyrics` 给逐字歌词（只能有汉字，标点空格忽略），可选 `transpose`（移调半音）、`bpm`（覆盖谱面速度）、`pinyin`（逐字拼音，纠正多音字）。
+- 一个音符一个字，**一字多音用 `_` 占位**；歌词字数要等于音符数。
+- 只有 `ttsProvider = feiyu` 时唱得出来（唱歌 = SVS 出声 + RVC 换声，都在肥鱼服务里）；别的引擎会降级发文字说明，不会假装唱了。
+- 唱歌比说话慢一个量级（谱面编译 → 分段 SVS → RVC → 混音），所以超时单独一个键 `feiyuSingTimeoutMs`（默认 600000 = 10 分钟），轮询沿用 `feiyuPollIntervalMs`。
+- 一首歌的歌词上限 `voiceMaxSongChars`（默认 400 字，约两三分钟）；超了直接拒唱并说明，不偷偷截断。
+- 合成失败同样**降级发文字**（正文前加「（歌没唱出来）」）。同一份谱 + 同一份词 + 同一个音色只合成一次，缓存在 `voiceCacheDir`。
+- 谱子得是原创或公有旋律，别拿别人的版权歌来点。
 
 **设置卡片与 NapCat**
 
@@ -78,7 +93,7 @@
 
 本仓库不发 npm，所以只有这两条装法。
 
-**A. 本地打好的包**（`npm pack` 产物，文件名形如 `fengye_nobug-dsh-qq-bridge-neko-1.1.0.tgz`，`.gitignore` 已忽略 `*.tgz`，不入库）：
+**A. 本地打好的包**（`npm pack` 产物，文件名形如 `fengye_nobug-dsh-qq-bridge-neko-1.1.1.tgz`，`.gitignore` 已忽略 `*.tgz`，不入库）：
 
 ```sh
 dsh plugin --profile web add "<本地 .tgz 的绝对路径>"
@@ -87,7 +102,7 @@ dsh plugin --profile web add "<本地 .tgz 的绝对路径>"
 **B. 从本仓库的 GitHub tag 装**（不用先下载）：
 
 ```sh
-dsh plugin --profile web add github:SmilessNEKO/dsh_qq_onebot_neko#v1.1.0
+dsh plugin --profile web add github:SmilessNEKO/dsh_qq_onebot_neko#v1.1.1
 ```
 
 装完**重启 dsh-web 并刷新页面**（浏览器半的 bundle 只在启动时扫一遍，不重启卡片不会出现；登录口令可能会变）。
@@ -167,13 +182,25 @@ DSH 0.2 的卡片把值写进 `$DSH_HOME/qq-bridge-neko-settings.json`。这份�
 | `burstWaitMs` | `0` | 对方连着发消息时，先等这么多毫秒没人再说才回复；`0` = 立刻回。每个目的地可单独覆盖 |
 | `listenIdleMs` | `120000` | 会话跟随期间，这么久（毫秒）没有新消息就自动停听；默认 2 分钟 |
 | `voiceEnabled` | `false` | 要不要发语音。打开后 `[语音]…[/语音]`（以及 `qq_bridge_neko_voice` 工具）才会合成语音；关着时标记原样当文字发 |
-| `ttsProvider` | `edge` | 用哪个 TTS 合成。目前只认 `edge`（微软 edge-tts，本地跑），填别的会合成失败并降级发文字 |
-| `ttsVoice` | `zh-CN-XiaoyiNeural` | 音色名（edge-tts 写法）。`zh-CN-YunxiNeural` 是男声 |
-| `ttsRate` | `-8%` | 语速，edge-tts 写法，`+10%` 更快、`-8%` 更慢 |
-| `ttsPitch` | `+12Hz` | 音高，edge-tts 写法 |
-| `ttsPythonPath` | 空 | 装了 `edge-tts` 的 python 解释器路径；留空 = 用 PATH 里的 python |
+| `ttsProvider` | `edge` | 用哪个语音引擎：`edge` = 本机 edge-tts（默认，行为跟以前一样）；`sherpa` = 本机离线模型；`feiyu` = 肥鱼声音服务（本机 HTTP，要先把服务起起来）。认不出的值直接失败并降级发文字 |
+| `ttsVoice` | `zh-CN-XiaoyiNeural` | 音色名（edge / sherpa 用这个；肥鱼用 `feiyuVoice`）。`zh-CN-YunxiNeural` 是男声 |
+| `ttsRate` | `-8%` | 语速（edge 用这个；sherpa 走 `ttsSpeed`），edge-tts 写法，`+10%` 更快、`-8%` 更慢 |
+| `ttsPitch` | `+12Hz` | 音高（edge 用这个），edge-tts 写法 |
+| `ttsPythonPath` | 空 | 跑 edge-tts / sherpa-onnx 的 python 解释器路径（`edge` 与 `sherpa` 用它；肥鱼走 HTTP，不用 python）；留空 = 用 PATH 里的 python |
+| `ttsModelDir` | 空 | `sherpa` 的模型目录（要有 `model.onnx`、`tokens.txt` 那些）；留空 = `$DSH_HOME/tts-models/vits-melo-tts-zh_en` |
+| `ttsSid` | `0` | `sherpa` 用模型里第几个说话人 |
+| `ttsSpeed` | `1` | `sherpa` 的语速倍数，1 = 原速 |
 | `voiceMaxChars` | `120` | 单条语音最多多少字，超了就降级发文字 |
-| `voiceCacheDir` | 空 | 合成好的 mp3 放哪；留空 = `$DSH_HOME/qq-bridge-neko-voice` |
+| `voiceCacheDir` | 空 | 合成好的音频放哪；留空 = `$DSH_HOME/qq-bridge-neko-voice`。同一句话 + 同一引擎 + 同一组参数只合成一次 |
+| `ffmpegPath` | 空 | 转码用的 ffmpeg（肥鱼产的是 wav，发之前尽量转 mp3）；留空 = 先试 PATH 上的 `ffmpeg`，再试本机约定位置。都没有就原样发 wav |
+| `feiyuBaseUrl` | `http://127.0.0.1:9880` | 肥鱼声音服务地址（`ttsProvider = feiyu` 时用）。也支持带一段路径前缀 |
+| `feiyuApiKey` | 空 | 肥鱼服务的 Bearer 口令；留空 = 不带鉴权头。只存在本机设置里，日志与文档都不打印它 |
+| `feiyuVoice` | `feiyu` | 肥鱼引擎用哪个音色。卡片上是下拉，选项来自服务的 `GET /v1/capabilities`（服务离线时只列内置的 `feiyu`，并注明原因）；存着的值不在清单里会保留成兜底项 |
+| `feiyuStyle` | `cute` | 肥鱼引擎的语气：`cute` 软萌 / `gentle` 温柔；认不出回落 `cute` |
+| `feiyuTimeoutMs` | `180000` | 肥鱼整体超时（毫秒，含首次加载模型），1000–1800000 |
+| `feiyuPollIntervalMs` | `1000` | 轮询肥鱼任务状态的间隔（毫秒），50–60000 |
+| `feiyuSingTimeoutMs` | `600000` | 唱歌整体超时（毫秒）。唱歌要走 SVS + RVC + 混音，比说话慢一个量级，10000–3600000 |
+| `voiceMaxSongChars` | `400` | 一首歌最多多少唱字（一个音符一个字），1–4000；超了直接拒唱并说明 |
 | `autoStartNapcat` | `false` | DSH 启动后自动拉起**已装好**的 NapCat。只启动，绝不下载 / 安装 / 写配置 |
 | `autoStartNapcatDelayMs` | `20000` | 自动启动前的等待毫秒数（0–600000）；填 0 = 起来就立刻尝试 |
 | `napcatInstallDir` | 空 | NapCat 安装目录；留空 = `$DSH_HOME/napcat` |
@@ -211,7 +238,11 @@ DSH 0.2 的卡片把值写进 `$DSH_HOME/qq-bridge-neko-settings.json`。这份�
 
 ### 发语音
 
-两条路：正文里写 `[语音]要念的台词[/语音]`（需要 `voiceEnabled` 打开，一个语音块发一条，前后文字仍是文字），或者直接调 `qq_bridge_neko_voice` 工具（`text` 只写要念的本体，可用 `voice` / `rate` / `pitch` 单次覆盖音色参数，同样要过白名单与来源闸门）。两条路合成失败都会降级成文字并在前面注明「（语音没合成出来）」。
+两条路：正文里写 `[语音]要念的台词[/语音]`（需要 `voiceEnabled` 打开，一个语音块发一条，前后文字仍是文字），或者直接调 `qq_bridge_neko_voice` 工具（`text` 只写要念的本体，可用 `voice` / `rate` / `pitch` / `style` 单次覆盖参数，用 `provider` 单次切换引擎，同样要过白名单与来源闸门）。走哪套引擎由 `ttsProvider` 决定（默认 `edge`；选 `feiyu` 前记得先把肥鱼声音服务起起来）。两条路合成失败都会降级成文字并在前面注明「（语音没合成出来）」。
+
+### 唱歌
+
+调 `qq_bridge_neko_sing`，给 `score`（ABC 记谱的单音主旋律）和 `lyrics`（逐字汉字歌词；一个音符一个字，一字多音用 `_`），可选 `transpose` / `bpm` / `pinyin`。要 `voiceEnabled` 打开、`ttsProvider = feiyu`，并且肥鱼声音服务里唱歌引擎（SVS + RVC）已经配好。唱不了时降级发文字并在前面注明「（歌没唱出来）」加原因，不会静默消失。
 
 ### 其余工具
 
@@ -229,7 +260,7 @@ DSH 0.2 的卡片把值写进 `$DSH_HOME/qq-bridge-neko-settings.json`。这份�
 
 ## 排障
 
-**`dsh plugin add @fengye_nobug/dsh-qq-bridge-neko@1.1.0` 报找不到包** — 正常的，这个包不在 npm 上。用[安装](#安装)里的两条装法之一。
+**`dsh plugin add @fengye_nobug/dsh-qq-bridge-neko@1.1.1` 报找不到包** — 正常的，这个包不在 npm 上。用[安装](#安装)里的两条装法之一。
 
 **设置页里没有卡片** — 先看 `package.json` 的 `dsh.client` 与 `exports["./client"]` 还在不在，然后重启 dsh-web（bundle 只在启动时扫）。仍然没有时调 `qq_bridge_neko_status`，看 `clientHalf` 字段。
 

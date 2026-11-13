@@ -1,6 +1,33 @@
 # 更新日志
 
-## 未发布
+## v1.1.1 — 2026-11-13
+
+- **肥鱼音色 `feiyuVoice` 从文本框改成下拉**：以前要自己敲音色 id，敲错就 `422`；现在卡片直接列服务里注册的音色。选项**不是写死的**：`index.js` 新增 `readFeiyuVoiceOptions()`，打肥鱼服务的 `GET /v1/capabilities`（`Authorization: Bearer <feiyuApiKey>`，2 秒超时），把 `tts[]` / `rvc[]` 投影成 `{id, label, kind, styles, available, engine, reason}`；结果挂在既有 `/api/qq-bridge-neko/catalog` 响应的 `feiyuVoices` 上，client 侧新增 `kind: 'feiyu-voice'` 与 `renderFeiyuVoice()` 渲染下拉。标签会带上每个音色支持的语气（`语气 cute / gentle`）、RVC 包标「换声」、`available: false` 标「当前不可用」并把服务给的原因挂在 `title` 上。
+  - **服务不在也能用**：连不上 / 口令不对 / 非 2xx / 无 fetch / 地址非法，一律退回内置的 `feiyu` 一项，并在下拉下面写一句原因（`连不上服务（ECONNREFUSED）`、`口令不对（HTTP 401）`、`服务在跑，但没有注册任何音色` 等）——卡片不会变空、不会报错，也不会因为探测失败就把已存的音色清掉。
+  - **不静默改配置**：`feiyuVoice` 存着的值若不在当前清单里（服务没开、音色包被删），下拉会保留它并标成「当前值，不在清单里」，人看得见、改得回。
+  - 只改呈现层：设置键名、语义、Schema 类型全没动（仍是字符串，默认 `feiyu`），`readSettings()` 与两处 Schema 未改，老设置文件照旧生效；`format()` / `parse()` 走默认字符串分支，无需新增分支。
+  - 探测是**每次打开/轮询 catalog 时顺带做的读操作**，2 秒超时，不阻塞其它字段、不写任何状态、原因串里不含口令。
+  - 自测：新增 `test-feiyu-voice-options.mjs`，从 `index.js` / `client/client.js` 里**原文切出**这两个函数真跑（宿主半起真 HTTP 假服务），覆盖 离线 / 在线 / 口令错 / 坏地址 / 空注册 / 未知当前值 / 无 catalog 共 24 条断言，全通过。`README.md` 语音小节与设置表同步。
+- **修好肥鱼语音必失败（`speech-http-422`）**：`synthesizeWithSettings()` 以前不管哪个引擎都用 `ttsVoice` 当音色名，于是 `ttsProvider = feiyu` 时把 edge 的名字（`zh-CN-XiaoyiNeural`）发给了肥鱼服务，服务端回 `422 Requested voice capability is not installed/configured`，每次都降级发文字。现在按引擎分开取：`feiyu` 用 `feiyuVoice`（默认 `feiyu`），`edge` / `sherpa` 仍用 `ttsVoice`；工具按次传的 `voice` 仍优先。别的引擎的音色名不会再串到肥鱼那边。
+- **新增唱歌：`qq_bridge_neko_sing` 工具 + `feiyuSing()`**。给一段 ABC 记谱的单音主旋律（`score`）和逐字汉字歌词（`lyrics`），走肥鱼服务的 `POST /v1/singing`（谱面 → SoulX-Singer 出声 → RVC 换声），把「唱」出来的歌发到 QQ。一个音符一个字，一字多音用 `_`；`transpose` / `bpm` / `pinyin` 可选。**唱歌只有 `feiyu` 这一条路**（SVS 与 RVC 都在那个服务里），`ttsProvider` 不是 `feiyu` 时降级发文字并说明，不会假装唱了。
+  - `feiyuSing()` 与 `feiyuSynthesize()` 同形：先传两份（或三份，带拼音时）资源到 `/v1/assets` 换 id，再 `POST /v1/singing` 拿任务号，轮询 `GET /v1/jobs/{id}`，成功后按对端给的 `audio_url`（没有才 `GET /v1/jobs/{id}/audio`）下载，落缓存后由 `ensureRecordAudio()` 转 mp3。失败翻译成可读 `reason`：`empty-score` / `no-lyrics` / `no-cache-dir` / `bad-base-url` / `auth-failed: 401` / `singing-http-N` / `no-job-id` / `job-failed: 原因` / `job-interrupted` / `timeout: Nms` / `connect-failed: …`，**原因串里不含 API key**。
+  - 缓存键 = `谱名 + 谱面 sha1 + 歌词 + 拼音`，再拼音色；同一份谱同一份词第二次一个请求都不发，换一句词就是另一首、不会误命中。
+  - 新设置项 `feiyuSingTimeoutMs`（默认 `600000` = 10 分钟，10000–3600000）与 `voiceMaxSongChars`（默认 `400`，1–4000）。唱歌比说话慢一个量级（谱面编译 → 分段 SVS → RVC → 混音），所以超时单独一个键，轮询沿用 `feiyuPollIntervalMs`。
+  - 歌词超过 `voiceMaxSongChars` 直接 `too-long` 拒唱并说明长度与上限，不偷偷截断；合成失败降级发文字，正文前加「（歌没唱出来）」加原因。两条路都记 `outbox` / `dropped` 台账，`sessionId` 用 `tool:qq_bridge_neko_sing`。
+  - `test-voice.mjs` 新增 8 组唱歌用例（参数校验、成功路径含上传次数/鉴权头/提交体/轮询/下载、带拼音、`transpose`/`bpm` 只在给了才写、任务失败、401、超时、缓存命中与换词不命中），全程用假服务真跑 HTTP。`README.md` 唱歌小节、设置表、使用小节同步。
+- **语音改成三套引擎，`ttsProvider` 三选一：`edge`（默认）/ `sherpa` / `feiyu`**。这一版把两条各自演进的工作线并成一条：本机 `sherpa-onnx` 离线模型（`ttsModelDir` / `ttsSid` / `ttsSpeed`）与「肥鱼声音服务」（本机 HTTP）现在共用同一个选择键。**不新开键**是有意的——老设置文件里写的是 `ttsProvider: "sherpa"`，另起一个键会让现有设置静默失效。`voice.js` 里 `synthesize(text, {provider, ...})` 按 `provider` 分派，三个实现返回同一形状 `{ok:true,path,cached,converted?} | {ok:false,reason}`：
+  - `edge`：本机 edge-tts 子进程（mp3），行为与之前完全一致，脚本一字未改。
+  - `sherpa`：本机 `sherpa_onnx` 离线模型（mp3），脚本一字未改；`ttsModelDir` 为空时直接 `sherpa-model-dir-missing`，不乱猜目录。
+  - `feiyu`：`POST /v1/speech` 拿任务号 → 轮询 `GET /v1/jobs/{id}`（`queued` / `running` / `success` / `failed` / `interrupted`）→ 成功后下载音频（优先用对端给的 `audio_url`，没有才 `GET /v1/jobs/{id}/audio`）落缓存。
+  - 认不出的 `provider` 直接 `unsupported-tts-provider: X` 让调用方降级，不会无声地用别的引擎顶着。
+- 新设置项：`ffmpegPath`（默认空）、`feiyuBaseUrl`（默认 `http://127.0.0.1:9880`）、`feiyuApiKey`（空 = 不带 `Authorization: Bearer`）、`feiyuVoice`（默认 `feiyu`）、`feiyuStyle`（默认 `cute`，另一个是 `gentle`）、`feiyuTimeoutMs`（默认 `180000`，首次加载模型要等）、`feiyuPollIntervalMs`（默认 `1000`）。顺带把 `ttsModelDir` / `ttsSid` / `ttsSpeed` 补进 Schema 与设置卡片——这三个键以前只在 `readSettings()` 里读得到，卡片上看不见也改不了。五处（`config` Schema / `BridgeSettings` / `readSettings()` / `legacySettings` 的 base / 设置卡片的 `FIELDS`）一起补齐——上一版就是漏了 `BridgeSettings` 与 `readSettings()` 才出现「界面上填了不生效」，这次不再留同一个洞。
+- 老键 `ttsVoice` / `ttsRate` / `ttsPitch` / `ttsPythonPath` 照旧可用，只把说明改成「`edge` / `sherpa` 用这个」。**不动 `ttsProvider` 时行为与以前一模一样**（默认 `edge`）。
+- 失败一律降级发文字，不抛不卡死：连不上（`connect-failed`）、口令不对（`auth-failed: 401/403`）、任务失败（`job-failed: 原因`）、被打断（`job-interrupted`）、超时（`timeout: Nms`）、对端非 2xx、没任务号都翻译成可读 `reason`，正文前加「（语音没合成出来）」。原因串里只有状态码与对端给的文字，**不含 API key**。
+- 缓存：`voiceCacheName` 把引擎与各自参数一起进哈希（`edge` / `sherpa`：`voice/rate/pitch → .mp3`；`feiyu`：`voice/style → .wav`），三套引擎的产物不会互相撞；命中缓存时一个请求都不发。**注意：哈希多了引擎字段，`edge` 与 `sherpa` 的历史缓存名会失效一次**，同一句话下次会重新合成一遍，之后照旧命中。
+- 新增 `ensureRecordAudio()`：肥鱼交出来的是 WAV，装了 ffmpeg 就转一份 mp3（`-codec:a libmp3lame -b:a 64k`，有同名 mp3 直接复用）；`ffmpegPath` 留空时依次试 PATH 上的 `ffmpeg`、本机约定位置，**都没有 / 转码失败都回落原 WAV，不算合成失败**——能发出去总比因为少个转码工具就降级发文字好。转码在 `feiyuSynthesize()` 内部完成，所以 `index.js` 的调用点与 `recordSegment()` 一行没改。
+- 工具 `qq_bridge_neko_voice` 增加可选 `provider`（按次切引擎）与 `style`（按次覆盖肥鱼语气），结果里多一个 `provider` 字段说明这次用的哪套；顺手修掉一个老问题：工具以前直接调 `synthesize()` 又不传引擎，于是设置选了 `sherpa` 时工具这条路径仍然走 `edge`，现在它和正文那条路走同一套分派。
+- 设置卡片新增一个 `secret` 字段类型给口令用：**不回显已存口令**（快照里有也不写进 DOM），留空 = 不改、重填才覆盖；顺带避免「打开卡片顺手点保存」把存着的口令清掉。
+- `test-voice.mjs` 新增一整套肥鱼测试：用 Node 内置 `http` 起**假服务**真跑 HTTP 全流程，覆盖成功（含鉴权头带与不带的两种情况、请求体、轮询真的等了 `running`）、任务 `failed`、`interrupted`、`401`、`500`、没任务号、连不上、超时、缓存命中不重复请求，以及 `ensureRecordAudio` 的回落路径与真 ffmpeg 转码。`README.md` 语音小节与设置表同步。
 
 - **新增设置项 `pruneBlankSessions`（默认开）：新建 QQ 会话前顺手归档同目录的空白会话**。现象是「在面板点某个工作区的『新建会话』，不但没出现新会话，反而跳回刚才那条」。这是宿主的设计而非故障：客户端 `createInWorkspace` 会先在当前工作区里找一条 `blank && cwd === workspace.path && sessionIds.includes(id) && !archived` 的会话，把它的 id 当 `sessionId` 传给 `sessions.create`；宿主 `claim` 见到这条没有 `turn/start` 就走 `reuseLive` / `resume`，根本不 mint 新 id。所以在面板里手开过、又没聊过的空壳会一直挡在前面，每次点新建都拿回同一条。现在插件在 `createDestSession` 建新会话**之前**（此时新会话还没进工作区，不会被自己归档）调 `pruneBlankSessions(cwd)`：只碰 `workspaceRegistry.resolveByPath(目录).sessionIds`（`resolve` 只查不建，避免顺手新建工作区），只归档没有 `turn/start` 的，跳过已归档的、`sessionByDest` 还指着的、`agents.get(id).status` 是 `running`/`stopping` 的；归档不传 `stopActivity`，正在跑的由宿主抛 `WorkspaceActiveSessionError`、catch 掉跳过，绝不打断谁正在打的字。每轮最多 20 条，清掉后记一条 `prune-blank` 台账，归档可在面板里取消恢复。任何一步失败都只打日志、不挡新建。
 - 新增导出纯函数 `blankSessionVerdict(facts)`：判据与宿主一致（`blank = state.blank && event.type !== 'turn/start'`，只有 `turn/start` 会让会话脱离空白），`events` 拿不到时回落投影里的 `sessionListMetadata.blank`，两者都没有就判「不是空白」——宁可少归档，也不碰正在用的会话。`README.md` 会话小节、`pruneBlankSessions` 表格行与 `DESIGN.md` 两处设置表同步。
