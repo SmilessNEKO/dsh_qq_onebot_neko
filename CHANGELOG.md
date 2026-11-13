@@ -1,5 +1,14 @@
 # 更新日志
 
+## v1.1.8 — 2026-11-14
+
+- **修好一条一直静默失效的音质滤镜链**。`equalizer` 的 `t=q` 参数是 ffmpeg 5.x 才有的，本机 ffmpeg 是 2016 年的构建（`N-81989-g7845c13`），一进滤镜就报 `Option 't' not found` → `Error opening filters!`；而转码逻辑是「滤镜失败就退一步无滤镜再转」，于是每次都在无滤镜兜底上静默成功——这就是「声音干、不够圆润」的真实原因。改成 `width_type=q` 后整条链（高通 / 低通 / 两段 EQ / 轻压缩 / `loudnorm`）才真的生效。
+- **新增音色 / 音高 / 语速三个键（三个引擎通用）**：`voiceTone`（`natural` / `soft` / `warm` / `deep` / `bright`）、`voicePitchSemitones`（半音，-12~12）、`voiceSpeedFactor`（0.5~2）。实现全在插件侧用 ffmpeg 后处理（变调走 `aresample=48000 → asetrate → aresample=48000 → atempo` 补时长），**不动服务端、不动 SHA 绑定的模型包**。带参数时产物派生新文件，原 wav 不重新合成；缓存名带上这三个参数，改了音色不会命中旧缓存。
+- **新增语气预设 `voiceMood`**：`default` / `sweet` 撒娇 / `gentle` 温柔 / `lively` 元气 / `serious` 认真 / `sleepy` 困倦。语气是一组参数的打包（肥鱼 style + 音色 + 变调 + 语速），三个单参数填了会覆盖它。肥鱼的 `style` 优先级变成「显式传的 > 语气预设 > `feiyuStyle`」——因为 CosyVoice 只有 cute/gentle 两种 style、服务端协议没有情感字段（改它要动模型包），语气只能在插件侧做组合。
+- **sherpa 引擎支持 kokoro 多音色模型**：模型目录里只要有 `voices.bin` 就按 `OfflineTtsKokoroModelConfig` 加载，没有就仍按 `OfflineTtsVitsModelConfig`，换模型不用改配置。默认模型换成 `kokoro-multi-lang-v1_1`（103 个音色、24kHz），`ttsSid` 默认从 0 改成 **41**（`zf_074`，偏清亮的少女音）；旧的 `vits-melo-tts-zh_en` 仍可用（单音色，sid 只有 0）。
+- 工具 `qq_bridge_neko_voice` / `qq_bridge_neko_sing` 都加了 `mood` / `tone` / `semitones` / `speed` 单次覆盖参数。
+- 设置卡片「声音」页加了语气下拉与三个参数输入；`ttsSid` 标签改成「sherpa 用哪个音色（编号）」并写清 kokoro 的音色分布。
+- 自测：`test-voice.mjs` 161 → **197 条全通过**（新增音色常量、滤镜链、缓存名、语气预设、真 ffmpeg 跑链）；`test-smoke.mjs` 698 条、`test-updates.mjs` 113 条同样全通过。
 ## v1.1.7 — 2026-11-13
 
 - **设置入口搬进 DSH 设置页：撤掉左下角侧栏按钮，改注册 `settings.section`**。以前走的是 `sidebar.footer.action`（侧栏脚部、Settings 上面那个「🐟 QQ 桥接 Neko」），点开是一个居中浮层面板。问题是同一个设置有两套入口、两套视觉，找起来反而更乱。现在改成设置页左侧导航里的一节「QQ 桥接 Neko」，和「内置插件」「Vision Router」并列，点进去就是原来那张卡片（分页、保存、检查更新全不变）。

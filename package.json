@@ -1,6 +1,6 @@
 {
   "name": "dsh-qq-bridge-neko",
-  "version": "1.1.7",
+  "version": "1.1.8",
   "type": "module",
   "main": "index.js",
   "description": "把 DSH 会话接到 QQ（OneBot/NapCat）的独立插件（独立包名 / 独立 Cordis id，可与旧 qq-bridge 插件并存）。白名单默认全关；被 @、叫到昵称或被戳一定叫醒，其余消息按可调概率抽样。Fork 自 sj244/dsh-qq-bridge（MIT）。",

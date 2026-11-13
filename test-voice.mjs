@@ -42,6 +42,16 @@ import {
   synthesize,
   voiceCacheName,
   VOICE_FILTER_CHAIN,
+  VOICE_TONE_PRESETS,
+  DEFAULT_VOICE_TONE,
+  DEFAULT_VOICE_PITCH_SEMITONES,
+  DEFAULT_VOICE_SPEED_FACTOR,
+  buildVoiceFilterChain,
+  normalizeVoiceTone,
+  normalizeVoiceMood,
+  voiceMoodPreset,
+  VOICE_MOOD_PRESETS,
+  DEFAULT_VOICE_MOOD,
   VOICE_OUTPUT_BITRATE,
   VOICE_OUTPUT_SAMPLE_RATE,
   VOICE_PROVIDERS,
@@ -950,6 +960,156 @@ function fakeWorld() {
   check('拉起肥鱼用 feiyuServerDir 当 cwd',
     w.state.spawns[0]?.cwd === 'C:\\fake\\server', JSON.stringify(w.state.spawns[0]?.cwd ?? null))
   resetFeiyuServices()
+}
+
+
+// ── 48. 音色预设：常量与归一化 ──
+{
+  check('五个音色预设都在', ['natural', 'soft', 'warm', 'deep', 'bright'].every((k) => k in VOICE_TONE_PRESETS), Object.keys(VOICE_TONE_PRESETS).join(','))
+  check('默认音色 natural / 音高 0 / 语速 1',
+    DEFAULT_VOICE_TONE === 'natural' && DEFAULT_VOICE_PITCH_SEMITONES === 0 && DEFAULT_VOICE_SPEED_FACTOR === 1)
+  check('认不出的音色回落 natural', normalizeVoiceTone('Warm') === 'warm' && normalizeVoiceTone('nope') === 'natural' && normalizeVoiceTone('') === 'natural')
+  const deep = VOICE_TONE_PRESETS.deep
+  const bright = VOICE_TONE_PRESETS.bright
+  check('deep 比 natural 更低更闷', deep.semitones < 0 && deep.lowpass < VOICE_TONE_PRESETS.natural.lowpass, JSON.stringify(deep))
+  check('bright 更亮', bright.semitones > 0 && bright.lowpass > VOICE_TONE_PRESETS.natural.lowpass, JSON.stringify(bright))
+}
+
+// ── 49. 滤镜链：三参数怎么进 ffmpeg ──
+{
+  const base = buildVoiceFilterChain({})
+  check('不带参数时等于默认滤镜链', base === VOICE_FILTER_CHAIN, base)
+  check('滤镜链用 width_type=q（老 ffmpeg 不认 t=q）', base.includes('width_type=q') && !/(^|,)[a-z]*equalizer=f=[0-9]+:t=q/.test(base), base)
+
+  const up = buildVoiceFilterChain({ semitones: 3 })
+  check('升 3 半音 → asetrate 变大 + atempo 补时长',
+    up.includes('aresample=48000') && /asetrate=5[0-9]{4}/.test(up) && up.includes('atempo='), up)
+
+  const down = buildVoiceFilterChain({ semitones: -3 })
+  const m = /asetrate=(\d+)/.exec(down)
+  check('降 3 半音 → asetrate 变小', m !== null && Number(m[1]) < 48000, m ? m[1] : 'no-match')
+
+  check('音高 0 时不插 asetrate', !buildVoiceFilterChain({ semitones: 0 }).includes('asetrate'))
+  check('语速 1.15 → atempo 1.15', buildVoiceFilterChain({ speed: 1.15 }).includes('atempo=1.15'))
+  check('语速 0.8 → atempo 0.8', buildVoiceFilterChain({ speed: 0.8 }).includes('atempo=0.8'))
+  check('语速 1 且音高 0 时不插 atempo', !buildVoiceFilterChain({ speed: 1 }).includes('atempo'))
+
+  const warm = buildVoiceFilterChain({ tone: 'warm' })
+  check('warm 用更低的 lowpass', warm.includes('lowpass=f=10000'), warm)
+  const deepChain = buildVoiceFilterChain({ tone: 'deep' })
+  check('deep 叠了预设音高', deepChain.includes('asetrate='), deepChain)
+
+  check('语速超范围会被夹住', buildVoiceFilterChain({ speed: 9 }).includes('atempo=2') && buildVoiceFilterChain({ speed: 0.1 }).includes('atempo=0.5'))
+}
+
+// ── 50. 缓存名带音色参数（改音色不能命中旧缓存）──
+{
+  const a = voiceCacheName('同一句话', { provider: 'feiyu', voice: 'feiyu', style: 'cute' })
+  const b = voiceCacheName('同一句话', { provider: 'feiyu', voice: 'feiyu', style: 'cute', tone: 'warm' })
+  const c = voiceCacheName('同一句话', { provider: 'feiyu', voice: 'feiyu', style: 'cute', tone: 'warm', semitones: -2 })
+  const d = voiceCacheName('同一句话', { provider: 'feiyu', voice: 'feiyu', style: 'cute', tone: 'warm', semitones: -2, speed: 1.15 })
+  check('改音色 → 换缓存名', a !== b, a + ' / ' + b)
+  check('改音高 → 换缓存名', b !== c)
+  check('改语速 → 换缓存名', c !== d)
+  check('参数一样 → 缓存名一样',
+    voiceCacheName('同一句话', { provider: 'feiyu', voice: 'feiyu', style: 'cute', tone: 'warm', semitones: -2, speed: 1.15 }) === d)
+}
+
+// ── 51. feiyuSynthesize 带音色：产物文件名带 tone 标记，WAV 原样留着 ──
+{
+  resetFeiyuServices()
+  const w = fakeWorld()
+  w.state.up = true
+  const fetchAll = async (target, init) => {
+    const u = String(target)
+    if (u.endsWith('/health')) return w.fetchImpl(u, init)
+    if (u.endsWith('/v1/speech')) return new Response(JSON.stringify({ job_id: 'J-TONE' }), { status: 202, headers: { 'content-type': 'application/json' } })
+    if (u.endsWith('/v1/jobs/J-TONE')) return new Response(JSON.stringify({ status: 'success' }), { status: 200, headers: { 'content-type': 'application/json' } })
+    if (u.endsWith('/v1/jobs/J-TONE/audio')) return new Response(WAV_BYTES, { status: 200, headers: { 'content-type': 'audio/wav' } })
+    return new Response('{}', { status: 404 })
+  }
+  const plain = await feiyuSynthesize('音色测试这句', {
+    cacheDir: dir, baseUrl: 'http://127.0.0.1:19031', apiKey: 'k', voice: 'feiyu', style: 'cute',
+    autoStart: false, idleStopMs: 0, timeoutMs: 5000, pollIntervalMs: 20,
+    fetchImpl: fetchAll, ffmpegPath: join(dir, 'no-such-ffmpeg.exe'),
+  })
+  check('不带音色：合成成功', plain.ok === true, plain.ok ? plain.path : plain.reason)
+
+  const toned = await feiyuSynthesize('音色测试这句', {
+    cacheDir: dir, baseUrl: 'http://127.0.0.1:19031', apiKey: 'k', voice: 'feiyu', style: 'cute',
+    autoStart: false, idleStopMs: 0, timeoutMs: 5000, pollIntervalMs: 20,
+    tone: 'deep', semitones: -2, speed: 1.1,
+    fetchImpl: fetchAll, ffmpegPath: join(dir, 'no-such-ffmpeg.exe'),
+  })
+  check('带音色：合成成功（没 ffmpeg 就回落原 WAV）', toned.ok === true, toned.ok ? toned.path : toned.reason)
+  check('带音色：WAV 仍留在原路径（不用重新合成）', toned.wavPath === plain.wavPath, String(toned.wavPath))
+  resetFeiyuServices()
+}
+
+// ── 52. 真 ffmpeg：音色滤镜真跑一次（设了 DSH_TTS_TEST_FFMPEG 才跑）──
+{
+  const ff = String(process.env.DSH_TTS_TEST_FFMPEG || '').trim()
+  if (ff === '') {
+    console.log('SKIP  真音色滤镜（没设 DSH_TTS_TEST_FFMPEG）')
+  } else {
+    // 8kHz 单声道 1 秒 440Hz 正弦，ffmpeg 解得开
+    const n = 8000
+    const buf = Buffer.alloc(44 + n * 2)
+    buf.write('RIFF', 0); buf.writeUInt32LE(36 + n * 2, 4); buf.write('WAVE', 8)
+    buf.write('fmt ', 12); buf.writeUInt32LE(16, 16); buf.writeUInt16LE(1, 20); buf.writeUInt16LE(1, 22)
+    buf.writeUInt32LE(8000, 24); buf.writeUInt32LE(16000, 28); buf.writeUInt16LE(2, 32); buf.writeUInt16LE(16, 34)
+    buf.write('data', 36); buf.writeUInt32LE(n * 2, 40)
+    for (let i = 0; i < n; i += 1) buf.writeInt16LE(Math.round(Math.sin((2 * Math.PI * 440 * i) / 8000) * 12000), 44 + i * 2)
+    const src = join(dir, 'tone-src.wav')
+    writeFileSync(src, buf)
+
+    const plainOut = await ensureRecordAudio(src, { ffmpegPath: ff, timeoutMs: 20000 })
+    check('真 ffmpeg：默认滤镜链跑通', plainOut.converted === true, plainOut.reason ?? plainOut.path)
+
+    const warmOut = await ensureRecordAudio(src, {
+      ffmpegPath: ff, timeoutMs: 20000,
+      filterChain: buildVoiceFilterChain({ tone: 'warm', semitones: -2, speed: 1.1 }),
+      dst: join(dir, 'tone-warm.mp3'),
+    })
+    check('真 ffmpeg：音色链（warm + 降 2 半音 + 1.1 倍速）跑通', warmOut.converted === true, warmOut.reason ?? warmOut.path)
+    check('真 ffmpeg：音色产物落在指定 dst', warmOut.path === join(dir, 'tone-warm.mp3'), warmOut.path)
+    check('真 ffmpeg：音色产物非空', existsSync(warmOut.path) && statSync(warmOut.path).size > 0, String(existsSync(warmOut.path) ? statSync(warmOut.path).size : 0))
+  }
+}
+
+
+// ── 语气预设 ───────────────────────────────────────────────
+{
+  check('语气：默认语气不改任何参数', (() => {
+    const p = voiceMoodPreset(DEFAULT_VOICE_MOOD)
+    return p.style === '' && p.tone === 'natural' && p.semitones === 0 && p.speed === 1
+  })(), JSON.stringify(voiceMoodPreset(DEFAULT_VOICE_MOOD)))
+
+  check('语气：六个预设都在表里', Object.keys(VOICE_MOOD_PRESETS).length === 6, String(Object.keys(VOICE_MOOD_PRESETS).length))
+  check('语气：撒娇会改用 cute 并略升调', voiceMoodPreset('sweet').style === 'cute' && voiceMoodPreset('sweet').semitones > 0, JSON.stringify(voiceMoodPreset('sweet')))
+  check('语气：温柔会改用 gentle 并放慢', voiceMoodPreset('gentle').style === 'gentle' && voiceMoodPreset('gentle').speed < 1, JSON.stringify(voiceMoodPreset('gentle')))
+  check('语气：困倦最慢最沉', voiceMoodPreset('sleepy').speed < voiceMoodPreset('gentle').speed && voiceMoodPreset('sleepy').semitones < 0, JSON.stringify(voiceMoodPreset('sleepy')))
+  check('语气：认不出的值回落默认', normalizeVoiceMood('nope') === DEFAULT_VOICE_MOOD && normalizeVoiceMood('Sweet') === 'sweet', normalizeVoiceMood('nope') + '/' + normalizeVoiceMood('Sweet'))
+
+  // 语气落到滤镜链上：元气比默认更高更快，困倦更低更慢。
+  // 注意：soft 预设自带 -1 半音，撒娇的 +1 会正好抵消，所以用 lively（bright +1.5 + 2）验变调。
+  const chainDefault = buildVoiceFilterChain({ tone: 'natural', semitones: 0, speed: 1 })
+  const pLively = voiceMoodPreset('lively')
+  const chainLively = buildVoiceFilterChain({ tone: pLively.tone, semitones: pLively.semitones, speed: pLively.speed })
+  check('语气：元气的链带变调（比默认高）', chainLively !== chainDefault && chainLively.includes('asetrate'), chainLively.slice(0, 60))
+  const pSleepy = voiceMoodPreset('sleepy')
+  const chainSleepy = buildVoiceFilterChain({ tone: pSleepy.tone, semitones: pSleepy.semitones, speed: pSleepy.speed })
+  check('语气：困倦的链带变调（比默认低）', chainSleepy.includes('asetrate') && chainSleepy !== chainDefault, chainSleepy.slice(0, 60))
+
+  // feiyuSynthesize：语气会改写 style，缓存名也跟着变。
+  const moodDir = mkdtempSync(join(tmpdir(), "mood-"))
+  const fakeFetch = async () => ({ ok: true, status: 200, json: async () => ({ id: 'job-m', status: 'queued' }) })
+  const moodRes = await feiyuSynthesize('测试语气', {
+    baseUrl: 'http://127.0.0.1:1', apiKey: 'k', cacheDir: moodDir, mood: 'gentle',
+    autoStart: false, fetchImpl: fakeFetch,
+  })
+  check('语气：服务不可用时照样按失败返回（不吞异常）', moodRes.ok === false, JSON.stringify(moodRes))
+  rmSync(moodDir, { recursive: true, force: true })
 }
 
 rmSync(dir, { recursive: true, force: true })

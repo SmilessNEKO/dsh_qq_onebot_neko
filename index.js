@@ -59,6 +59,10 @@ import {
   DEFAULT_TTS_VOICE,
   DEFAULT_VOICE_MAX_CHARS,
   DEFAULT_VOICE_MAX_SONG_CHARS,
+  DEFAULT_VOICE_TONE,
+  DEFAULT_VOICE_PITCH_SEMITONES,
+  DEFAULT_VOICE_SPEED_FACTOR,
+  VOICE_TONE_PRESETS,
   FEIYU_STYLES,
   ensureFeiyuService,
   feiyuSing,
@@ -66,6 +70,10 @@ import {
   resetFeiyuServices,
   hasVoiceBlock,
   normalizeFeiyuStyle,
+  normalizeVoiceTone,
+  normalizeVoiceMood,
+  VOICE_MOOD_PRESETS,
+  DEFAULT_VOICE_MOOD,
   recordSegment,
   splitVoiceBlocks,
   stripVoiceBlocks,
@@ -73,13 +81,13 @@ import {
 } from './voice.js'
 
 /**
- * 本地离线 TTS 的默认模型目录（sherpa-onnx 中文 VITS，melotts zh_en）。
+ * 本地离线 TTS 的默认模型目录（sherpa-onnx kokoro 多语言 v1.1，103 个音色、24kHz）。
  * 设置里给了 `ttsModelDir` 就用设置的那份。
  */
 const DEFAULT_SHARPA_MODEL_DIR = join(
   process.env.DSH_HOME || join(process.env.USERPROFILE || '', '.dsh'),
   'tts-models',
-  'vits-melo-tts-zh_en',
+  'kokoro-multi-lang-v1_1',
 )
 
 const require = createRequire(import.meta.url)
@@ -278,9 +286,9 @@ export const Config = Schema.object({
   ttsRate: Schema.string().default(DEFAULT_TTS_RATE).description('语速（edge 用这个；sherpa 走 ttsSpeed）。edge-tts 写法，例如 -8% 表示慢一点、+10% 表示快一点。'),
   ttsPitch: Schema.string().default(DEFAULT_TTS_PITCH).description('音高（edge 用这个）。edge-tts 写法，例如 +12Hz 表示高一点、-5Hz 表示低一点。'),
   ttsPythonPath: Schema.string().default('').description('跑 edge-tts / sherpa-onnx 的 python 解释器路径（edge 与 sherpa 用这个；肥鱼走 HTTP，不用 python）。留空 = 用 PATH 里的 python。'),
-  ttsModelDir: Schema.string().default('').description('sherpa 的模型目录（里面有 model.onnx、tokens.txt 那些）。留空 = $DSH_HOME/tts-models/vits-melo-tts-zh_en。只在 ttsProvider 选 sherpa 时用得上。'),
-  ttsSid: Schema.number().default(0).description('sherpa 用模型里第几个说话人（从 0 开始）。默认 0。'),
-  ttsSpeed: Schema.number().default(1).description('sherpa 的语速倍数：1 = 原速，大于 1 更快。默认 1。'),
+  ttsModelDir: Schema.string().default('').description('sherpa 的模型目录（里面有 model.onnx、tokens.txt 那些）。留空 = $DSH_HOME/tts-models/kokoro-multi-lang-v1_1（103 个音色、24kHz）。想用旧的单音色 melo 模型就填 vits-melo-tts-zh_en 那份目录。只在 ttsProvider 选 sherpa 时用得上。'),
+  ttsSid: Schema.number().default(41).description('sherpa 用模型里第几个音色（从 0 开始）。kokoro 默认模型里 3~57 是中文女声、58 以后是男声，41 = zf_074（偏清亮的少女音）。换成别的数字就是别的音色；换成 melo 模型时只有 0 有效。'),
+  ttsSpeed: Schema.number().default(1).description('sherpa 的语速倍数：1 = 原速，大于 1 更快。默认 1。三引擎通用的语速在 voiceSpeedFactor。'),
   // 下面这一组只在 ttsProvider 选 sherpa / feiyu 时才用得上。
   ffmpegPath: Schema.string().default('').description('转码用的 ffmpeg 在哪（肥鱼服务产的是 wav，发之前尽量转成 mp3）。留空 = 自动找：先试 PATH 里的 ffmpeg，再试本机约定位置。填了就只用填的这个。'),
   feiyuBaseUrl: Schema.string().default(DEFAULT_FEIYU_BASE_URL).description('肥鱼声音服务的地址。默认 http://127.0.0.1:9880 —— 本机服务，别填公网地址。'),
@@ -291,6 +299,10 @@ export const Config = Schema.object({
   feiyuPollIntervalMs: Schema.number().default(DEFAULT_FEIYU_POLL_INTERVAL_MS).description('问肥鱼服务「好了没」的间隔（毫秒）。默认 1000。'),
   feiyuSingTimeoutMs: Schema.number().default(DEFAULT_FEIYU_SING_TIMEOUT_MS).description('等肥鱼服务「唱完」的最长时间（毫秒）。唱歌比说话慢得多（SVS 推理 + 换声 + 混音），默认 600000。'),
   voiceMaxSongChars: Schema.number().default(DEFAULT_VOICE_MAX_SONG_CHARS).description('歌词最多多少字（一个音符一个字，一字多音用 _ 占位）。超过就拒唱。默认 400。'),
+  voiceMood: Schema.string().default(DEFAULT_VOICE_MOOD).description('语气预设：default 默认 / sweet 撒娇 / gentle 温柔 / lively 元气 / serious 认真 / sleepy 困倦。每个预设是一组参数（肥鱼语气 + 音色 + 变调 + 语速），下面三个单参数会覆盖它。'),
+      voiceTone: Schema.string().default(DEFAULT_VOICE_TONE).description('音色预设：natural 自然 / soft 柔和 / warm 温暖 / deep 低沉 / bright 明亮。三个引擎都生效，用 ffmpeg 后处理。'),
+  voicePitchSemitones: Schema.number().default(DEFAULT_VOICE_PITCH_SEMITONES).description('音高偏移（半音，-12 ~ 12）。负数更沉、正数更尖。默认 0。'),
+  voiceSpeedFactor: Schema.number().default(DEFAULT_VOICE_SPEED_FACTOR).description('语速倍率（0.5 ~ 2）。1 = 原速，1.15 = 快一点。三个引擎都生效。默认 1。'),
   // ── 肥鱼服务的自动启停（插件自己管，不需要人盯着）──────────────────────────
   feiyuAutoStart: Schema.boolean().default(true).description('肥鱼服务没起时，插件自己把它拉起来再合成（默认开）。关掉后服务没起就直接降级发文字。'),
   feiyuServerDir: Schema.string().default('').description('肥鱼服务端目录（里面有 .venv 和 configs/voice_service.json）。自动启动要用它；留空 = 不自动启动。'),
@@ -395,9 +407,9 @@ const BridgeSettings = Schema.object({
   ttsRate: Schema.string().default(DEFAULT_TTS_RATE).description('语速（edge 用这个；sherpa 走 ttsSpeed）。edge-tts 写法，例如 -8% 表示慢一点、+10% 表示快一点。'),
   ttsPitch: Schema.string().default(DEFAULT_TTS_PITCH).description('音高（edge 用这个）。edge-tts 写法，例如 +12Hz 表示高一点、-5Hz 表示低一点。'),
   ttsPythonPath: Schema.string().default('').description('跑 edge-tts / sherpa-onnx 的 python 解释器路径（edge 与 sherpa 用这个；肥鱼走 HTTP，不用 python）。留空 = 用 PATH 里的 python。'),
-  ttsModelDir: Schema.string().default('').description('sherpa 的模型目录（里面有 model.onnx、tokens.txt 那些）。留空 = $DSH_HOME/tts-models/vits-melo-tts-zh_en。只在 ttsProvider 选 sherpa 时用得上。'),
-  ttsSid: Schema.number().default(0).description('sherpa 用模型里第几个说话人（从 0 开始）。默认 0。'),
-  ttsSpeed: Schema.number().default(1).description('sherpa 的语速倍数：1 = 原速，大于 1 更快。默认 1。'),
+  ttsModelDir: Schema.string().default('').description('sherpa 的模型目录（里面有 model.onnx、tokens.txt 那些）。留空 = $DSH_HOME/tts-models/kokoro-multi-lang-v1_1（103 个音色、24kHz）。想用旧的单音色 melo 模型就填 vits-melo-tts-zh_en 那份目录。只在 ttsProvider 选 sherpa 时用得上。'),
+  ttsSid: Schema.number().default(41).description('sherpa 用模型里第几个音色（从 0 开始）。kokoro 默认模型里 3~57 是中文女声、58 以后是男声，41 = zf_074（偏清亮的少女音）。换成别的数字就是别的音色；换成 melo 模型时只有 0 有效。'),
+  ttsSpeed: Schema.number().default(1).description('sherpa 的语速倍数：1 = 原速，大于 1 更快。默认 1。三引擎通用的语速在 voiceSpeedFactor。'),
   // 下面这一组只在 ttsProvider 选 sherpa / feiyu 时才用得上。
   ffmpegPath: Schema.string().default('').description('转码用的 ffmpeg 在哪（肥鱼服务产的是 wav，发之前尽量转成 mp3）。留空 = 自动找：先试 PATH 里的 ffmpeg，再试本机约定位置。填了就只用填的这个。'),
   feiyuBaseUrl: Schema.string().default(DEFAULT_FEIYU_BASE_URL).description('肥鱼声音服务的地址。默认 http://127.0.0.1:9880 —— 本机服务，别填公网地址。'),
@@ -408,6 +420,10 @@ const BridgeSettings = Schema.object({
   feiyuPollIntervalMs: Schema.number().default(DEFAULT_FEIYU_POLL_INTERVAL_MS).description('问肥鱼服务「好了没」的间隔（毫秒）。默认 1000。'),
   feiyuSingTimeoutMs: Schema.number().default(DEFAULT_FEIYU_SING_TIMEOUT_MS).description('等肥鱼服务「唱完」的最长时间（毫秒）。唱歌比说话慢得多（SVS 推理 + 换声 + 混音），默认 600000。'),
   voiceMaxSongChars: Schema.number().default(DEFAULT_VOICE_MAX_SONG_CHARS).description('歌词最多多少字（一个音符一个字，一字多音用 _ 占位）。超过就拒唱。默认 400。'),
+  voiceMood: Schema.string().default(DEFAULT_VOICE_MOOD).description('语气预设：default 默认 / sweet 撒娇 / gentle 温柔 / lively 元气 / serious 认真 / sleepy 困倦。每个预设是一组参数（肥鱼语气 + 音色 + 变调 + 语速），下面三个单参数会覆盖它。'),
+      voiceTone: Schema.string().default(DEFAULT_VOICE_TONE).description('音色预设：natural 自然 / soft 柔和 / warm 温暖 / deep 低沉 / bright 明亮。三个引擎都生效，用 ffmpeg 后处理。'),
+  voicePitchSemitones: Schema.number().default(DEFAULT_VOICE_PITCH_SEMITONES).description('音高偏移（半音，-12 ~ 12）。负数更沉、正数更尖。默认 0。'),
+  voiceSpeedFactor: Schema.number().default(DEFAULT_VOICE_SPEED_FACTOR).description('语速倍率（0.5 ~ 2）。1 = 原速，1.15 = 快一点。三个引擎都生效。默认 1。'),
   // ── 肥鱼服务的自动启停（插件自己管，不需要人盯着）──────────────────────────
   feiyuAutoStart: Schema.boolean().default(true).description('肥鱼服务没起时，插件自己把它拉起来再合成（默认开）。关掉后服务没起就直接降级发文字。'),
   feiyuServerDir: Schema.string().default('').description('肥鱼服务端目录（里面有 .venv 和 configs/voice_service.json）。自动启动要用它；留空 = 不自动启动。'),
@@ -1326,6 +1342,10 @@ export function apply(ctx, config) {
         feiyuPythonPath: config.feiyuPythonPath ?? '',
         feiyuIdleStopMinutes: config.feiyuIdleStopMinutes ?? DEFAULT_FEIYU_IDLE_STOP_MINUTES,
         voiceMaxSongChars: config.voiceMaxSongChars ?? DEFAULT_VOICE_MAX_SONG_CHARS,
+        voiceMood: config.voiceMood ?? DEFAULT_VOICE_MOOD,
+        voiceTone: config.voiceTone ?? DEFAULT_VOICE_TONE,
+        voicePitchSemitones: config.voicePitchSemitones ?? DEFAULT_VOICE_PITCH_SEMITONES,
+        voiceSpeedFactor: config.voiceSpeedFactor ?? DEFAULT_VOICE_SPEED_FACTOR,
         voiceMaxChars: config.voiceMaxChars ?? DEFAULT_VOICE_MAX_CHARS,
         voiceCacheDir: config.voiceCacheDir ?? '',
       },
@@ -1413,8 +1433,21 @@ export function apply(ctx, config) {
       feiyuPythonPath: String(s.feiyuPythonPath ?? config.feiyuPythonPath ?? '').trim(),
       feiyuIdleStopMinutes: clampInt(s.feiyuIdleStopMinutes ?? config.feiyuIdleStopMinutes, 0, 1440, DEFAULT_FEIYU_IDLE_STOP_MINUTES),
       voiceMaxSongChars: clampInt(s.voiceMaxSongChars ?? config.voiceMaxSongChars, 1, 4000, DEFAULT_VOICE_MAX_SONG_CHARS),
+      voiceMood: (() => {
+        const raw = String(s.voiceMood ?? config.voiceMood ?? '').trim().toLowerCase()
+        return Object.prototype.hasOwnProperty.call(VOICE_MOOD_PRESETS, raw) ? raw : DEFAULT_VOICE_MOOD
+      })(),
+      voiceTone: (() => {
+        const raw = String(s.voiceTone ?? config.voiceTone ?? '').trim().toLowerCase()
+        return Object.prototype.hasOwnProperty.call(VOICE_TONE_PRESETS, raw) ? raw : DEFAULT_VOICE_TONE
+      })(),
+      voicePitchSemitones: clampInt(s.voicePitchSemitones ?? config.voicePitchSemitones, -12, 12, DEFAULT_VOICE_PITCH_SEMITONES),
+      voiceSpeedFactor: (() => {
+        const raw = Number(s.voiceSpeedFactor ?? config.voiceSpeedFactor)
+        return Number.isFinite(raw) && raw >= 0.5 && raw <= 2 ? raw : DEFAULT_VOICE_SPEED_FACTOR
+      })(),
       ttsModelDir: String(s.ttsModelDir ?? config.ttsModelDir ?? '').trim(),
-      ttsSid: Number.isFinite(Number(s.ttsSid ?? config.ttsSid)) ? Number(s.ttsSid ?? config.ttsSid) : 0,
+      ttsSid: Number.isFinite(Number(s.ttsSid ?? config.ttsSid)) ? Number(s.ttsSid ?? config.ttsSid) : 41,
       ttsSpeed: Number.isFinite(Number(s.ttsSpeed ?? config.ttsSpeed)) && Number(s.ttsSpeed ?? config.ttsSpeed) > 0
         ? Number(s.ttsSpeed ?? config.ttsSpeed)
         : 1,
@@ -4384,7 +4417,7 @@ export function apply(ctx, config) {
       provider,
       pythonPath: String(s?.ttsPythonPath ?? '').trim(),
       modelDir: String(s?.ttsModelDir ?? '').trim() || DEFAULT_SHARPA_MODEL_DIR,
-      sid: Number.isFinite(Number(s?.ttsSid)) ? Number(s.ttsSid) : 0,
+      sid: Number.isFinite(Number(s?.ttsSid)) ? Number(s.ttsSid) : 41,
       speed: Number.isFinite(Number(s?.ttsSpeed)) && Number(s.ttsSpeed) > 0 ? Number(s.ttsSpeed) : 1,
       voice,
       rate: String(overrides.rate ?? s?.ttsRate ?? '').trim() || DEFAULT_TTS_RATE,
@@ -4393,6 +4426,14 @@ export function apply(ctx, config) {
       apiKey: String(s?.feiyuApiKey ?? '').trim(),
       style: normalizeFeiyuStyle(overrides.style ?? s?.feiyuStyle),
       ffmpegPath: String(s?.ffmpegPath ?? '').trim(),
+      // 音色三参数：三引擎通用（ffmpeg 后处理），所以放在公共段。
+      mood: normalizeVoiceMood(overrides.mood ?? s?.voiceMood),
+      tone: normalizeVoiceTone(overrides.tone ?? s?.voiceTone),
+      semitones: Number.isFinite(Number(overrides.semitones ?? s?.voicePitchSemitones)) ? Number(overrides.semitones ?? s?.voicePitchSemitones) : 0,
+      voiceSpeed: (() => {
+        const raw = Number(overrides.speed ?? s?.voiceSpeedFactor)
+        return Number.isFinite(raw) && raw >= 0.5 && raw <= 2 ? raw : 1
+      })(),
       pollIntervalMs: Number(s?.feiyuPollIntervalMs) > 0 ? Number(s.feiyuPollIntervalMs) : DEFAULT_FEIYU_POLL_INTERVAL_MS,
       // 肥鱼服务的自动启停：服务没起就拉起来，闲下来自己停。设置里那四个键都在这儿生效。
       // 用 `feiyu*` 前缀传：`pythonPath` 这个键名在 edge/sherpa 分支里是 ttsPythonPath，
@@ -6371,7 +6412,7 @@ export function apply(ctx, config) {
     description:
       '把一句话合成为语音发到 QQ（默认发给这一轮钉住的群或私聊）。' +
       '需要先打开设置里的「发语音」（voiceEnabled），否则返回 `reason: "voice-disabled"`，一个字都不发。' +
-      '音色 / 语速 / 音高 / 引擎 / 语气默认读设置，也可以用 voice / rate / pitch / provider / style 单次覆盖' +
+      '音色 / 语速 / 音高 / 引擎 / 语气默认读设置，也可以用 voice / rate / pitch / provider / style / tone / semitones / speed 单次覆盖' +
       '（provider 取 edge | sherpa | feiyu；音色写 edge-tts 那种，例如 zh-CN-XiaoyiNeural、-8%、+12Hz）。' +
       'text 只写要念的内容本体：不要带 [语音] 标记，也不带表情名和 Markdown，那些念不出来。' +
       '合成失败或超过 voiceMaxChars 时**降级发文字**（正文前加「（语音没合成出来）」），不会整条消失。' +
@@ -6383,6 +6424,10 @@ export function apply(ctx, config) {
       rate: { type: 'string', description: '语速，覆盖设置里的 ttsRate，例如 -8%。' },
       pitch: { type: 'string', description: '音高，覆盖设置里的 ttsPitch，例如 +12Hz。' },
       style: { type: 'string', enum: ['cute', 'gentle'], description: '肥鱼服务的语气，覆盖设置里的 feiyuStyle。' },
+      mood: { type: 'string', enum: ['default', 'sweet', 'gentle', 'lively', 'serious', 'sleepy'], description: '语气预设，覆盖设置里的 voiceMood。default 默认 / sweet 撒娇 / gentle 温柔 / lively 元气 / serious 认真 / sleepy 困倦。' },
+      tone: { type: 'string', enum: ['natural', 'soft', 'warm', 'deep', 'bright'], description: '音色预设，覆盖设置里的 voiceTone。natural 自然 / soft 柔和 / warm 温暖 / deep 低沉 / bright 明亮。' },
+      semitones: { type: 'number', description: '音高偏移（半音，-12 ~ 12），覆盖设置里的 voicePitchSemitones。负数更沉。' },
+      speed: { type: 'number', description: '语速倍率（0.5 ~ 2），覆盖设置里的 voiceSpeedFactor。1 = 原速。' },
       userId: { type: 'string', description: '私聊目标 QQ 号；与 groupId 二选一，都不给则用这一轮钉住的目的地。' },
       groupId: { type: 'string', description: '群号；与 userId 二选一。显式指定时不引用别的群的消息。' },
     },
@@ -6444,6 +6489,9 @@ export function apply(ctx, config) {
         rate: String(args.rate ?? '').trim(),
         pitch: String(args.pitch ?? '').trim(),
         style: String(args.style ?? '').trim(),
+        tone: String(args.tone ?? '').trim(),
+        semitones: Number.isFinite(Number(args.semitones)) ? Number(args.semitones) : undefined,
+        speed: Number.isFinite(Number(args.speed)) ? Number(args.speed) : undefined,
       })
 
       let result
@@ -6508,6 +6556,10 @@ export function apply(ctx, config) {
       transpose: { type: 'number', description: '整体移调半音数，-24 到 24，默认 0。' },
       bpm: { type: 'number', description: '覆盖谱面速度（BPM），不给就用 ABC 里 Q: 的值。' },
       pinyin: { type: 'string', description: '可选：逐字拼音（带声调数字），用来纠正多音字。' },
+      mood: { type: 'string', enum: ['default', 'sweet', 'gentle', 'lively', 'serious', 'sleepy'], description: '语气预设，覆盖设置里的 voiceMood。default 默认 / sweet 撒娇 / gentle 温柔 / lively 元气 / serious 认真 / sleepy 困倦。' },
+      tone: { type: 'string', enum: ['natural', 'soft', 'warm', 'deep', 'bright'], description: '音色预设，覆盖设置里的 voiceTone。natural 自然 / soft 柔和 / warm 温暖 / deep 低沉 / bright 明亮。' },
+      semitones: { type: 'number', description: '音高偏移（半音，-12 ~ 12），覆盖设置里的 voicePitchSemitones。负数更沉。' },
+      speed: { type: 'number', description: '语速倍率（0.5 ~ 2），覆盖设置里的 voiceSpeedFactor。1 = 原速。' },
       userId: { type: 'string', description: '私聊目标 QQ 号；与 groupId 二选一，都不给则用这一轮钉住的目的地。' },
       groupId: { type: 'string', description: '群号；与 userId 二选一。显式指定时不引用别的群的消息。' },
     },
@@ -6559,6 +6611,13 @@ export function apply(ctx, config) {
         timeoutMs: Number(s.feiyuSingTimeoutMs) > 0 ? Number(s.feiyuSingTimeoutMs) : DEFAULT_FEIYU_SING_TIMEOUT_MS,
         pollIntervalMs: Number(s.feiyuPollIntervalMs) > 0 ? Number(s.feiyuPollIntervalMs) : DEFAULT_FEIYU_POLL_INTERVAL_MS,
         ffmpegPath: String(s.ffmpegPath ?? '').trim(),
+        mood: normalizeVoiceMood(String(args.mood ?? '').trim() || s.voiceMood),
+        tone: normalizeVoiceTone(String(args.tone ?? '').trim() || s.voiceTone),
+        semitones: Number.isFinite(Number(args.semitones)) ? Number(args.semitones) : Number(s.voicePitchSemitones) || 0,
+        speed: (() => {
+          const raw = Number(args.speed ?? s.voiceSpeedFactor)
+          return Number.isFinite(raw) && raw >= 0.5 && raw <= 2 ? raw : 1
+        })(),
         // 自动启停：唱歌同样先确认服务活着（没活就拉起来），唱完重置空闲计时。
         serverDir: String(s.feiyuServerDir ?? '').trim(),
         pythonPath: String(s.feiyuPythonPath ?? '').trim(),

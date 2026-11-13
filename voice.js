@@ -480,7 +480,7 @@ export function stripVoiceBlocks(body) {
  *
  * 只取前 16 位十六进制，够用且不会把文件名撑长。
  */
-export function voiceCacheName(text, { provider = 'edge', voice, rate, pitch, style, ext } = {}) {
+export function voiceCacheName(text, { provider = 'edge', voice, rate, pitch, style, tone, semitones, speed, ext } = {}) {
   const kind = normalizeVoiceProvider(provider)
   const h = createHash('sha1')
   h.update(kind)
@@ -488,6 +488,13 @@ export function voiceCacheName(text, { provider = 'edge', voice, rate, pitch, st
   h.update(String(text))
   h.update('\u0000')
   h.update(String(voice ?? ''))
+  // 音色三参数进哈希：改了预设 / 变调 / 变速就是另一份产物，不能复用旧文件。
+  h.update('\u0000')
+  h.update(normalizeVoiceTone(tone))
+  h.update('\u0000')
+  h.update(String(Number(semitones) || 0))
+  h.update('\u0000')
+  h.update(String(Number(speed) || 1))
   if (kind === 'feiyu') {
     h.update('\u0000')
     h.update(normalizeFeiyuStyle(style))
@@ -605,7 +612,7 @@ export async function feiyuSynthesize(text, options) {
     baseUrl = DEFAULT_FEIYU_BASE_URL,
     apiKey = '',
     voice = DEFAULT_FEIYU_VOICE,
-    style = DEFAULT_FEIYU_STYLE,
+    style = '',
     cacheDir,
     timeoutMs = DEFAULT_FEIYU_TIMEOUT_MS,
     pollIntervalMs = DEFAULT_FEIYU_POLL_INTERVAL_MS,
@@ -621,6 +628,10 @@ export async function feiyuSynthesize(text, options) {
     spawnImpl,
     logger,
     fetchImpl,
+    tone,
+    semitones,
+    speed,
+    mood = DEFAULT_VOICE_MOOD,
   } = options ?? {}
 
   if (!cacheDir) return { ok: false, reason: 'no-cache-dir' }
@@ -641,14 +652,27 @@ export async function feiyuSynthesize(text, options) {
     return { ok: false, reason: `cache-dir-unusable: ${error?.message ?? error}` }
   }
 
-  const saidStyle = normalizeFeiyuStyle(style)
+  // style 的优先级：显式传的 > 语气预设给的 > 引擎默认。语气预设只在非 default 时才给 style。
+  const saidStyle = normalizeFeiyuStyle(style || voiceMoodPreset(mood).style || DEFAULT_FEIYU_STYLE)
   const saidVoice = String(voice ?? '').trim() || DEFAULT_FEIYU_VOICE
   const outPath = join(cacheDir, voiceCacheName(said, { provider: 'feiyu', voice: saidVoice, style: saidStyle }))
   const wavReady = existsSync(outPath) && statSync(outPath).size > 0
 
+  // 音色三参数：变了就换一条滤镜链、换一个产物文件名，原 WAV 不动（不用重新合成）。
+  // 语气预设先落成一组参数；显式传的 tone / semitones / speed 再覆盖它。
+  const saidMood = voiceMoodPreset(mood)
+  const saidTone = normalizeVoiceTone(tone ?? saidMood.tone)
+  const saidSemitones = Number(semitones ?? saidMood.semitones) || 0
+  const saidSpeed = Math.max(0.5, Math.min(2, Number(speed ?? saidMood.speed) || 1))
+  const toneChain = buildVoiceFilterChain({ tone: saidTone, semitones: saidSemitones, speed: saidSpeed })
+  const toneTag = saidTone === DEFAULT_VOICE_TONE && saidSemitones === 0 && saidSpeed === 1 && normalizeVoiceMood(mood) === DEFAULT_VOICE_MOOD
+    ? ''
+    : `.${saidTone}.${saidSemitones}s.${String(saidSpeed).replace('.', 'p')}`
+
   /** 产物落定后统一收尾：能转 mp3 就转，转不了照发 WAV。 */
   const finish = async (cached) => {
-    const audio = await ensureRecordAudio(outPath, { ffmpegPath, timeoutMs: ffmpegTimeoutMs })
+    const toneDst = toneTag === '' ? '' : outPath.replace(/\.wav$/i, `${toneTag}.mp3`)
+    const audio = await ensureRecordAudio(outPath, { ffmpegPath, timeoutMs: ffmpegTimeoutMs, filterChain: toneChain, dst: toneDst })
     return {
       ok: true,
       path: audio.path,
@@ -841,6 +865,10 @@ export async function feiyuSing(options) {
     spawnImpl,
     logger,
     fetchImpl,
+    tone,
+    semitones,
+    speed,
+    mood = DEFAULT_VOICE_MOOD,
   } = options ?? {}
 
   const scoreBytes = scoreBase64 !== ''
@@ -875,8 +903,21 @@ export async function feiyuSing(options) {
   const digestKey = cacheKey !== '' ? cacheKey : `${scoreName}|${cacheKeyOfScore(scoreBytes)}|${String(lyrics ?? '')}|${String(pinyin ?? '')}`
   const outPath = join(cacheDir, `${createHash('sha1').update('feiyu-sing\u0000').update(digestKey).update('\u0000').update(saidVoice).digest('hex').slice(0, 16)}.wav`)
 
+  // 音色三参数：变了就换一条滤镜链、换一个产物文件名，原 WAV 不动（不用重新合成）。
+  // 语气预设先落成一组参数；显式传的 tone / semitones / speed 再覆盖它。
+  const saidMood = voiceMoodPreset(mood)
+  const saidTone = normalizeVoiceTone(tone ?? saidMood.tone)
+  const saidSemitones = Number(semitones ?? saidMood.semitones) || 0
+  const saidSpeed = Math.max(0.5, Math.min(2, Number(speed ?? saidMood.speed) || 1))
+  const toneChain = buildVoiceFilterChain({ tone: saidTone, semitones: saidSemitones, speed: saidSpeed })
+  const toneTag = saidTone === DEFAULT_VOICE_TONE && saidSemitones === 0 && saidSpeed === 1 && normalizeVoiceMood(mood) === DEFAULT_VOICE_MOOD
+    ? ''
+    : `.${saidTone}.${saidSemitones}s.${String(saidSpeed).replace('.', 'p')}`
+
+  /** 产物落定后统一收尾：能转 mp3 就转，转不了照发 WAV。 */
   const finish = async (cached, seconds) => {
-    const audio = await ensureRecordAudio(outPath, { ffmpegPath, timeoutMs: ffmpegTimeoutMs })
+    const toneDst = toneTag === '' ? '' : outPath.replace(/\.wav$/i, `${toneTag}.mp3`)
+    const audio = await ensureRecordAudio(outPath, { ffmpegPath, timeoutMs: ffmpegTimeoutMs, filterChain: toneChain, dst: toneDst })
     return {
       ok: true,
       path: audio.path,
@@ -1063,10 +1104,15 @@ function cacheKeyOfScore(bytes) {
 export async function ensureRecordAudio(absPath, options) {
   const src = String(absPath ?? '')
   if (src === '') return { path: '', converted: false, reason: 'empty-path' }
-  if (!/\.wav$/i.test(src)) return { path: src, converted: false }
 
-  const { ffmpegPath = '', timeoutMs = DEFAULT_FFMPEG_TIMEOUT_MS } = options ?? {}
-  const dst = src.replace(/\.wav$/i, '.mp3')
+  const { ffmpegPath = '', timeoutMs = DEFAULT_FFMPEG_TIMEOUT_MS, filterChain = '', dst: dstOption = '' } = options ?? {}
+  const custom = String(filterChain ?? '').trim()
+  // 不是 wav、也没要求额外处理：原样发（edge / sherpa 的 mp3 走这条）。
+  if (!/\.wav$/i.test(src) && custom === '') return { path: src, converted: false }
+  const explicitDst = String(dstOption ?? '').trim()
+  const dst = explicitDst !== ''
+    ? explicitDst
+    : (/\.wav$/i.test(src) ? src.replace(/\.wav$/i, '.mp3') : src.replace(/\.mp3$/i, '.tone.mp3'))
 
   // 上次已经转过就直接用（同一句话重复发不重复转码）。
   try {
@@ -1080,7 +1126,7 @@ export async function ensureRecordAudio(absPath, options) {
 
   let lastReason = 'ffmpeg-missing: 找不到可用的 ffmpeg'
   for (const bin of candidates) {
-    const result = await runFfmpeg(bin, src, dst, timeoutMs)
+    const result = await runFfmpeg(bin, src, dst, timeoutMs, custom)
     if (result.ok) {
       try {
         if (!existsSync(dst) || statSync(dst).size === 0) {
@@ -1115,11 +1161,113 @@ export async function ensureRecordAudio(absPath, options) {
 export const VOICE_FILTER_CHAIN = [
   'highpass=f=80',
   'lowpass=f=12000',
-  'equalizer=f=200:t=q:w=1:g=1.5',
-  'equalizer=f=3000:t=q:w=1.5:g=1.5',
+  'equalizer=f=200:width_type=q:w=1:g=1.5',
+  'equalizer=f=3000:width_type=q:w=1.5:g=1.5',
   'acompressor=threshold=-18dB:ratio=2.5:attack=10:release=150',
   'loudnorm=I=-16:TP=-1.5:LRA=11',
 ].join(',')
+
+/**
+ * 音色预设：一句话换掉「听起来是谁」。
+ *
+ * 三个旋钮一起动，才像换了个音色而不是单纯调了均衡：
+ *   - semitones：变调半音数，负数是沉下去、正数是提上来；
+ *   - lowpass：高频天花板，越低越柔（齿音跟着一起少）；
+ *   - treble：高频增益，正数更亮、负数更闷。
+ *
+ * natural 是中性值，等于不额外处理。数值都是「耳朵调出来」的量级，
+ * 不是声学测量结果 —— 觉得不对就照着自己的耳朵改这张表。
+ */
+export const VOICE_TONE_PRESETS = {
+  natural: { semitones: 0, lowpass: 12000, treble: 0 },
+  soft: { semitones: -1, lowpass: 10000, treble: -1 },
+  warm: { semitones: -2, lowpass: 10000, treble: -1.5 },
+  deep: { semitones: -3.5, lowpass: 9000, treble: -2 },
+  bright: { semitones: 1.5, lowpass: 14000, treble: 1 },
+}
+/**
+ * 语气预设：把「语气」落成一组具体参数（肥鱼 style + 音色 + 变调 + 语速）。
+ *
+ * 为什么不是服务端的 emotion：肥鱼的 CosyVoice 只认 cute / gentle 两种 style，
+ * 服务端协议里也没有情感字段（改它要动 SHA 绑定的模型包）。所以语气这一层
+ * 放在插件侧：先按预设给出一组参数，再允许单个参数覆盖。
+ */
+export const VOICE_MOOD_PRESETS = {
+  default: { label: '默认（不改）', style: '', tone: 'natural', semitones: 0, speed: 1 },
+  sweet: { label: '撒娇（软一点、略高）', style: 'cute', tone: 'soft', semitones: 1, speed: 0.96 },
+  gentle: { label: '温柔（放慢、压一点高频）', style: 'gentle', tone: 'warm', semitones: 0, speed: 0.9 },
+  lively: { label: '元气（快一点、亮一点）', style: 'cute', tone: 'bright', semitones: 2, speed: 1.12 },
+  serious: { label: '认真（平、略沉）', style: 'gentle', tone: 'natural', semitones: -1, speed: 1 },
+  sleepy: { label: '困倦（很慢、很沉）', style: 'gentle', tone: 'deep', semitones: -3, speed: 0.82 },
+}
+/** 默认语气（不改任何参数）。 */
+export const DEFAULT_VOICE_MOOD = 'default'
+/** 认得出的语气；不认识的一律回落默认。 */
+export function normalizeVoiceMood(raw) {
+  const v = String(raw ?? '').trim().toLowerCase()
+  return Object.prototype.hasOwnProperty.call(VOICE_MOOD_PRESETS, v) ? v : DEFAULT_VOICE_MOOD
+}
+/** 取语气预设（默认语气返回空 style，表示「不覆盖引擎自己的 style」）。 */
+export function voiceMoodPreset(raw) {
+  return VOICE_MOOD_PRESETS[normalizeVoiceMood(raw)]
+}
+export const DEFAULT_VOICE_TONE = 'natural'
+/** 手动变调（半音）。和预设叠加：最终半音 = 预设 + 这个值。 */
+export const DEFAULT_VOICE_PITCH_SEMITONES = 0
+/** 手动变速（倍率）。1 = 原速；只改快慢不改音高。 */
+export const DEFAULT_VOICE_SPEED_FACTOR = 1
+
+/** 归一化音色预设名；认不出的一律回 natural（不报错，音色不该让合成失败）。 */
+export function normalizeVoiceTone(raw) {
+  const said = String(raw ?? '').trim().toLowerCase()
+  return Object.prototype.hasOwnProperty.call(VOICE_TONE_PRESETS, said) ? said : DEFAULT_VOICE_TONE
+}
+
+/**
+ * 把变调 / 变速 / 音色预设合成一条 ffmpeg 滤镜链。
+ *
+ * 变调走「改采样率再补时长」这条老路：asetrate 抬/压音高，atempo 把时长拉回来。
+ * 中间固定用 48k（asetrate 只吃整数采样率），最后再统一 resample 到输出采样率。
+ * atempo 单次有效区间是 0.5–2，超出去拆成多段串起来。
+ */
+export function buildVoiceFilterChain(options) {
+  const { tone = DEFAULT_VOICE_TONE, semitones = 0, speed = 1 } = options ?? {}
+  const preset = VOICE_TONE_PRESETS[normalizeVoiceTone(tone)]
+  const totalSemitones = Number(preset.semitones) + (Number(semitones) || 0)
+  const rate = Math.max(0.5, Math.min(2, Number(speed) || 1))
+
+  const parts = []
+  if (Math.abs(totalSemitones) > 0.01) {
+    const ratio = Math.pow(2, totalSemitones / 12)
+    const shifted = Math.round(48000 * ratio)
+    parts.push('aresample=48000')
+    parts.push('asetrate=' + shifted)
+    parts.push('aresample=48000')
+    parts.push('atempo=' + (1 / ratio).toFixed(6))
+  }
+  if (Math.abs(rate - 1) > 0.001) {
+    let left = rate
+    while (left > 2) {
+      parts.push('atempo=2')
+      left /= 2
+    }
+    while (left < 0.5) {
+      parts.push('atempo=0.5')
+      left /= 0.5
+    }
+    parts.push('atempo=' + left.toFixed(6))
+  }
+  parts.push('highpass=f=80')
+  parts.push('lowpass=f=' + preset.lowpass)
+  parts.push('equalizer=f=200:width_type=q:w=1:g=1.5')
+  parts.push('equalizer=f=3000:width_type=q:w=1.5:g=1.5')
+  if (Math.abs(preset.treble) > 0.01) {
+    parts.push('equalizer=f=8000:width_type=q:w=1.2:g=' + preset.treble)
+  }
+  parts.push('acompressor=threshold=-18dB:ratio=2.5:attack=10:release=150')
+  parts.push('loudnorm=I=-16:TP=-1.5:LRA=11')
+  return parts.join(',')
+}
 /** 转码输出的采样率与码率。语音 96k 足够，再高只是白占体积。 */
 export const VOICE_OUTPUT_SAMPLE_RATE = 44100
 export const VOICE_OUTPUT_BITRATE = '96k'
@@ -1135,9 +1283,10 @@ export const VOICE_OUTPUT_BITRATE = '96k'
  * @param {string} dst
  * @param {number} timeoutMs
  */
-async function runFfmpeg(bin, src, dst, timeoutMs) {
+async function runFfmpeg(bin, src, dst, timeoutMs, filterChain) {
   const encode = ['-ar', String(VOICE_OUTPUT_SAMPLE_RATE), '-codec:a', 'libmp3lame', '-b:a', VOICE_OUTPUT_BITRATE, dst]
-  const first = await runFfmpegOnce(bin, ['-y', '-i', src, '-af', VOICE_FILTER_CHAIN, ...encode], timeoutMs)
+  const chain = String(filterChain ?? '').trim() || VOICE_FILTER_CHAIN
+  const first = await runFfmpegOnce(bin, ['-y', '-i', src, '-af', chain, ...encode], timeoutMs)
   if (first.ok) return first
   // 滤镜链跑不动（缺滤镜 / 参数不被支持）才退；找不到 ffmpeg 就没必要再试一遍。
   if (/^ffmpeg-(missing|spawn-failed|timeout)/.test(String(first.reason ?? ''))) return first
@@ -1244,6 +1393,11 @@ export async function synthesize(text, options) {
     pitch = DEFAULT_TTS_PITCH,
     cacheDir,
     timeoutMs = DEFAULT_TTS_TIMEOUT_MS,
+    ffmpegPath = '',
+    tone,
+    semitones,
+    voiceSpeed,
+    mood = DEFAULT_VOICE_MOOD,
   } = options ?? {}
 
   const kind = String(provider ?? 'edge').trim().toLowerCase() || 'edge'
@@ -1258,9 +1412,24 @@ export async function synthesize(text, options) {
     return { ok: false, reason: `cache-dir-unusable: ${error?.message ?? error}` }
   }
 
-  const outPath = join(cacheDir, voiceCacheName(said, { provider: kind, voice, rate, pitch, ext }))
+  // 语气预设先落成一组参数；显式传的 tone / semitones / voiceSpeed 再覆盖它。
+  const saidMood = voiceMoodPreset(mood)
+  const saidTone = normalizeVoiceTone(tone ?? saidMood.tone)
+  const saidSemitones = Number(semitones ?? saidMood.semitones) || 0
+  const saidVoiceSpeed = Math.max(0.5, Math.min(2, Number(voiceSpeed ?? saidMood.speed) || 1))
+  const toneChain = buildVoiceFilterChain({ tone: saidTone, semitones: saidSemitones, speed: saidVoiceSpeed })
+  const toneTag = saidTone === DEFAULT_VOICE_TONE && saidSemitones === 0 && saidVoiceSpeed === 1 && normalizeVoiceMood(mood) === DEFAULT_VOICE_MOOD
+    ? ''
+    : `.${saidTone}.${saidSemitones}s.${String(saidVoiceSpeed).replace('.', 'p')}`
+  const outPath = join(cacheDir, voiceCacheName(said, { provider: kind, voice, rate, pitch, tone: saidTone, semitones: saidSemitones, speed: saidVoiceSpeed, ext }))
   if (existsSync(outPath) && statSync(outPath).size > 0) {
-    return { ok: true, path: outPath, cached: true }
+    if (toneTag === '') return { ok: true, path: outPath, cached: true }
+    // 命中缓存但要求了音色处理：原文件不动，派生一份带 tone 标记的产物。
+    const toned = await ensureRecordAudio(outPath, {
+      ffmpegPath, timeoutMs: DEFAULT_FFMPEG_TIMEOUT_MS, filterChain: toneChain,
+      dst: outPath.replace(/\.mp3$/i, `${toneTag}.mp3`),
+    })
+    return { ok: true, path: toned.path, cached: true }
   }
 
   // 固定的 python 端脚本（纯 ASCII，避免命令行编码问题）。
@@ -1284,14 +1453,27 @@ export async function synthesize(text, options) {
     'def p(n):',
     '    q = os.path.join(md, n)',
     '    return q if os.path.exists(q) else ""',
-    'vits = sherpa_onnx.OfflineTtsVitsModelConfig(',
-    '    model=os.path.join(md, "model.onnx"),',
-    '    lexicon=p("lexicon.txt"),',
-    '    tokens=p("tokens.txt"),',
-    '    dict_dir=(os.path.join(md, "dict") if os.path.isdir(os.path.join(md, "dict")) else ""),',
-    ')',
-    'cfg = sherpa_onnx.OfflineTtsConfig(',
-    '    model=sherpa_onnx.OfflineTtsModelConfig(vits=vits, num_threads=2, debug=False, provider="cpu"))',
+    'def lex(*names):',
+    '    q = [p(n) for n in names]',
+    '    return ",".join([x for x in q if x])',
+    '# voices.bin 在 = kokoro 多音色模型；否则按 vits 单音色模型处理。',
+    'if os.path.exists(os.path.join(md, "voices.bin")):',
+    '    kokoro = sherpa_onnx.OfflineTtsKokoroModelConfig(',
+    '        model=os.path.join(md, "model.onnx"),',
+    '        voices=os.path.join(md, "voices.bin"),',
+    '        tokens=p("tokens.txt"),',
+    '        lexicon=lex("lexicon-us-en.txt", "lexicon-gb-en.txt", "lexicon-zh.txt", "lexicon.txt"),',
+    '    )',
+    '    model = sherpa_onnx.OfflineTtsModelConfig(kokoro=kokoro, num_threads=2, debug=False, provider="cpu")',
+    'else:',
+    '    vits = sherpa_onnx.OfflineTtsVitsModelConfig(',
+    '        model=os.path.join(md, "model.onnx"),',
+    '        lexicon=p("lexicon.txt"),',
+    '        tokens=p("tokens.txt"),',
+    '        dict_dir=(os.path.join(md, "dict") if os.path.isdir(os.path.join(md, "dict")) else ""),',
+    '    )',
+    '    model = sherpa_onnx.OfflineTtsModelConfig(vits=vits, num_threads=2, debug=False, provider="cpu")',
+    'cfg = sherpa_onnx.OfflineTtsConfig(model=model)',
     'tts = sherpa_onnx.OfflineTts(cfg)',
     'audio = tts.generate(os.environ["DSH_TTS_TEXT"],',
     '                     sid=int(os.environ.get("DSH_TTS_SID", "0")),',
