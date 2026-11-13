@@ -174,14 +174,14 @@ window.__ModuleLoader__.load({
       },
       {
         key: 'ttsProvider',
-        label: '语音合成用什么',
-        kind: 'select',
+        label: '声音模块',
+        kind: 'voice-module',
         options: [
           ['edge', 'edge-tts（微软的，在本机 python 里跑）'],
           ['sherpa', 'sherpa（本地离线模型，不联网）'],
           ['feiyu', '肥鱼声音服务（本机服务，要先把它起起来）'],
         ],
-        hint: '三选一，默认 edge。edge = 用你指定的 python 跑 edge-tts；sherpa = 本机模型离线合成；feiyu = 调本机那个声音服务（默认 http://127.0.0.1:9880），吐 wav。',
+        hint: '二选一：本地合成（edge / sherpa）或肥鱼声音服务。选哪个就只显示哪一套设置，另一套收起来但值不会丢。',
       },
       {
         key: 'ttsVoice',
@@ -422,6 +422,122 @@ window.__ModuleLoader__.load({
       },
       { key: 'qqNumber', label: '快速登录用的 QQ 号', kind: 'text', hint: '需要先在 NapCat 里成功登录过一次。' },
     ]
+
+    // ── 分类 ──────────────────────────────────────────────────────────────────
+    // 设置项按主题分页，一次只显示一页 —— 60 多个字段铺成一长条没人看得下去。
+    // 加字段时把 key 放进某一组；忘了放也不会丢，会落进自动补的「其他」页。
+    const GROUPS = [
+      {
+        id: 'connect',
+        label: '连接',
+        keys: ['onebotUrl', 'onebotPort', 'accessTokenEnv', 'selfId', 'qqNumber'],
+      },
+      {
+        id: 'wake',
+        label: '唤醒',
+        keys: ['nicknames', 'wakeProbability', 'alwaysWakePrivate', 'whitelist', 'groupWhitelist', 'ownerWhitelist', 'atOnlyInGroup'],
+      },
+      {
+        id: 'session',
+        label: '会话',
+        keys: [
+          'sessionScope',
+          'targetSessionId',
+          'newSessionDir',
+          'newSessionModel',
+          'newSessionPreset',
+          'pruneBlankSessions',
+          'maxRecentTurns',
+          'rotateEnabled',
+          'rotateMaxTurns',
+          'rotatePressureRatio',
+          'agentPreset',
+        ],
+      },
+      {
+        id: 'reply',
+        label: '回复',
+        keys: [
+          'replyMode',
+          'delivery',
+          'replyWithQuote',
+          'stripMarkdown',
+          'replyMaxChars',
+          'replyGapMinMs',
+          'replyGapMaxMs',
+          'burstWaitMs',
+          'listenIdleMs',
+          'destinationProfiles',
+          'attachRecentChat',
+          'recentChatLimit',
+        ],
+      },
+      {
+        id: 'voice',
+        label: '声音',
+        keys: [
+          'voiceEnabled',
+          'ttsProvider',
+          'ttsVoice',
+          'ttsRate',
+          'ttsPitch',
+          'ttsPythonPath',
+          'ttsSid',
+          'ttsSpeed',
+          'ttsModelDir',
+          'voiceMaxChars',
+          'voiceCacheDir',
+          'ffmpegPath',
+          'feiyuBaseUrl',
+          'feiyuApiKey',
+          'feiyuVoice',
+          'feiyuStyle',
+          'feiyuTimeoutMs',
+          'feiyuPollIntervalMs',
+          'feiyuSingTimeoutMs',
+          'voiceMaxSongChars',
+        ],
+      },
+      {
+        id: 'vision',
+        label: '看图',
+        keys: ['describeImages', 'visionMode', 'visionProvider', 'visionProviderModel'],
+      },
+      { id: 'model', label: '模型', keys: ['modelChain', 'modelChainFailures'] },
+      {
+        id: 'napcat',
+        label: 'NapCat',
+        keys: ['autoStartNapcat', 'autoStartNapcatDelayMs', 'napcatInstallDir', 'napcatWebuiUrl', 'napcatVersion', 'downloadProxy'],
+      },
+      { id: 'about', label: '关于', keys: ['checkUpdateOnStart'] },
+    ]
+
+    // 忘了归类的字段兜一层：进「其他」页，绝不出现在任何页都点不到的地方。
+    const GROUPED_KEYS = new Set(GROUPS.reduce((all, g) => all.concat(g.keys), []))
+    const UNGROUPED_KEYS = FIELDS.map((f) => f.key).filter((k) => !GROUPED_KEYS.has(k))
+    if (UNGROUPED_KEYS.length > 0) GROUPS.push({ id: 'more', label: '其他', keys: UNGROUPED_KEYS })
+
+    /**
+     * 声音有两套，二选一：本地合成（edge / sherpa）与肥鱼声音服务。
+     * 只显示选中那一套的字段 —— 两套混在一起列出来是「以后混乱」的根源。
+     * 存储上仍然只有 `ttsProvider` 一个键（'edge' | 'sherpa' | 'feiyu'），老配置照旧。
+     */
+    const LOCAL_ONLY_KEYS = new Set(['ttsVoice', 'ttsRate', 'ttsPitch', 'ttsPythonPath', 'ttsSid', 'ttsSpeed', 'ttsModelDir'])
+    const FEIYU_ONLY_KEYS = new Set([
+      'feiyuBaseUrl',
+      'feiyuApiKey',
+      'feiyuVoice',
+      'feiyuStyle',
+      'feiyuTimeoutMs',
+      'feiyuPollIntervalMs',
+      'feiyuSingTimeoutMs',
+      'voiceMaxSongChars',
+    ])
+
+    /** 当前是不是「肥鱼声音服务」那一套。 */
+    function usesFeiyu(shown) {
+      return String(shown?.ttsProvider ?? '') === 'feiyu'
+    }
 
     function isIdList(kind) {
       return kind === 'list' || kind === 'group-list'
@@ -699,6 +815,78 @@ window.__ModuleLoader__.load({
       profileName: { fontSize: '13px', fontWeight: 600, flex: '1 1 auto', overflow: 'hidden', textOverflow: 'ellipsis' },
       profileGrid: { display: 'grid', gridTemplateColumns: 'minmax(96px, 130px) 1fr', gap: '6px 10px', alignItems: 'start' },
       profileLabel: { fontSize: '12px', opacity: 0.7, paddingTop: '6px' },
+      // 分类页签：一排能点的小标签，当前页描边加深
+      tabs: { display: 'flex', gap: '6px', flexWrap: 'wrap', paddingBottom: '2px' },
+      tab: {
+        padding: '4px 10px',
+        borderRadius: '999px',
+        border: BORDER,
+        background: 'transparent',
+        color: 'inherit',
+        cursor: 'pointer',
+        font: 'inherit',
+        fontSize: '12px',
+        lineHeight: 1.5,
+      },
+      tabActive: { background: 'rgba(127,127,127,0.18)', fontWeight: 600 },
+      // 声音二选一：两块并排，选中的那块描边加重
+      choice: { display: 'flex', gap: '8px', flexWrap: 'wrap' },
+      choiceCard: {
+        flex: '1 1 180px',
+        textAlign: 'left',
+        padding: '8px 10px',
+        borderRadius: '6px',
+        border: BORDER,
+        background: 'transparent',
+        color: 'inherit',
+        cursor: 'pointer',
+        font: 'inherit',
+        fontSize: '13px',
+      },
+      choiceOn: { background: 'rgba(127,127,127,0.16)', fontWeight: 600 },
+      choiceDesc: { display: 'block', fontSize: '11px', opacity: 0.6, marginTop: '3px', fontWeight: 400 },
+      // 左下角入口：侧栏脚部那个小按钮，跟 Settings 挨着
+      footEntry: {
+        display: 'flex',
+        alignItems: 'center',
+        gap: '8px',
+        width: '100%',
+        padding: '6px 10px',
+        borderRadius: '6px',
+        border: 'none',
+        background: 'transparent',
+        color: 'inherit',
+        cursor: 'pointer',
+        font: 'inherit',
+        fontSize: '13px',
+        textAlign: 'left',
+      },
+      footEntryIcon: { fontSize: '14px', lineHeight: 1, opacity: 0.85 },
+      // 面板浮层：铺满窗口，中间一块可滚动的设置面板
+      overlay: {
+        position: 'fixed',
+        inset: 0,
+        zIndex: 2147483000,
+        background: 'rgba(0,0,0,0.4)',
+        display: 'flex',
+        alignItems: 'flex-start',
+        justifyContent: 'center',
+        padding: '40px 16px',
+        overflow: 'auto',
+      },
+      sheet: {
+        width: 'min(760px, 100%)',
+        maxHeight: 'calc(100vh - 80px)',
+        overflow: 'auto',
+        borderRadius: '10px',
+        border: BORDER,
+        background: 'var(--dsh-bg-elevated, #fff)',
+        color: 'inherit',
+        boxShadow: '0 16px 48px rgba(0,0,0,0.28)',
+        padding: '4px 14px 14px',
+      },
+      sheetHead: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '10px 0 6px' },
+      sheetTitle: { fontSize: '14px', fontWeight: 600 },
     }
 
     function disabled(btn, off) {
@@ -719,6 +907,8 @@ window.__ModuleLoader__.load({
       const [note, setNote] = react.useState('')
       // 默认展开：字段直接可见。标题仍可收起。
       const [open, setOpen] = react.useState(true)
+      // 当前看的是哪一页（分类页签）。默认第一页，避免一打开就是空的。
+      const [activeGroup, setActiveGroup] = react.useState(GROUPS[0]?.id ?? 'more')
       // NapCat 的三个操作按钮：展开时拉一次接口；拿不到就保持 null（按钮禁用）。
       const [napcat, setNapcat] = react.useState(null)
       const [napcatBusy, setNapcatBusy] = react.useState('')
@@ -1069,6 +1259,81 @@ window.__ModuleLoader__.load({
         setDraft(next)
         setNote('')
         setError('')
+      }
+
+      /**
+       * 声音模块：二选一。
+       *
+       * 原来是三选一的下拉，本地那套（edge / sherpa）和肥鱼那套的设置项全铺在一页上，
+       * 看着像两个模块各管各的，容易配混。这里拆成两组卡片：
+       * - 本地合成：edge / sherpa，共用一个选区（都是本机 python 出来的声音）；
+       * - 肥鱼声音服务：本机 9880 那个服务。
+       * 选哪组就只显示哪组的字段，另一组的键值不会被清空。
+       */
+      function renderVoiceModule(field, cur) {
+        const value = String(cur ?? '')
+        const localOn = value === 'edge' || value === 'sherpa'
+        const feiyuOn = value === 'feiyu'
+
+        const pick = (next) => () => {
+          if (!snap.writable || busy) return
+          const draftNext = { ...shown }
+          draftNext[field.key] = next
+          setDraft(draftNext)
+          setNote('')
+          setError('')
+        }
+
+        // 本地那组再分 edge / sherpa —— 两种都在本机跑，但用的引擎不同。
+        const localEngine = (engine, label, desc) =>
+          h(
+            'button',
+            {
+              key: engine,
+              type: 'button',
+              style: { ...S.choiceCard, ...(value === engine ? S.choiceOn : {}) },
+              disabled: !snap.writable || busy,
+              onClick: pick(engine),
+            },
+            label,
+            h('span', { style: S.choiceDesc }, desc),
+          )
+
+        return h(
+          'div',
+          null,
+          h(
+            'div',
+            { style: S.choice },
+            h(
+              'div',
+              { style: { ...S.choiceCard, ...(localOn ? S.choiceOn : {}) } },
+              h(
+                'div',
+                { style: { fontWeight: 600, marginBottom: '6px' } },
+                '本地合成',
+                h('span', { style: S.choiceDesc }, '声音在本机算，不联网'),
+              ),
+              h(
+                'div',
+                { style: { display: 'flex', gap: '6px', flexWrap: 'wrap' } },
+                localEngine('edge', 'edge-tts', '微软的语音，靠本机 python 跑'),
+                localEngine('sherpa', 'sherpa', '本地离线模型，最稳'),
+              ),
+            ),
+            h(
+              'button',
+              {
+                type: 'button',
+                style: { ...S.choiceCard, ...(feiyuOn ? S.choiceOn : {}) },
+                disabled: !snap.writable || busy,
+                onClick: pick('feiyu'),
+              },
+              '肥鱼声音服务',
+              h('span', { style: S.choiceDesc }, '本机 9880 那个服务，声音更像人，也能唱歌'),
+            ),
+          ),
+        )
       }
 
       /**
@@ -1511,8 +1776,18 @@ window.__ModuleLoader__.load({
         )
       }
 
+      // 只看当前这一页的字段。声音那一页还要按二选一筛掉另一套。
+      const activeKeys = new Set(
+        (GROUPS.find((g) => g.id === activeGroup) ?? GROUPS[0] ?? { keys: [] }).keys,
+      )
+      const feiyu = usesFeiyu(shown)
       const rows = []
       for (const f of FIELDS) {
+        if (!activeKeys.has(f.key)) continue
+        // 声音二选一：选了肥鱼就藏本地那套字段，反之亦然。
+        // 藏起来只是不显示，值仍原样留在配置里 —— 切回去还在。
+        if (feiyu && LOCAL_ONLY_KEYS.has(f.key)) continue
+        if (!feiyu && FEIYU_ONLY_KEYS.has(f.key)) continue
         const value = shown[f.key]
         const overridden = Object.prototype.hasOwnProperty.call(user, f.key)
         let control
@@ -1534,6 +1809,8 @@ window.__ModuleLoader__.load({
             { style: S.input, value: String(value), disabled: !snap.writable || busy, onChange: change(f.key) },
             (f.options || []).map(([v, text]) => h('option', { key: v, value: v }, text)),
           )
+        } else if (f.kind === 'voice-module') {
+          control = renderVoiceModule(f, String(value ?? ''))
         } else if (f.kind === 'feiyu-voice') {
           control = renderFeiyuVoice(f, String(value ?? ''))
         } else if (f.kind === 'session') {
@@ -1895,14 +2172,34 @@ window.__ModuleLoader__.load({
           : null,
       )
 
+      // 分类页签：60 多个字段铺成一条太长了，一次只看一页。
+      // 每页只列属于它的字段；当前页高亮。
+      const tabsRow = h(
+        'div',
+        { style: S.tabs },
+        GROUPS.map((g) =>
+          h(
+            'button',
+            {
+              key: g.id,
+              type: 'button',
+              style: { ...S.tab, ...(g.id === activeGroup ? S.tabActive : {}) },
+              onClick: () => setActiveGroup(g.id),
+            },
+            g.label,
+          ),
+        ),
+      )
+
       if (!open) return h('div', { style: S.wrap }, header)
       return h(
         'div',
         { style: S.wrap },
         header,
         updateBox,
+        tabsRow,
         h('div', { style: S.grid }, rows),
-        napcatOps,
+        activeGroup === 'napcat' || activeGroup === 'connect' ? napcatOps : null,
         h(
           'div',
           { style: S.foot },
@@ -2200,6 +2497,67 @@ window.__ModuleLoader__.load({
       }
     }
 
+    /**
+     * 左下角入口：侧栏脚部、Settings 上面那个小按钮。
+     *
+     * 为什么不用 `sidebar.settings` 自己顶上：那个座位是 single，已经被宿主设置页占了，
+     * 抢不到。`sidebar.footer.action` 是 list，可以并存 —— 于是入口挂在这里，
+     * 点开后是一个居中的浮层面板，里面就是设置本体（分类页签 + 当前页字段）。
+     */
+    function FootEntry(props) {
+      const [open, setOpen] = react.useState(false)
+      const wide = props?.wide !== false
+      // Esc 关掉：浮层铺满窗口，没有键盘退出会让人以为被卡住了。
+      react.useEffect(() => {
+        if (!open) return undefined
+        const onKey = (event) => {
+          if (event?.key === 'Escape') setOpen(false)
+        }
+        window.addEventListener('keydown', onKey)
+        return () => window.removeEventListener('keydown', onKey)
+      }, [open])
+
+      const entry = h(
+        'button',
+        {
+          type: 'button',
+          style: S.footEntry,
+          title: 'QQ 桥接 Neko 设置',
+          onClick: () => setOpen(true),
+        },
+        h('span', { style: S.footEntryIcon }, '🐟'),
+        wide ? h('span', null, 'QQ 桥接 Neko') : null,
+      )
+      if (!open) return entry
+
+      return h(
+        react.Fragment,
+        null,
+        entry,
+        h(
+          'div',
+          {
+            style: S.overlay,
+            onClick: (event) => {
+              // 点遮罩关掉，点面板本身不关。
+              if (event.target === event.currentTarget) setOpen(false)
+            },
+          },
+          h(
+            'div',
+            { style: S.sheet },
+            h(
+              'div',
+              { style: S.sheetHead },
+              h('div', { style: S.sheetTitle }, 'QQ 桥接 Neko'),
+              h('button', { type: 'button', style: S.link, onClick: () => setOpen(false) }, '关闭'),
+            ),
+            typeof props?.render === 'function' ? props.render() : null,
+          ),
+        ),
+      )
+    }
+
     function apply(ctx) {
       // 卡片立刻挂上，不等 settingsScope / webUiSettings。
       // 这两个服务在部分 0.2.x 上不存在，ctx.inject 会一直等，回调永远不跑。
@@ -2258,6 +2616,11 @@ window.__ModuleLoader__.load({
         registerCard('settings.plugins.tab', { id: NS, order: 100, label: () => 'QQ 桥接 Neko' })
         registerCard('settings.plugin.item', { key: NS })
         registerCard('plugins.tab', { id: NS, order: 100, label: () => 'QQ 桥接 Neko' })
+        // 左下角入口：侧栏脚部（Settings 上方）。list 型座位，可以和别人并存。
+        // 点开是个浮层面板，里面就是这套设置 —— 不用再钻进「插件」里翻。
+        registerCard('sidebar.footer.action', { id: NS, order: 100 }, (props) =>
+          h(FootEntry, { wide: props?.wide, render: card }),
+        )
         registerCard(
           'plugins.detail.section',
           { id: 'qq-bridge-neko-settings', order: 50, label: () => 'QQ 桥接 Neko 设置' },
@@ -2295,7 +2658,7 @@ window.__ModuleLoader__.load({
     exports.name = '@fengye_nobug/dsh-qq-bridge-neko'
     // 纯函数给离线测试用（test-smoke.mjs 会在假 ctx 里真跑这个 bundle）。
     // Cordis 只认 apply / inject / name / Config，多余的导出它不管。
-    exports.__test = { sessionOptions, draftFrom, parse, fields: FIELDS, bindSettings, groupDisplayRows }
+    exports.__test = { sessionOptions, draftFrom, parse, fields: FIELDS, bindSettings, groupDisplayRows, groups: GROUPS, usesFeiyu, localOnlyKeys: [...LOCAL_ONLY_KEYS], feiyuOnlyKeys: [...FEIYU_ONLY_KEYS] }
     return module.exports
   },
 })
