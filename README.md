@@ -281,6 +281,8 @@ DSH 0.2 的卡片把值写进 `$DSH_HOME/qq-bridge-neko-settings.json`。这份�
 3. 在 GitHub 上建 Release，把 `.tgz` 作为资产上传（`.gitignore` 已忽略 `*.tgz`，不入库）。
 4. 用上面的 `dsh plugin add` 命令装 `.tgz` 或 `#vX.Y.Z` 验证。
 
+**版本号怎么涨**：每次改动只动最后一位（patch）+1。patch 涨过 9 就进位到中间那位（minor）+1、patch 归 0，中间那位允许是两位数——`1.1.9` 的下一版是 `1.2.0`，`1.9.9` 的下一版是 `1.10.0`，`1.10.9` 的下一版是 `1.11.0`。第一位（major）不自动涨，只有明确要求时才改。
+
 `.github/workflows/npm-publish.yml` 只是**手动**触发的可选通道（`workflow_dispatch`，只在本仓库 `main` 上跑），默认不在 push 时发布。它有 `NPM_TOKEN` 也发布不了这个包——作用域没在 npm 注册过。不用发布就完全别碰它。
 
 ## 许可
