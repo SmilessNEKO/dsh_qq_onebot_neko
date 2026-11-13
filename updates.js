@@ -1081,7 +1081,7 @@ export function repackReleaseTarball(bytes, expected) {
   const wantName = expected.name || ''
   const nameOk = wantName !== ''
     ? manifest?.name === wantName
-    : manifest?.name === PACKAGE_NAME || manifest?.name === LEGACY_UNSCOPED_NAME
+    : manifest?.name === PACKAGE_NAME || manifest?.name === LEGACY_UNSCOPED_NAME || manifest?.name === LEGACY_SCOPED_NAME
   if (!nameOk) {
     const error = new Error('name')
     error.code = 'wrong-name'
@@ -1763,15 +1763,15 @@ function writeTextAtomic(file, text) {
 export function alignCordisNames(input = {}) {
   const profileDir = String(input.profileDir ?? '')
   if (profileDir === '') return { ok: false, reason: 'no-profile', changed: [], name: '' }
+  const current = readInstalledManifest(join(profileDir, 'node_modules', 'dsh-qq-bridge-neko'))
   const scoped = readInstalledManifest(join(profileDir, 'node_modules', ...LEGACY_SCOPED_NAME.split('/')))
-  const legacy = readInstalledManifest(join(profileDir, 'node_modules', 'dsh-qq-bridge-neko'))
-  const candidates = [scoped, legacy].filter(Boolean)
+  const candidates = [current, scoped].filter(Boolean)
   let installed = null
   if (input.expectedVersion) {
     installed = candidates.find((item) => compareSemver(item.version, input.expectedVersion) === 0) || null
     if (!installed) return { ok: false, reason: 'version', changed: [], name: '' }
   } else {
-    installed = scoped || legacy
+    installed = current || scoped
   }
   if (!installed) return { ok: false, reason: 'missing', changed: [], name: '' }
   const files = []

@@ -7,7 +7,8 @@
   - **npm 上两个名字都查不到**（`registry.npmjs.org` 与 `registry.npmmirror.com` 对两个名字都回 404），所以这条改动不影响任何 npm 通道 —— 本来就没有。安装仍旧只走本地 `.tgz` 或 GitHub tag。
 - **兼容老安装**。v1.1.5 及更早装的是带作用域的目录 `node_modules/@fengye_nobug/dsh-qq-bridge-neko`。新增导出 `LEGACY_SCOPED_NAME = '@fengye_nobug/dsh-qq-bridge-neko'`：
   - `isWritablePackageName()` 认它，所以升级时 `cordis.patch.yml` 里残留的旧作用域名仍会被改写成磁盘上的实际包名（`rewriteCordisPackageName` / `alignCordisNames`）；
-  - `installedMatches()` 与 `alignCordisNames()` 读已安装清单时，两条路径都查（`node_modules/dsh-qq-bridge-neko` 与 `node_modules/@fengye_nobug/dsh-qq-bridge-neko`），老目录照样能升级；
+  - `installedMatches()` 与 `alignCordisNames()` 读已安装清单时，两条路径都查（`node_modules/dsh-qq-bridge-neko` 与 `node_modules/@fengye_nobug/dsh-qq-bridge-neko`），老目录照样能升级；`alignCordisNames()` **优先用新目录**的清单（新目录里的 `name` 才是当前包名），否则两个目录并存时会被老目录的旧名字带着把补丁改回去；
+  - 下载校验（`repackReleaseTarball` 的 `expected.name` 为空那条分支）也认旧作用域名 —— v1.1.5 及更早的 release 资产里 `name` 还是旧的，从老 tag 升级不会因为名字不匹配被拒；
   - `client/client.js` 的 `bindSettings` 候选命名空间与 `subjectIsOurs()` 也保留旧作用域名，插件详情页对老安装照样认得出自己。
 - **设置卡片不用改**：settings 命名空间一直是 `qq-bridge-neko`（Cordis id），跟包名无关，所以已存的设置、state 文件、API 路径全部沿用。
 - 自测：`test-updates.mjs` 113 条、`test-smoke.mjs` 698 条、`test-voice.mjs` 161 条，全部通过。测试基线里的「当前包名」跟着改成无作用域名；`plantScoped()` 造的是真实升级场景（磁盘上已是新目录、补丁里还留着旧作用域名），用来钉住 `alignCordisNames` 的改写行为。
