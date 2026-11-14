@@ -1086,6 +1086,36 @@ function cacheKeyOfScore(bytes) {
 }
 
 /**
+ * 把 edge-tts 子进程的 stderr 归纳成一句人能看懂的判断。
+ *
+ * 不是为了"兜底"，是为了让读到失败的模型**一眼知道是哪一类问题**：
+ * 网络连不上 / 音色名不对 / python 里没装 edge-tts / 别的。
+ * 它只是解释，不改变任何行为——失败仍然是失败，声音仍然不会发出去。
+ *
+ * @param {string} stderr
+ * @returns {{ kind: string, hint: string }}
+ */
+export function ttsFailureHint(stderr) {
+  const text = String(stderr ?? '')
+  if (/Invalid voice|ValueError: Invalid .*'(?:voice|rate|pitch)'/i.test(text)) {
+    return { kind: 'bad-voice', hint: 'edge-tts 不认这个音色名（或 rate/pitch 写法）。音色得像 zh-CN-XiaoyiNeural 这种，rate 像 -8%，pitch 像 +12Hz。' }
+  }
+  if (/ClientConnectorError|Cannot connect to host|ConnectionRefused|getaddrinfo|ConnectError|ServerDisconnectedError|nodename nor servname/i.test(text)) {
+    return { kind: 'network', hint: '连不上微软的语音服务（本机网络/代理/防火墙的问题），不是音色或代码的问题。' }
+  }
+  if (/ModuleNotFoundError: No module named .edge_tts./i.test(text)) {
+    return { kind: 'missing-module', hint: '这个 python 里没装 edge-tts（设置里的「哪个 python 能跑 edge-tts」指错了，或者那个环境里没装）。' }
+  }
+  if (/TimeoutError|asyncio\.exceptions\.TimeoutError|handshake/i.test(text)) {
+    return { kind: 'timeout', hint: '和微软的语音服务握手超时（网络慢或被拦）。' }
+  }
+  if (/NoAudioReceived|403|401|Unauthorized|Forbidden/i.test(text)) {
+    return { kind: 'rejected', hint: '微软那边拒了这次请求（可能被限流或需要代理）。' }
+  }
+  return { kind: 'unknown', hint: '' }
+}
+
+/**
  * 把合成产物变成「NapCat 稳吃的」音频路径。
  *
  * 实测 NapCat 吃 mp3；肥鱼服务产的是 WAV，所以这里用本机 ffmpeg 转一份 mp3。
@@ -1523,7 +1553,10 @@ export async function synthesize(text, options) {
       settled = true
       clearTimeout(timer)
       if (code !== 0) {
-        resolve({ ok: false, reason: `tts-exit-${code}: ${stderr.trim().slice(-300)}` })
+        const tail = stderr.trim().slice(-300)
+        const hint = ttsFailureHint(stderr)
+        const judged = hint.hint === '' ? '' : `（${hint.kind}：${hint.hint}）`
+        resolve({ ok: false, reason: `tts-exit-${code}: ${tail}${judged}` })
         return
       }
       if (!existsSync(outPath) || statSync(outPath).size === 0) {

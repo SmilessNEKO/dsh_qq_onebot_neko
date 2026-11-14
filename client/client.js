@@ -204,14 +204,14 @@ window.__ModuleLoader__.load({
         section: '引擎',
         label: '哪个 python 能跑 edge-tts',
         kind: 'text',
-        hint: '填装好 edge-tts 的 python.exe 绝对路径。留空 = 用 PATH 里的 python（大多数系统 python 没装 edge-tts，会合成失败才降级发文字）。',
+        hint: '填装好 edge-tts 的 python.exe 绝对路径。留空 = 用 PATH 里的 python（大多数系统 python 没装 edge-tts，合成会直接失败，错误会原样报给 AI）。',
       },
       {
         key: 'voiceMaxChars',
         section: '通用',
         label: '一条语音最多多少字',
         kind: 'number',
-        hint: '超过这个字数就不合成、直接发文字（前面加「语音没合成出来」）。默认 120。',
+        hint: '超过这个字数就不合成，直接把失败原因回给 AI（一条消息都不发）。默认 120。',
       },
       {
         key: 'voiceCacheDir',
@@ -326,7 +326,7 @@ window.__ModuleLoader__.load({
         section: '服务',
         label: '服务没起就自动拉起',
         kind: 'boolean',
-        hint: '合成前先问一下本地声音服务；没开就自己把它启动起来再合成。关掉后服务没起就直接降级发文字。',
+        hint: '合成前先问一下本地声音服务；没开就自己把它启动起来再合成。关掉后服务没起就直接报失败原因给 AI。',
       },
       {
         key: 'feiyuServerDir',

@@ -291,11 +291,11 @@ export const Config = Schema.object({
   voicePitchSemitones: Schema.number().default(DEFAULT_VOICE_PITCH_SEMITONES).description('音高偏移（半音，-12 ~ 12）。负数更沉、正数更尖。默认 0。'),
   voiceSpeedFactor: Schema.number().default(DEFAULT_VOICE_SPEED_FACTOR).description('语速倍率（0.5 ~ 2）。1 = 原速，1.15 = 快一点。三个引擎都生效。默认 1。'),
   // ── 肥鱼服务的自动启停（插件自己管，不需要人盯着）──────────────────────────
-  feiyuAutoStart: Schema.boolean().default(true).description('肥鱼服务没起时，插件自己把它拉起来再合成（默认开）。关掉后服务没起就直接降级发文字。'),
+  feiyuAutoStart: Schema.boolean().default(true).description('肥鱼服务没起时，插件自己把它拉起来再合成（默认开）。关掉后服务没起就直接报失败，不发替代文字。'),
   feiyuServerDir: Schema.string().default('').description('肥鱼服务端目录（里面有 .venv 和 configs/voice_service.json）。自动启动要用它；留空 = 不自动启动。'),
   feiyuPythonPath: Schema.string().default('').description('跑肥鱼服务的 python。留空 = 用服务端目录下的 .venv（Windows 的 Scripts\\python.exe / Linux 的 bin/python）。'),
   feiyuIdleStopMinutes: Schema.number().default(DEFAULT_FEIYU_IDLE_STOP_MINUTES).description('肥鱼服务空闲多少分钟就自动停掉、释放显存。默认 10；填 0 = 一直开着。'),
-  voiceMaxChars: Schema.number().default(DEFAULT_VOICE_MAX_CHARS).description('单条语音最多多少字。超过就合成失败、降级发文字。默认 120。'),
+  voiceMaxChars: Schema.number().default(DEFAULT_VOICE_MAX_CHARS).description('单条语音最多多少字。超过就不合成，直接回失败原因。默认 120。'),
   voiceCacheDir: Schema.string().default('').description('合成好的音频放哪（mp3 / wav）。留空 = $DSH_HOME/qq-bridge-neko-voice。同一段话 + 同引擎同参数只合成一次。'),
   listenIdleMs: Schema.number().default(DEFAULT_LISTEN_IDLE_MS).description('会话跟随期间，这么久没有新消息就自动停听。默认 120000（2 分钟）。'),
   // ── 每个 QQ 目的地的个性化 ────────────────────────────────────────────────
@@ -409,11 +409,11 @@ const BridgeSettings = Schema.object({
   voicePitchSemitones: Schema.number().default(DEFAULT_VOICE_PITCH_SEMITONES).description('音高偏移（半音，-12 ~ 12）。负数更沉、正数更尖。默认 0。'),
   voiceSpeedFactor: Schema.number().default(DEFAULT_VOICE_SPEED_FACTOR).description('语速倍率（0.5 ~ 2）。1 = 原速，1.15 = 快一点。三个引擎都生效。默认 1。'),
   // ── 肥鱼服务的自动启停（插件自己管，不需要人盯着）──────────────────────────
-  feiyuAutoStart: Schema.boolean().default(true).description('肥鱼服务没起时，插件自己把它拉起来再合成（默认开）。关掉后服务没起就直接降级发文字。'),
+  feiyuAutoStart: Schema.boolean().default(true).description('肥鱼服务没起时，插件自己把它拉起来再合成（默认开）。关掉后服务没起就直接报失败，不发替代文字。'),
   feiyuServerDir: Schema.string().default('').description('肥鱼服务端目录（里面有 .venv 和 configs/voice_service.json）。自动启动要用它；留空 = 不自动启动。'),
   feiyuPythonPath: Schema.string().default('').description('跑肥鱼服务的 python。留空 = 用服务端目录下的 .venv（Windows 的 Scripts\\python.exe / Linux 的 bin/python）。'),
   feiyuIdleStopMinutes: Schema.number().default(DEFAULT_FEIYU_IDLE_STOP_MINUTES).description('肥鱼服务空闲多少分钟就自动停掉、释放显存。默认 10；填 0 = 一直开着。'),
-  voiceMaxChars: Schema.number().default(DEFAULT_VOICE_MAX_CHARS).description('单条语音最多多少字。超过就降级发文字。默认 120。'),
+  voiceMaxChars: Schema.number().default(DEFAULT_VOICE_MAX_CHARS).description('单条语音最多多少字。超过就不合成，直接回失败原因。默认 120。'),
   voiceCacheDir: Schema.string().default('').description('合成好的音频放哪（mp3 / wav）。留空 = $DSH_HOME/qq-bridge-neko-voice。同一段话 + 同引擎同参数只合成一次。'),
   // ── 每个 QQ 目的地的个性化 ────────────────────────────────────────────────
   destinationProfiles: Schema.array(DestinationProfile).default([]).description('按群 / 私聊分别设置休眠时段、24 小时实时回复、等待合并与停听时间。'),
@@ -4284,8 +4284,10 @@ export function apply(ctx, config) {
    * 返回与 `sendToQQ` 同形状的结果，`sent` 是**真的发出去的条数**；
    * 一段都没发出去才算 dropped（部分失败时 sent>0、dropped:false，并在 `failed` 里列出失败的段）。
    *
-   * 合成失败**降级发文字**：用户宁可在群里看到一句字，也不想因为 TTS 抽风整条消失。
-   * 降级发出去的正文前会加一个「（语音没合成出来）」的说明，让人知道这不是我故意不打字。
+   * 合成失败**不降级发文字**：真实原因原样交回调用方，由模型自己决定怎么办
+   * （换引擎重试 / 缩短 / 换句话 / 干脆用文字工具发）。
+   * 替用户写一句「（语音没合成出来）」等于替他做了决定，还会把真正的错误埋掉——
+   * 这里只负责给出准确的失败原因，不替他兜。
    */
   async function sendVoicePieces(pieces, dest, { s, quoteId }) {
     const cacheDir = resolveVoiceCacheDir(s)
@@ -4300,29 +4302,25 @@ export function apply(ctx, config) {
         const said = String(piece.text ?? '')
         const chars = [...said].length
         if (chars > s.voiceMaxChars) {
-          logger.warn(`语音片段太长（${chars} > ${s.voiceMaxChars}），降级发文字`)
-          failed.push({ index: i, reason: 'voice-too-long', limit: s.voiceMaxChars, length: chars })
-        } else {
-          const tts = await synthesizeWithSettings(said, s, cacheDir)
-          if (tts.ok) {
-            const segments = []
-            // 引用只挂在第一条上，和文字分条一致。
-            if (isFirst && s.replyWithQuote && quoteId) {
-              segments.push({ type: 'reply', data: { id: String(quoteId) } })
-            }
-            segments.push(recordSegment(tts.path))
-            const ok = await sendSegments(dest, segments)
-            if (ok) { sent++; continue }
-            failed.push({ index: i, reason: 'send-failed' })
-            continue
-          }
-          logger.warn(`语音合成失败：${tts.reason}`)
-          failed.push({ index: i, reason: tts.reason })
+          logger.warn(`语音片段太长（${chars} > ${s.voiceMaxChars}），这一段不发`)
+          failed.push({ index: i, reason: 'voice-too-long', limit: s.voiceMaxChars, length: chars, text: said })
+          continue
         }
-        // 降级：把这段话当文字发。加一句说明，别让人以为语音是被吞了。
-        const fallback = `（语音没合成出来）${said}`
-        const ok = await sendTextPiece(fallback, dest, { s, quoteId: isFirst ? quoteId : null })
-        if (ok) sent++
+        const tts = await synthesizeWithSettings(said, s, cacheDir)
+        if (!tts.ok) {
+          logger.warn(`语音合成失败：${tts.reason}`)
+          failed.push({ index: i, reason: tts.reason, text: said })
+          continue
+        }
+        const segments = []
+        // 引用只挂在第一条上，和文字分条一致。
+        if (isFirst && s.replyWithQuote && quoteId) {
+          segments.push({ type: 'reply', data: { id: String(quoteId) } })
+        }
+        segments.push(recordSegment(tts.path))
+        const ok = await sendSegments(dest, segments)
+        if (ok) { sent++; continue }
+        failed.push({ index: i, reason: 'send-failed', text: said })
         continue
       }
 
@@ -4333,7 +4331,13 @@ export function apply(ctx, config) {
     if (sent === 0) {
       const reason = failed[0]?.reason ?? 'empty'
       logger.warn(`语音出站：一段都没发出去（${reason}）`)
-      return { sent: 0, dropped: true, reason, voiceFailed: failed }
+      return {
+        sent: 0,
+        dropped: true,
+        reason,
+        error: voiceFailureText(failed),
+        voiceFailed: failed,
+      }
     }
     return { sent, dropped: false, destination: dest, ...(failed.length ? { failed } : {}) }
   }
@@ -4376,7 +4380,7 @@ export function apply(ctx, config) {
 
   /**
    * 按设置合成语音。`ttsProvider` 认 edge / feiyu 两个 —— 别偷偷换实现，
-   * 认不出的值直接失败，让调用方降级，而不是无声地用别的东西顶着。
+   * 认不出的值直接失败并报原因，而不是无声地用别的东西顶着。
    *
    * `overrides` 是给工具调用用的单次覆盖（provider / voice / rate / pitch / style）；
    * 传空字符串等于没传，免得把设置里的值抹成空。
@@ -4923,6 +4927,15 @@ export function apply(ctx, config) {
       return `send-failed（发到 QQ 时传输失败，一条都没有发出${detail}）`
     }
     if (reason === 'not-allowlisted') return 'not-allowlisted（显式指定的群或私聊不在白名单里）'
+    if (reason === 'voice-too-long') return 'voice-too-long（这段超过语音字数上限，没有合成、也没有发出去）'
+    // 语音合成的失败原因（`tts-exit-1: …` / `timeout: 20000ms` / `service-down: …` 等）：
+    // 原样带上真实原因，让模型自己判断要重试、换引擎，还是改用文字发。
+    if (/^(tts-|spawn-|timeout|connect-failed|service-|start-timeout|health-|auth-failed|speech-|job-|audio-|cache-|no-cache-dir|cache-dir-unusable|unsupported-tts-provider|no-fetch|bad-base-url|server-dir-missing|python-missing|no-job-id|empty-text|no-lyrics|empty-score|form-unavailable|no-(speech|sing)-id)/.test(
+      String(reason ?? ''),
+    )) {
+      const detail = error ? `：${String(error).slice(0, 180)}` : `：${String(reason)}`
+      return `voice-failed（语音没合成出来，一条都没有发出${detail}）`
+    }
     return String(reason)
   }
 
@@ -6544,7 +6557,8 @@ export function apply(ctx, config) {
       '音色 / 语速 / 音高 / 引擎 / 语气默认读设置，也可以用 voice / rate / pitch / provider / style / tone / semitones / speed 单次覆盖' +
       '（provider 取 edge | feiyu；音色写 edge-tts 那种，例如 zh-CN-XiaoyiNeural、-8%、+12Hz）。' +
       'text 只写要念的内容本体：不要带 [语音] 标记，也不带表情名和 Markdown，那些念不出来。' +
-      '合成失败或超过 voiceMaxChars 时**降级发文字**（正文前加「（语音没合成出来）」），不会整条消失。' +
+      '合成失败**不发替代文字**：返回 `sent: 0`、`dropped: true` 与真实的 `reason` / `error`，' +
+      '一条消息都不会发到 QQ。要不要换引擎重试、缩短、还是改用文字发，由你读完错误自己决定。' +
       '合成好的音频会缓存（键里含引擎与参数），同一句同一套参数只合成一次。',
     parameters: {
       text: { type: 'string', required: true, description: '要念的内容本体，不要带标记或表情名。' },
@@ -6633,17 +6647,19 @@ export function apply(ctx, config) {
         const ok = await sendSegments(dest, segments)
         result = ok
           ? { sent: 1, dropped: false, kind: 'voice', provider, destination: dest, cached: tts.cached === true }
-          : { sent: 0, dropped: true, reason: 'send-failed', kind: 'voice' }
+          : { sent: 0, dropped: true, reason: 'send-failed', kind: 'voice', error: '语音合成出来了，但发到 QQ 时传输失败。' }
       } else {
-        // 合成失败：降级发文字，让人至少收到这句话。
-        logger.warn(`qq_bridge_neko_voice 合成失败（${provider}）：${tts.reason}，降级发文字`)
-        const ok = await sendTextPiece(`（语音没合成出来）${said}`, dest, {
-          s,
-          quoteId: resolved.quoteMessageId,
-        })
-        result = ok
-          ? { sent: 1, dropped: false, kind: 'text-fallback', provider, destination: dest, voiceError: tts.reason }
-          : { sent: 0, dropped: true, reason: tts.reason, kind: 'text-fallback-failed' }
+        // 合成失败：**不发替代文字**，只把真实原因交回去。替用户写一句「（语音没合成出来）」
+        // 等于替他做了决定，还会把真正的错误埋掉 —— 让他自己看着错误决定下一步。
+        logger.warn(`qq_bridge_neko_voice 合成失败（${provider}）：${tts.reason}`)
+        result = {
+          sent: 0,
+          dropped: true,
+          kind: 'voice',
+          provider,
+          reason: tts.reason,
+          error: voiceFailureText([{ reason: tts.reason }]),
+        }
       }
 
       if (result.sent > 0) {
@@ -6652,7 +6668,7 @@ export function apply(ctx, config) {
           via: 'tool',
           nonQQTurn: !gateOf(sessionIdOf(exec?.agent)).currentTurnFromQQ,
           to: dest,
-          text: result.kind === 'voice' ? `[语音] ${said}` : `（语音没合成出来）${said}`,
+          text: `[语音] ${said}`,
         })
       } else {
         recordDropped({
@@ -6669,7 +6685,8 @@ export function apply(ctx, config) {
   // ── 唱歌：按谱把一首原创小曲唱出来发出去（ABC 谱 + 歌词）───────────────
   //
   // 走肥鱼服务的 /v1/singing：谱面主旋律 + 逐字歌词 → SVS 出声 → RVC 换成肥鱼的声音。
-  // 与 qq_bridge_neko_voice 一样要过语音开关与出站门；失败降级成文字说明，不静默丢。
+  // 与 qq_bridge_neko_voice 一样要过语音开关与出站门；失败**不发替代文字**，
+  // 只把真实原因回给模型（见 voiceFailureText 的注释）。
   ctx.tools.register(defineTool({
     name: 'qq_bridge_neko_sing',
     description:
@@ -6678,7 +6695,8 @@ export function apply(ctx, config) {
       'score 用 ABC 记谱写单音主旋律（一个音符一个字，一字多音用 _ 占位），' +
       'lyrics 写歌词（只能有汉字；标点空格会被忽略）。' +
       '谱子必须是原创或公有旋律，别唱别人的版权歌。' +
-      '合成失败或歌词超限时**降级发文字**（正文前加「（歌没唱出来）」），不会整条消失。',
+      '失败**不发替代文字**：返回 `sent: 0`、`dropped: true` 与真实的 `reason` / `error`，一条消息都不会发到 QQ。' +
+      '要不要换引擎、改谱子、还是改用文字发，由你读完错误自己决定。',
     parameters: {
       score: { type: 'string', required: true, description: 'ABC 记谱的谱面正文（单音主旋律、不含和弦与反复记号）。' },
       lyrics: { type: 'string', required: true, description: '歌词本体：只有汉字，标点空格忽略；字数必须等于音符数（一字多音用 _）。' },
@@ -6720,9 +6738,14 @@ export function apply(ctx, config) {
 
       if (String(s.ttsProvider).trim().toLowerCase() !== 'feiyu') {
         // 唱歌只有肥鱼这一条路（SVS + RVC 都在那个服务里），别的引擎唱不了。
-        const said = `（歌没唱出来）现在没接唱歌的引擎，ttsProvider 得是 feiyu 才行`
-        const ok = await sendTextPiece(said, dest, { s, quoteId: resolved.quoteMessageId })
-        return JSON.stringify({ sent: ok ? 1 : 0, dropped: !ok, kind: 'text-fallback', reason: 'singing-needs-feiyu' }, null, 2)
+        // 不发替代文字：这是一条明确的「这件事现在做不了」，交给模型自己处理。
+        return JSON.stringify({
+          sent: 0,
+          dropped: true,
+          kind: 'song',
+          reason: 'singing-needs-feiyu',
+          error: '唱歌只有肥鱼声音服务这一条路（SVS + RVC 都在那个服务里）。当前 ttsProvider 不是 feiyu，所以没有合成也没有发出任何消息。',
+        }, null, 2)
       }
 
       const cacheDir = resolveVoiceCacheDir(s)
@@ -6764,13 +6787,11 @@ export function apply(ctx, config) {
         const ok = await sendSegments(dest, segments)
         result = ok
           ? { sent: 1, dropped: false, kind: 'song', destination: dest, cached: sing.cached === true, seconds: sing.seconds }
-          : { sent: 0, dropped: true, reason: 'send-failed', kind: 'song' }
+          : { sent: 0, dropped: true, reason: 'send-failed', kind: 'song', error: '歌声合成出来了，但发到 QQ 时传输失败。' }
       } else {
-        logger.warn(`qq_bridge_neko_sing 失败：${sing.reason}，降级发文字`)
-        const ok = await sendTextPiece(`（歌没唱出来）${sing.reason}`, dest, { s, quoteId: resolved.quoteMessageId })
-        result = ok
-          ? { sent: 1, dropped: false, kind: 'text-fallback', voiceError: sing.reason }
-          : { sent: 0, dropped: true, reason: sing.reason, kind: 'text-fallback-failed' }
+        // 合成失败：**不发替代文字**，只把真实原因交回去，由模型自己决定下一步。
+        logger.warn(`qq_bridge_neko_sing 失败：${sing.reason}`)
+        result = { sent: 0, dropped: true, kind: 'song', reason: sing.reason, error: voiceFailureText([{ reason: sing.reason }]) }
       }
 
       if (result.sent > 0) {
@@ -6779,7 +6800,7 @@ export function apply(ctx, config) {
           via: 'tool',
           nonQQTurn: !gateOf(sessionIdOf(exec?.agent)).currentTurnFromQQ,
           to: dest,
-          text: result.kind === 'song' ? `[唱歌] ${[...lyrics].slice(0, 30).join('')}` : `（歌没唱出来）${sing.reason ?? ''}`,
+          text: `[唱歌] ${[...lyrics].slice(0, 30).join('')}`,
         })
       } else {
         recordDropped({
@@ -7210,6 +7231,24 @@ export function truncateText(text, max) {
   const s = String(text ?? '')
   if (!Number.isFinite(max) || max <= 0) return ''
   return s.length <= max ? s : `${s.slice(0, max)}…（已截断）`
+}
+
+/**
+ * 语音失败原因 → 给模型看的一句话（真实原因，不加修饰地转述）。
+ *
+ * 这里**只解释发生了什么**，不替模型决定下一步：要不要换引擎、缩短、还是改用文字工具，
+ * 都由读到这句话的模型自己判断。也因此**不生成任何替代文案**——这条语音就是没发出去。
+ *
+ * 导出是为了可测试。
+ */
+export function voiceFailureText(failed) {
+  const first = Array.isArray(failed) ? failed[0] : null
+  if (!first) return '语音合成失败（没有拿到更具体的原因）。'
+  if (first.reason === 'voice-too-long') {
+    return `这段 ${first.length} 字，超过语音上限 ${first.limit} 字，没有合成也没有发出去。缩短或拆成几段再试。`
+  }
+  if (first.reason === 'send-failed') return '语音合成出来了，但发到 QQ 时传输失败。'
+  return `语音合成失败：${first.reason}`
 }
 
 // 引用回复相关的纯函数（fetchQuotedText / formatQuotePrefix / mapOneBotMessage）

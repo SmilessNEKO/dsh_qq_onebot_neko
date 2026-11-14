@@ -22,7 +22,7 @@ registerHooks({
   },
 })
 
-const { rotateSessionVerdict, sessionReplacedVerdict, blankSessionVerdict } = await import(
+const { rotateSessionVerdict, sessionReplacedVerdict, blankSessionVerdict, voiceFailureText } = await import(
   new URL('./index.js', import.meta.url).href
 )
 
@@ -148,6 +148,15 @@ check('events 不是数组时不当成证据', blankSessionVerdict({ sessionId: 
 check('空 sessionId 不判空白', blankSessionVerdict({ sessionId: '', events: [] }).blank === false)
 check('undefined 不判空白', blankSessionVerdict().blank === false)
 check('null 不判空白', blankSessionVerdict(null).blank === false)
+
+// ---- voiceFailureText：语音失败只解释、不生成替代文案 ----
+check('语音失败：超长说清字数和上限', voiceFailureText([{ reason: 'voice-too-long', length: 200, limit: 120 }]).includes('200 字') && voiceFailureText([{ reason: 'voice-too-long', length: 200, limit: 120 }]).includes('120 字'))
+check('语音失败：超长文案不包含「已发出」的暗示', !/已发|发出去了/.test(voiceFailureText([{ reason: 'voice-too-long', length: 200, limit: 120 }])))
+check('语音失败：传输失败单独一句', voiceFailureText([{ reason: 'send-failed' }]).includes('传输失败'))
+check('语音失败：引擎原因原样带出', voiceFailureText([{ reason: 'tts-exit-1: ValueError' }]).includes('tts-exit-1: ValueError'))
+check('语音失败：空参数给一句兜底说明', voiceFailureText([]).includes('语音合成失败') && voiceFailureText().includes('语音合成失败'))
+check('语音失败：非数组参数不炸', voiceFailureText('oops').includes('语音合成失败'))
+check('语音失败：任何分支都不返回「（语音没合成出来）」这种替代文案', ![voiceFailureText([]), voiceFailureText([{ reason: 'send-failed' }]), voiceFailureText([{ reason: 'x' }])].some((t) => t.includes('（语音没合成出来）')))
 
 console.log(failed === 0 ? '\n全部通过' : `\n${failed} 项失败`)
 process.exit(failed === 0 ? 0 : 1)

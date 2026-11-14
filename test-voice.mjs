@@ -55,6 +55,7 @@ import {
   VOICE_OUTPUT_BITRATE,
   VOICE_OUTPUT_SAMPLE_RATE,
   sampleRateFor,
+  ttsFailureHint,
   VOICE_PROVIDERS,
 } from './voice.js'
 
@@ -1136,6 +1137,57 @@ function fakeWorld() {
   })
   check('语气：服务不可用时照样按失败返回（不吞异常）', moodRes.ok === false, JSON.stringify(moodRes))
   rmSync(moodDir, { recursive: true, force: true })
+}
+
+// 36) ttsFailureHint：失败只解释、不兜底 —— 每种 stderr 都要归到正确的一类
+{
+  check('判类：非法音色 → bad-voice',
+    ttsFailureHint("ValueError: Invalid voice 'zh-CN-NotARealVoice'.").kind === 'bad-voice',
+    ttsFailureHint("ValueError: Invalid voice 'zh-CN-NotARealVoice'.").kind)
+  check('判类：连不上 → network',
+    ttsFailureHint('aiohttp.client_exceptions.ClientConnectorError: Cannot connect to host speech.platform.bing.com').kind === 'network')
+  check('判类：DNS 打不通也算 network',
+    ttsFailureHint('[Errno 11001] getaddrinfo failed').kind === 'network')
+  check('判类：没装包 → missing-module',
+    ttsFailureHint("ModuleNotFoundError: No module named 'edge_tts'").kind === 'missing-module')
+  check('判类：握手超时 → timeout',
+    ttsFailureHint('asyncio.exceptions.TimeoutError').kind === 'timeout')
+  check('判类：被动拒绝 → rejected',
+    ttsFailureHint('NoAudioReceived: No audio was received').kind === 'rejected')
+  check('判类：认不出 → unknown 且 hint 为空',
+    ttsFailureHint('something exploded').kind === 'unknown' && ttsFailureHint('something exploded').hint === '')
+  check('判类：空输入不炸',
+    ttsFailureHint('').kind === 'unknown' && ttsFailureHint(null).kind === 'unknown')
+  check('判类：每类都带一句人话', ['bad-voice', 'network', 'missing-module', 'timeout', 'rejected'].every((kind) => {
+    const probe = {
+      'bad-voice': "Invalid voice 'x'.",
+      network: 'ClientConnectorError',
+      'missing-module': "ModuleNotFoundError: No module named 'edge_tts'",
+      timeout: 'TimeoutError',
+      rejected: 'NoAudioReceived',
+    }[kind]
+    const got = ttsFailureHint(probe)
+    return got.kind === kind && got.hint.length > 10
+  }))
+}
+
+// 37) 真的跑一次失败合成：错误里要带上判类那句（有解释，但仍然是 ok:false，不产出任何声音）
+if (existsSync(process.env.DSH_TTS_TEST_PYTHON ?? '')) {
+  const failDir = mkdtempSync(join(tmpdir(), 'tts-fail-'))
+  const bad = await synthesize('测试', {
+    provider: 'edge',
+    voice: 'zh-CN-NotARealVoice',
+    cacheDir: failDir,
+    pythonPath: process.env.DSH_TTS_TEST_PYTHON,
+    ffmpegPath: process.env.DSH_TTS_TEST_FFMPEG ?? '',
+    timeoutMs: 30000,
+  })
+  check('失败合成：ok=false', bad.ok === false, JSON.stringify({ ok: bad.ok, reason: String(bad.reason).slice(0, 80) }))
+  check('失败合成：错误里带判类结论', /bad-voice：/.test(String(bad.reason)), String(bad.reason).slice(-90))
+  check('失败合成：没有产出音频路径', bad.path === undefined || bad.path === '')
+  rmSync(failDir, { recursive: true, force: true })
+} else {
+  console.log('SKIP  失败合成实测（DSH_TTS_TEST_PYTHON 没指向装了 edge-tts 的 python）')
 }
 
 rmSync(dir, { recursive: true, force: true })

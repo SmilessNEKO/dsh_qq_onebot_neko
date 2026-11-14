@@ -1,5 +1,15 @@
 # 更新日志
 
+## v1.3.0 — 2026-11-14
+
+- **合成失败不再自动降级发文字**。以前语音合成不出来（或超过 `voiceMaxChars`）会替你发一条「（语音没合成出来）…」，唱歌失败会发「（歌没唱出来）…」。这套兜底撤掉了：那条语音就算**失败**，一条消息都不发到 QQ，失败原因原样回给模型 —— marker 路径走既有的「出站被拒」回注，工具路径直接在返回值里给 `sent: 0` / `dropped: true` / `reason` / `error`。要不要缩短重试、换引擎、还是自己改用文字发，由模型读完错误决定。
+  - `sendVoicePieces`：超长、合成失败、发送失败都只记进 `voiceFailed`，不再拼替代文案。
+  - `qq_bridge_neko_voice` / `qq_bridge_neko_sing`：失败返回 `{ sent: 0, dropped: true, reason, error }`；`ttsProvider` 不是 feiyu 时唱歌直接返回 `singing-needs-feiyu`，也不发替代文字。
+  - `dropReasonText` 认得语音类 reason 了（`tts-*` / `spawn-*` / `voice-too-long` / `unsupported-tts-provider` …），回注文案里能看出是「语音没合成出来」而不是一句光秃秃的错误码。
+- **edge 的失败原因会带一句人话判断**。新增 `ttsFailureHint(stderr)`，按 stderr 把失败归成 `bad-voice` / `network` / `missing-module` / `timeout` / `rejected` / `unknown` 六类，附一句「是音色名不对、还是连不上微软、还是这个 python 没装 edge-tts」。只解释，不改行为。
+- **本机原来那个 `edge_tts` 是假的**。`C:\Users\mina\.dsh\tts-venv` 里的 `edge_tts.py` 是个离线替身（文档字符串写着 `Offline stand-in for the edge_tts package.`，`__version__ = "0.0.0+offline-sherpa"`），`Communicate.save()` 只把 text 和 rate 传给 sherpa-onnx 的 melo-tts，**voice 与 pitch 被整个丢掉**，而那个模型 `num_speakers = 1` —— 所以换什么音色听到的都是同一个女声，输出还是 `44.1kHz / 64kbps`（真 edge 是 `24kHz / 48kbps`）。已备份成 `edge_tts.py.bak-offline-shim` 并从 pypi 装真包（edge-tts 7.3.1），实测 Xiaoyi / Yunyang 产物长度与规格都正常。
+- 设置卡片三处 hint 与 README 的口径同步改成「直接报失败、不发替代文字」。
+
 ## v1.2.2 — 2026-11-14
 
 - **修好肥鱼语音「底噪 + 奇怪齿音」**。两处都在本机 ffmpeg 后处理，与模型、服务端无关（同一句话的服务端原声是干净的，`12kHz 以上 −91dB` 什么都没）：

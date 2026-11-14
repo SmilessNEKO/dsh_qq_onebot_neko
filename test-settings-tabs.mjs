@@ -57,6 +57,9 @@ const fakeReact = {
     return [bucket[index], set]
   },
   useEffect: () => {},
+  // 试听面板用 ref 抓常驻的 <audio> 再主动 play()（v1.2.1 起），所以这里得给个假的。
+  // 只当成一个可变盒子就够：这个测试只关心卡片渲染出的字段与顺序，不跑副作用。
+  useRef: (init) => ({ current: init }),
   useSyncExternalStore: (_subscribe, get) => {
     try {
       const snap = typeof get === 'function' ? get() : undefined
