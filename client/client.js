@@ -1080,6 +1080,12 @@ window.__ModuleLoader__.load({
     function VoicePreview(props) {
       const shown = props.shown || {}
       const writable = props.writable !== false
+      // 这里的选择会同步写回设置草稿（onPick）：只影响试听、不影响真正发出去的语音，
+      // 就会变成「音色选项看着能选、实际没生效」。点保存才落盘，所以仍然可反悔。
+      const onPick = typeof props.onPick === 'function' ? props.onPick : null
+      const pick = (key, value) => {
+        if (onPick) onPick(key, value)
+      }
       const [catalog, setCatalog] = react.useState(null)
       const [catalogError, setCatalogError] = react.useState('')
       const [text, setText] = react.useState('嗯？主人叫人家呀，在的在的。今天想听人家说点什么呢？')
@@ -1291,7 +1297,11 @@ window.__ModuleLoader__.load({
                   style: S.input,
                   value: voice,
                   disabled: busy || !writable,
-                  onChange: (e) => setVoice(String(e.target.value)),
+                  onChange: (e) => {
+                    const next = String(e.target.value)
+                    setVoice(next)
+                    pick(provider === 'feiyu' ? 'feiyuVoice' : 'ttsVoice', next)
+                  },
                 },
                 voiceOptions.map((v) =>
                   h('option', { style: OPTION_STYLE, key: String(v.id), value: String(v.id) }, String(v.label ?? v.id)),
@@ -1308,7 +1318,11 @@ window.__ModuleLoader__.load({
                   style: S.input,
                   value: style,
                   disabled: busy || !writable,
-                  onChange: (e) => setStyle(String(e.target.value)),
+                  onChange: (e) => {
+                    const next = String(e.target.value)
+                    setStyle(next)
+                    pick('feiyuStyle', next)
+                  },
                 },
                 styleOptions.map((v) => h('option', { style: OPTION_STYLE, key: v, value: v }, v === 'cute' ? 'cute（可爱）' : v === 'gentle' ? 'gentle（温柔）' : v)),
               ),
@@ -1323,7 +1337,11 @@ window.__ModuleLoader__.load({
                   style: S.input,
                   value: mood,
                   disabled: busy || !writable,
-                  onChange: (e) => setMood(String(e.target.value)),
+                  onChange: (e) => {
+                    const next = String(e.target.value)
+                    setMood(next)
+                    pick('voiceMood', next)
+                  },
                 },
                 catalog.moods.map((m) =>
                   h('option', { style: OPTION_STYLE, key: m, value: m }, String(VOICE_MOOD_LABELS[m] ?? m)),
@@ -1340,7 +1358,11 @@ window.__ModuleLoader__.load({
                   style: S.input,
                   value: tone,
                   disabled: busy || !writable,
-                  onChange: (e) => setTone(String(e.target.value)),
+                  onChange: (e) => {
+                    const next = String(e.target.value)
+                    setTone(next)
+                    pick('voiceTone', next)
+                  },
                 },
                 catalog.tones.map((t) =>
                   h('option', { style: OPTION_STYLE, key: t, value: t }, String(VOICE_TONE_LABELS[t] ?? t)),
@@ -1351,12 +1373,22 @@ window.__ModuleLoader__.load({
         controls.has('semitones')
           ? row(
               '音高',
-              slider(semitones, -12, 12, 1, setSemitones),
+              slider(semitones, -12, 12, 1, (v) => {
+                setSemitones(v)
+                pick('voicePitchSemitones', v)
+              }),
               `${semitones > 0 ? '+' : ''}${semitones} 半音`,
             )
           : null,
         controls.has('speed')
-          ? row('语速', slider(speed, 0.5, 2, 0.02, setSpeed), `${Number(speed).toFixed(2)}×`)
+          ? row(
+              '语速',
+              slider(speed, 0.5, 2, 0.02, (v) => {
+                setSpeed(v)
+                pick('voiceSpeedFactor', v)
+              }),
+              `${Number(speed).toFixed(2)}×`,
+            )
           : null,
         h(
           'div',
@@ -1375,6 +1407,11 @@ window.__ModuleLoader__.load({
           !error && info ? h('span', { style: S.note }, info) : null,
           !error && !info && blocked ? h('span', { style: S.note }, '浏览器拦了自动播放，点下面播放条上的三角。') : null,
           catalogError ? h('span', { style: S.note }, `清单读不到：${catalogError}`) : null,
+        ),
+        h(
+          'div',
+          { style: S.note },
+          '这里选的音色 / 音色走向会同时写进下面的设置，点「保存」之后真正发出去的语音才会跟着换。',
         ),
         h('audio', {
           ref: audioRef,
@@ -2733,7 +2770,19 @@ window.__ModuleLoader__.load({
           { style: S.panel },
           sectionNote,
           // 试听压在声音页最上方：先听、再配。它不是一块独立的盒子，只跟下面的字段留一段间距。
-          activeGroup === 'voice' ? h(VoicePreview, { shown, writable: snap.writable }) : null,
+          activeGroup === 'voice'
+        ? h(VoicePreview, {
+            shown,
+            writable: snap.writable,
+            onPick: (key, value) => {
+              // 试听面板的选择写进同一份设置草稿：不改这里，试听听到的和实际发出去的
+              // 就是两套声音（试听里换了音色、真正发出去还是旧的），看着像选项没生效。
+              setDraft((prev) => ({ ...(prev ?? current), [key]: value }))
+              setNote('')
+              setError('')
+            },
+          })
+        : null,
           h('div', { style: S.grid }, rows),
           activeGroup === 'about' ? updateBox : null,
         ),

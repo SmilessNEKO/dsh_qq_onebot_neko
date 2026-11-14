@@ -14,7 +14,7 @@
 
 import { spawn } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { existsSync, mkdirSync, statSync, writeFileSync } from 'node:fs'
+import { closeSync, existsSync, mkdirSync, openSync, readSync, statSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 
 /** 语音标记的正则：`[语音]…[/语音]`，允许跨行。 */
@@ -1149,21 +1149,27 @@ export async function ensureRecordAudio(absPath, options) {
  * 语音转码用的滤镜链。
  *
  * 干、薄、忽大忽小，是「TTS 直出」听起来的通病；这一串都是很轻的手：
- *   - highpass 80 / lowpass 12000：掐掉低频嗡声与齿音外的毛刺；
- *   - 200Hz +1.5dB、3000Hz +1.5dB：补一点胸腔与清晰度，不至于发闷或刺耳；
- *   - acompressor：把忽大忽小的音量压平（阈值 -18dB、比 2.5，轻压不糊）；
- *   - loudnorm：整体拉到 -16 LUFS / 峰值 -1.5dBTP，跟常见语音内容一个响度。
+ *   - highpass 90 / lowpass 11500：掐掉低频嗡声，也把 12k 以上的空频段关掉；
+ *   - 220Hz +1dB：补一点胸腔，不至于发闷；
+ *   - 6800Hz -2dB：压齿音。**3kHz 那个 +1.5dB 的老设定反而在造齿音**，已去掉；
+ *   - acompressor：把忽大忽小的音量压平（阈值 -20dB、比 2，轻压不糊）；
+ *   - loudnorm：整体拉到 -18 LUFS / 峰值 -2dBTP。响度比 -16 低一档，是因为
+ *     TTS 的底噪是固定电平，拉得越高底噪跟着一起抬。
  *
  * 注意 loudnorm 内部会升到 192kHz 采样，所以后面必须显式 `-ar` 收回来，
  * 否则 libmp3lame 编不出来。
  */
 export const VOICE_FILTER_CHAIN = [
-  'highpass=f=80',
-  'lowpass=f=12000',
-  'equalizer=f=200:width_type=q:w=1:g=1.5',
-  'equalizer=f=3000:width_type=q:w=1.5:g=1.5',
-  'acompressor=threshold=-18dB:ratio=2.5:attack=10:release=150',
-  'loudnorm=I=-16:TP=-1.5:LRA=11',
+  'highpass=f=90',
+  'lowpass=f=11500',
+  'equalizer=f=220:width_type=q:w=1.2:g=1.0',
+  // 齿音频段（6-8k）压下去。以前这里是 `equalizer=f=3000:g=1.5`——3k 抬 1.5dB 等于
+  // 给所有 s/sh/c 加了一层金属感，再叠 8k 的 treble 增益就是"奇怪齿音"的来源。
+  'equalizer=f=6800:width_type=q:w=1.6:g=-2.0',
+  'acompressor=threshold=-20dB:ratio=2:attack=8:release=180',
+  // -18 而不是 -16：TTS 出厂的底噪是固定的，响度拉得越高底噪跟着一起抬。
+  // -18 LUFS 在 QQ 里照样清楚，换来的是安静段干净一档。
+  'loudnorm=I=-18:TP=-2:LRA=11',
 ].join(',')
 
 /**
@@ -1178,7 +1184,7 @@ export const VOICE_FILTER_CHAIN = [
  * 不是声学测量结果 —— 觉得不对就照着自己的耳朵改这张表。
  */
 export const VOICE_TONE_PRESETS = {
-  natural: { semitones: 0, lowpass: 12000, treble: 0 },
+  natural: { semitones: 0, lowpass: 11500, treble: 0 },
   soft: { semitones: -1, lowpass: 10000, treble: -1 },
   warm: { semitones: -2, lowpass: 10000, treble: -1.5 },
   deep: { semitones: -3.5, lowpass: 9000, treble: -2 },
@@ -1256,20 +1262,50 @@ export function buildVoiceFilterChain(options) {
     }
     parts.push('atempo=' + left.toFixed(6))
   }
-  parts.push('highpass=f=80')
+  parts.push('highpass=f=90')
   parts.push('lowpass=f=' + preset.lowpass)
-  parts.push('equalizer=f=200:width_type=q:w=1:g=1.5')
-  parts.push('equalizer=f=3000:width_type=q:w=1.5:g=1.5')
+  parts.push('equalizer=f=220:width_type=q:w=1.2:g=1.0')
+  // 与 VOICE_FILTER_CHAIN 同一套口径：3k 不再抬、6.8k 压齿音。
+  parts.push('equalizer=f=6800:width_type=q:w=1.6:g=-2.0')
   if (Math.abs(preset.treble) > 0.01) {
-    parts.push('equalizer=f=8000:width_type=q:w=1.2:g=' + preset.treble)
+    // 挪到 7k 且整体收一半：8k 的 shelf 正是齿音的放大器。
+    parts.push('equalizer=f=7000:width_type=q:w=1.4:g=' + (preset.treble * 0.5).toFixed(1))
   }
-  parts.push('acompressor=threshold=-18dB:ratio=2.5:attack=10:release=150')
-  parts.push('loudnorm=I=-16:TP=-1.5:LRA=11')
+  parts.push('acompressor=threshold=-20dB:ratio=2:attack=8:release=180')
+  parts.push('loudnorm=I=-18:TP=-2:LRA=11')
   return parts.join(',')
 }
 /** 转码输出的采样率与码率。语音 96k 足够，再高只是白占体积。 */
+// 采样率取「源的采样率」，别硬升/硬降：
+//   * 肥鱼的 wav 是 24kHz，升到 44.1k 会在 12k 以上铺一层镜像，再被 mp3 量化成
+//     可听到的"嘶——"底噪（实测同一条语音 12k+ 频段从 -66dB 抬到 -19dB）；
+//   * edge 的 mp3 本来就是 44.1k，硬降到 24k 会把它的空气感削掉。
+// 所以 wav 读文件头的采样率，mp3 用下面这个常数（edge 出厂就是 44.1k）。
 export const VOICE_OUTPUT_SAMPLE_RATE = 44100
-export const VOICE_OUTPUT_BITRATE = '96k'
+export const VOICE_OUTPUT_BITRATE = '128k'
+
+/**
+ * 转码该用哪个采样率：wav 读文件头（RIFF 第 24 字节是采样率），别的格式用常数。
+ * 读不出来就回落常数 —— 采样率选错最多是音质差一点，不该让语音发不出去。
+ */
+export function sampleRateFor(src) {
+  try {
+    if (/\.wav$/i.test(String(src ?? ''))) {
+      const fd = openSync(src, 'r')
+      try {
+        const buf = Buffer.alloc(32)
+        readSync(fd, buf, 0, 32, 0)
+        if (buf.toString('ascii', 0, 4) === 'RIFF' && buf.toString('ascii', 8, 12) === 'WAVE') {
+          const hz = buf.readUInt32LE(24)
+          if (Number.isFinite(hz) && hz >= 8000 && hz <= 96000) return hz
+        }
+      } finally {
+        closeSync(fd)
+      }
+    }
+  } catch { /* 读不到当没有 */ }
+  return VOICE_OUTPUT_SAMPLE_RATE
+}
 
 /**
  * 跑一次 ffmpeg 把 wav 转成 mp3。**不抛**，失败回 `{ok:false, reason}`。
@@ -1283,7 +1319,7 @@ export const VOICE_OUTPUT_BITRATE = '96k'
  * @param {number} timeoutMs
  */
 async function runFfmpeg(bin, src, dst, timeoutMs, filterChain) {
-  const encode = ['-ar', String(VOICE_OUTPUT_SAMPLE_RATE), '-codec:a', 'libmp3lame', '-b:a', VOICE_OUTPUT_BITRATE, dst]
+  const encode = ['-ar', String(sampleRateFor(src)), '-codec:a', 'libmp3lame', '-b:a', VOICE_OUTPUT_BITRATE, dst]
   const chain = String(filterChain ?? '').trim() || VOICE_FILTER_CHAIN
   const first = await runFfmpegOnce(bin, ['-y', '-i', src, '-af', chain, ...encode], timeoutMs)
   if (first.ok) return first
@@ -1498,7 +1534,18 @@ export async function synthesize(text, options) {
     })
   })
 
-  return result
+  if (result?.ok !== true || toneTag === '') return result
+  // 新合成的 edge mp3 只是引擎原声。音色走向 / 情绪 / 变调 / 语速都是 ffmpeg 后处理，
+  // 以前**只有命中缓存那条路**会跑它：第一次调参数听不出变化，第二次（命中缓存）才生效，
+  // 表现就是「音色选项没真实生效」。两条路现在都过同一遍链。
+  const toned = await ensureRecordAudio(outPath, {
+    ffmpegPath,
+    timeoutMs: DEFAULT_FFMPEG_TIMEOUT_MS,
+    filterChain: toneChain,
+    dst: outPath.replace(/\.mp3$/i, `${toneTag}.mp3`),
+  })
+  if (toned?.converted !== true) return result
+  return { ...result, path: toned.path, filtered: true }
 }
 
 /**

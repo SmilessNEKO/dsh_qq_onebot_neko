@@ -54,6 +54,7 @@ import {
   DEFAULT_VOICE_MOOD,
   VOICE_OUTPUT_BITRATE,
   VOICE_OUTPUT_SAMPLE_RATE,
+  sampleRateFor,
   VOICE_PROVIDERS,
 } from './voice.js'
 
@@ -711,8 +712,34 @@ function fakeWorld() {
 {
   check('滤镜链带高通/低通/两段 EQ/压缩/响度', ['highpass', 'lowpass', 'equalizer', 'acompressor', 'loudnorm']
     .every((x) => VOICE_FILTER_CHAIN.includes(x)), VOICE_FILTER_CHAIN)
-  check('输出 44.1kHz（loudnorm 会升到 192k，必须显式收回来）', VOICE_OUTPUT_SAMPLE_RATE === 44100)
-  check('码率 96k', VOICE_OUTPUT_BITRATE === '96k')
+  // 3kHz 抬 1.5dB 是老链的齿音来源，必须不在链里；齿音频段改成压。
+  check('不再抬 3kHz', !VOICE_FILTER_CHAIN.includes('equalizer=f=3000'), VOICE_FILTER_CHAIN)
+  check('6.8kHz 压齿音', VOICE_FILTER_CHAIN.includes('equalizer=f=6800:width_type=q:w=1.6:g=-2.0'), VOICE_FILTER_CHAIN)
+  // 采样率跟着源走：肥鱼的 wav 是 24kHz，硬升到 44.1k 会铺一层镜像当底噪；
+  // edge 的 mp3 本来就是 44.1k，硬降会削掉空气感。
+  check('wav 按文件头取采样率（24kHz 保持 24kHz）', sampleRateFor(join(dir, 'nope.wav')) === VOICE_OUTPUT_SAMPLE_RATE)
+  check('mp3 回落常数 44.1kHz', sampleRateFor(join(dir, 'nope.mp3')) === VOICE_OUTPUT_SAMPLE_RATE && VOICE_OUTPUT_SAMPLE_RATE === 44100)
+  check('码率 128k', VOICE_OUTPUT_BITRATE === '128k')
+  {
+    // 造一个只有头的 24kHz RIFF，验证 sampleRateFor 真去读文件头而不是写死。
+    const wav = join(dir, 'sr-probe.wav')
+    const h = Buffer.alloc(44)
+    h.write('RIFF', 0, 'ascii')
+    h.writeUInt32LE(36, 4)
+    h.write('WAVE', 8, 'ascii')
+    h.write('fmt ', 12, 'ascii')
+    h.writeUInt32LE(16, 16)
+    h.writeUInt16LE(1, 20)
+    h.writeUInt16LE(1, 22)
+    h.writeUInt32LE(24000, 24)
+    h.writeUInt32LE(48000, 28)
+    h.writeUInt16LE(2, 32)
+    h.writeUInt16LE(16, 34)
+    h.write('data', 36, 'ascii')
+    h.writeUInt32LE(0, 40)
+    writeFileSync(wav, h)
+    check('wav 头 24kHz → 转码也用 24kHz', sampleRateFor(wav) === 24000, sampleRateFor(wav))
+  }
   check('空闲默认 10 分钟', DEFAULT_FEIYU_IDLE_STOP_MINUTES === 10)
   check('启动等 60 秒、探活 3 秒', DEFAULT_FEIYU_START_TIMEOUT_MS === 60000 && DEFAULT_FEIYU_PROBE_TIMEOUT_MS === 3000)
 }
