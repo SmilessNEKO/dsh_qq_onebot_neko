@@ -759,6 +759,13 @@ window.__ModuleLoader__.load({
       return JSON.stringify(a) === JSON.stringify(b)
     }
 
+    /** 轮询拿到的状态没变就别 setState —— 否则整个设置卡每 5 秒重渲染一次，看着像在闪。 */
+    function sameNapcat(prev, next) {
+      if (prev === next) return true
+      if (prev === null || next === null || prev === undefined || next === undefined) return false
+      return same(prev, next)
+    }
+
     /**
      * 会话下拉的选项：真实的会话列表 + “不驱动”+ 一个兜底项。
      *
@@ -821,6 +828,15 @@ window.__ModuleLoader__.load({
     }
     // 原生 <option> 不继承 select 的配色，弹层底色由 UA 决定；显式给一层才跟主题走。
     const OPTION_STYLE = { background: TOKEN.surface, color: TOKEN.text }
+    /**
+     * 试听接口：GET 拿清单与默认值，POST 拿音频字节。
+     *
+     * 提到模块级是因为 `VoicePreview` 也定义在模块级 —— 它**不能**定义在 `Card` 里面：
+     * `Card` 每 5 秒被 NapCat 轮询触发一次重渲染，定义在它体内的组件每次都是**新的函数对象**，
+     * React 会当成换了个组件类型，把整棵子树卸载重建：于是清单重新拉、输入框内容重置、
+     * 合成到一半的结果被丢掉（点了试听却听不到声音），肉眼看到的就是面板在闪。
+     */
+    const VOICE_PREVIEW_API = '/api/qq-bridge-neko/voice/preview'
     /** 语气预设的中文名，和宿主半的 VOICE_MOOD_PRESETS 一一对应（试听面板显示用）。 */
     const VOICE_MOOD_LABELS = {
       default: '默认（不改）',
@@ -1002,8 +1018,8 @@ window.__ModuleLoader__.load({
         flex: '0 0 auto',
       },
       tabActive: { background: 'rgba(127,127,127,0.16)', color: TOKEN.text, fontWeight: 600, border: BORDER },
-      // 试听面板：一整块，和设置行隔开一点
-      preview: { display: 'flex', flexDirection: 'column', gap: '8px', padding: '10px', borderRadius: '6px', border: BORDER },
+      // 试听：放在声音页最上方，**不做成盒子** —— 不描边、不填底，只用间距和下面的字段分开。
+      preview: { display: 'flex', flexDirection: 'column', gap: '8px', marginBottom: '14px' },
       previewTitle: { fontSize: '13px', fontWeight: 600 },
       previewRow: { display: 'grid', gridTemplateColumns: 'minmax(72px, 96px) 1fr', gap: '6px 10px', alignItems: 'center' },
       previewLabel: { fontSize: '12px', opacity: 0.7 },
@@ -1043,6 +1059,331 @@ window.__ModuleLoader__.load({
 
     function disabled(btn, off) {
       return off ? { ...btn, opacity: 0.5, cursor: 'default' } : btn
+    }
+
+    /**
+     * 试听面板：写一句话 → 现场合成 → 直接播放。
+     *
+     * **必须定义在模块级**。以前它写在 `Card` 函数体内，而 `Card` 每 5 秒被 NapCat 轮询
+     * 触发一次重渲染 —— 每次重渲染都会造出一个新的 `VoicePreview` 函数对象，React 认作
+     * 换了组件类型，把整棵子树卸载重建：清单重新拉、输入框被重置、合成到一半的结果直接丢，
+     * 表现就是「面板一直在闪」+「点了试听没声音」。
+     *
+     * 三种模块共用一个面板，**显示哪些控件由服务端给的 controls 决定**：
+     * edge 有 rate / pitch，肥鱼有 style，mood / tone / semitones / speed 两边都有
+     * （后处理是 ffmpeg 干的，跟引擎无关）。控件按 controls 出现，不写死。
+     *
+     * 合成走 `POST /api/qq-bridge-neko/voice/preview`，成功时回的是音频字节，
+     * 这里拿 blob 造 objectURL 塞给 <audio>；失败回 JSON，把 error 显示出来。
+     * 每次重新试听都先 revoke 上一个 URL，免得 blob 越堆越多。
+     */
+    function VoicePreview(props) {
+      const shown = props.shown || {}
+      const writable = props.writable !== false
+      const [catalog, setCatalog] = react.useState(null)
+      const [catalogError, setCatalogError] = react.useState('')
+      const [text, setText] = react.useState('嗯？主人叫人家呀，在的在的。今天想听人家说点什么呢？')
+      const [provider, setProvider] = react.useState('')
+      const [voice, setVoice] = react.useState('')
+      const [style, setStyle] = react.useState('')
+      const [mood, setMood] = react.useState('')
+      const [tone, setTone] = react.useState('')
+      const [semitones, setSemitones] = react.useState(0)
+      const [speed, setSpeed] = react.useState(1)
+      const [busy, setBusy] = react.useState(false)
+      const [error, setError] = react.useState('')
+      const [info, setInfo] = react.useState('')
+      const [audioUrl, setAudioUrl] = react.useState('')
+      const [blocked, setBlocked] = react.useState(false)
+      // <audio> 常驻挂载（没音频时藏起来），靠 ref 直接 play()。
+      // 以前是「有 blob 才渲染 <audio autoPlay>」：元素刚插进 DOM 就被下一次重渲染换掉，
+      // 再加上浏览器对「fetch 完之后才插入的媒体」按自动播放策略会拦，所以听不到声音。
+      const audioRef = react.useRef(null)
+      const urlRef = react.useRef('')
+
+      // 打开卡片时拉一次清单；拿不到就只显示文本框 + 按钮，试听照样能点。
+      react.useEffect(() => {
+        let alive = true
+        if (typeof fetch !== 'function') {
+          setCatalogError('这个环境没有 fetch')
+          return () => {}
+        }
+        fetch(VOICE_PREVIEW_API, { credentials: 'include', headers: { accept: 'application/json' } })
+          .then((res) => res.json())
+          .then((body) => {
+            if (!alive) return
+            if (body?.ok !== true) throw new Error(body?.error || '清单读不到')
+            setCatalog(body)
+            const d = body.defaults || {}
+            setProvider(String(d.provider || 'edge'))
+            setMood(String(d.mood || 'default'))
+            setTone(String(d.tone || 'natural'))
+            setSemitones(Number(d.semitones) || 0)
+            setSpeed(Number(d.speed) || 1)
+            setStyle(String(d.style || 'cute'))
+            setVoice(String(d.provider === 'feiyu' ? d.feiyuVoice : d.edgeVoice) || '')
+          })
+          .catch((e) => {
+            if (alive) setCatalogError(String(e?.message ?? e))
+          })
+        return () => {
+          alive = false
+        }
+      }, [])
+
+      // 切引擎时把音色跟着换成该引擎的默认值（别把 edge 的音色名发给肥鱼）。
+      react.useEffect(() => {
+        if (!catalog) return
+        const d = catalog.defaults || {}
+        setVoice(String(provider === 'feiyu' ? d.feiyuVoice : d.edgeVoice) || '')
+      }, [provider, catalog])
+
+      // 换新音频就试着自动播一次；被拦下（自动播放策略）就把播放条留着让用户自己点。
+      react.useEffect(() => {
+        if (audioUrl === '') return
+        const el = audioRef.current
+        if (!el) return
+        setBlocked(false)
+        let cancelled = false
+        try {
+          el.currentTime = 0
+        } catch {
+          // 还没加载出时长时设 currentTime 会抛，忽略即可
+        }
+        const played = el.play()
+        if (played && typeof played.then === 'function') {
+          played.catch(() => {
+            if (!cancelled) setBlocked(true)
+          })
+        }
+        return () => {
+          cancelled = true
+        }
+      }, [audioUrl])
+
+      // 组件卸载时把最后一个 blob URL 释放掉。
+      react.useEffect(
+        () => () => {
+          if (urlRef.current !== '') URL.revokeObjectURL(urlRef.current)
+          urlRef.current = ''
+        },
+        [],
+      )
+
+      const controls = new Set(
+        (catalog?.providers?.[provider]?.controls || (provider === 'feiyu'
+          ? ['voice', 'style', 'mood', 'tone', 'semitones', 'speed']
+          : ['voice', 'rate', 'pitch', 'mood', 'tone', 'semitones', 'speed'])),
+      )
+      const voiceOptions = catalog?.providers?.[provider]?.voices || []
+      const styleOptions = catalog?.providers?.[provider]?.styles || []
+      const maxChars = Number(catalog?.maxChars) || 300
+
+      const play = async () => {
+        if (busy || !writable) return
+        const body = String(text ?? '').trim()
+        if (body === '') {
+          setError('先写点要试听的内容。')
+          return
+        }
+        setBusy(true)
+        setError('')
+        setInfo('')
+        try {
+          const payload = {
+            text: body,
+            provider,
+            voice,
+            mood,
+            tone,
+            semitones: Number(semitones) || 0,
+            speed: Number(speed) || 1,
+          }
+          if (provider === 'feiyu' && style) payload.style = style
+          if (provider === 'edge') {
+            payload.rate = String(shown.ttsRate ?? '')
+            payload.pitch = String(shown.ttsPitch ?? '')
+          }
+          const res = await fetch(VOICE_PREVIEW_API, {
+            method: 'POST',
+            credentials: 'include',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify(payload),
+          })
+          const type = String(res.headers.get('content-type') || '')
+          if (!res.ok || type.includes('application/json')) {
+            const failBody = await res.json().catch(() => ({}))
+            throw new Error(failBody?.error || `HTTP ${res.status}`)
+          }
+          const blob = await res.blob()
+          if (blob.size === 0) throw new Error('合成回来的音频是空的。')
+          if (urlRef.current !== '') URL.revokeObjectURL(urlRef.current)
+          const url = URL.createObjectURL(blob)
+          urlRef.current = url
+          setAudioUrl(url)
+          setInfo(`${(blob.size / 1024).toFixed(0)} KB · ${provider === 'feiyu' ? '肥鱼' : 'edge-tts'}`)
+        } catch (e) {
+          setError(String(e?.message ?? e))
+        } finally {
+          setBusy(false)
+        }
+      }
+
+      const row = (label, control, valueText) =>
+        h(
+          'div',
+          { style: S.previewRow, key: label },
+          h('div', { style: S.previewLabel }, label),
+          valueText === undefined
+            ? control
+            : h('div', { style: S.rangeRow }, control, h('span', { style: S.previewValue }, valueText)),
+        )
+
+      const slider = (value, min, max, step, onChange) =>
+        h('input', {
+          type: 'range',
+          style: { flex: '1 1 auto' },
+          min: String(min),
+          max: String(max),
+          step: String(step),
+          value: String(value),
+          disabled: busy || !writable,
+          onChange: (e) => onChange(Number(e.target.value)),
+        })
+
+      return h(
+        'div',
+        { style: S.preview },
+        h('div', { style: S.previewTitle }, '试听'),
+        h(
+          'div',
+          { style: S.hint },
+          `写一句想听的话（最多 ${maxChars} 字），下面调完点「试听」——用的就是当前这套设置，听到什么，发出去就是什么。`,
+        ),
+        h('textarea', {
+          style: S.textarea,
+          value: text,
+          spellCheck: false,
+          disabled: busy,
+          onChange: (e) => setText(String(e.target.value)),
+        }),
+        row(
+          '引擎',
+          h(
+            'select',
+            {
+              style: S.input,
+              value: provider,
+              disabled: busy || !writable,
+              onChange: (e) => setProvider(String(e.target.value)),
+            },
+            Object.entries(catalog?.providers || {}).map(([id, info]) =>
+              h('option', { style: OPTION_STYLE, key: id, value: id }, String(info?.label ?? id)),
+            ),
+          ),
+        ),
+        voiceOptions.length > 0 && controls.has('voice')
+          ? row(
+              '音色',
+              h(
+                'select',
+                {
+                  style: S.input,
+                  value: voice,
+                  disabled: busy || !writable,
+                  onChange: (e) => setVoice(String(e.target.value)),
+                },
+                voiceOptions.map((v) =>
+                  h('option', { style: OPTION_STYLE, key: String(v.id), value: String(v.id) }, String(v.label ?? v.id)),
+                ),
+              ),
+            )
+          : null,
+        provider === 'feiyu' && styleOptions.length > 0 && controls.has('style')
+          ? row(
+              '语气',
+              h(
+                'select',
+                {
+                  style: S.input,
+                  value: style,
+                  disabled: busy || !writable,
+                  onChange: (e) => setStyle(String(e.target.value)),
+                },
+                styleOptions.map((v) => h('option', { style: OPTION_STYLE, key: v, value: v }, v === 'cute' ? 'cute（可爱）' : v === 'gentle' ? 'gentle（温柔）' : v)),
+              ),
+            )
+          : null,
+        catalog && Array.isArray(catalog.moods) && controls.has('mood')
+          ? row(
+              '情绪',
+              h(
+                'select',
+                {
+                  style: S.input,
+                  value: mood,
+                  disabled: busy || !writable,
+                  onChange: (e) => setMood(String(e.target.value)),
+                },
+                catalog.moods.map((m) =>
+                  h('option', { style: OPTION_STYLE, key: m, value: m }, String(VOICE_MOOD_LABELS[m] ?? m)),
+                ),
+              ),
+            )
+          : null,
+        catalog && Array.isArray(catalog.tones) && controls.has('tone')
+          ? row(
+              '音色走向',
+              h(
+                'select',
+                {
+                  style: S.input,
+                  value: tone,
+                  disabled: busy || !writable,
+                  onChange: (e) => setTone(String(e.target.value)),
+                },
+                catalog.tones.map((t) =>
+                  h('option', { style: OPTION_STYLE, key: t, value: t }, String(VOICE_TONE_LABELS[t] ?? t)),
+                ),
+              ),
+            )
+          : null,
+        controls.has('semitones')
+          ? row(
+              '音高',
+              slider(semitones, -12, 12, 1, setSemitones),
+              `${semitones > 0 ? '+' : ''}${semitones} 半音`,
+            )
+          : null,
+        controls.has('speed')
+          ? row('语速', slider(speed, 0.5, 2, 0.02, setSpeed), `${Number(speed).toFixed(2)}×`)
+          : null,
+        h(
+          'div',
+          { style: S.ops },
+          h(
+            'button',
+            {
+              type: 'button',
+              style: disabled({ ...S.btn, ...S.primary }, busy || !writable),
+              disabled: busy || !writable,
+              onClick: play,
+            },
+            busy ? '合成中…' : '试听',
+          ),
+          error ? h('span', { style: S.err }, error) : null,
+          !error && info ? h('span', { style: S.note }, info) : null,
+          !error && !info && blocked ? h('span', { style: S.note }, '浏览器拦了自动播放，点下面播放条上的三角。') : null,
+          catalogError ? h('span', { style: S.note }, `清单读不到：${catalogError}`) : null,
+        ),
+        h('audio', {
+          ref: audioRef,
+          style: audioUrl === '' ? { ...S.audio, display: 'none' } : S.audio,
+          src: audioUrl === '' ? undefined : audioUrl,
+          controls: true,
+          preload: 'auto',
+        }),
+      )
     }
 
     // ── 卡片 ──────────────────────────────────────────────────────────────────
@@ -1161,14 +1502,18 @@ window.__ModuleLoader__.load({
             .then((body) => {
               if (!alive) return
               if (body && body.ok === true) {
-                setCatalog({
-                  providers: Array.isArray(body.providers) ? body.providers : [],
-                  presets: Array.isArray(body.presets) ? body.presets : [],
-                  defaultModel: body.defaultModel ?? null,
-                  defaultDir: typeof body.defaultDir === 'string' ? body.defaultDir : '',
-                  // 肥鱼音色清单：宿主半探测声音服务得来。拿不到就留空，
-                  // 渲染时退回字段自带的静态 options，下拉不会空掉。
-                  feiyuVoices: body.feiyuVoices && typeof body.feiyuVoices === 'object' ? body.feiyuVoices : null,
+                setCatalog((prev) => {
+                  const nextCatalog = {
+                    providers: Array.isArray(body.providers) ? body.providers : [],
+                    presets: Array.isArray(body.presets) ? body.presets : [],
+                    defaultModel: body.defaultModel ?? null,
+                    defaultDir: typeof body.defaultDir === 'string' ? body.defaultDir : '',
+                    // 肥鱼音色清单：宿主半探测声音服务得来。拿不到就留空，
+                    // 渲染时退回字段自带的静态 options，下拉不会空掉。
+                    feiyuVoices: body.feiyuVoices && typeof body.feiyuVoices === 'object' ? body.feiyuVoices : null,
+                  }
+                  // 清单没变就保持旧引用，省一次整张卡片的重渲染。
+                  return prev !== null && same(prev, nextCatalog) ? prev : nextCatalog
                 })
                 const errors = Array.isArray(body.errors) ? body.errors : []
                 setCatalogNote(errors.length > 0 ? `部分清单没读到：${errors[0]}` : '')
@@ -1199,10 +1544,11 @@ window.__ModuleLoader__.load({
             .then((res) => res.json().catch(() => null))
             .then((body) => {
               if (!alive) return
-              setTargets(body && body.ok === true && Array.isArray(body.targets) ? body.targets : [])
+              const next = body && body.ok === true && Array.isArray(body.targets) ? body.targets : []
+              setTargets((prev) => (same(prev, next) ? prev : next))
             })
             .catch(() => {
-              if (alive) setTargets([])
+              if (alive) setTargets((prev) => (prev.length === 0 ? prev : []))
             })
         }
         pull()
@@ -1348,7 +1694,9 @@ window.__ModuleLoader__.load({
         const pull = () => {
           fetchNapcat()
             .then((body) => {
-              if (alive && body !== undefined) setNapcat(body)
+              if (!alive || body === undefined) return
+              // 内容没变就退回旧引用：React 认为没更新，整张卡片不会跟着重渲染。
+              setNapcat((prev) => (sameNapcat(prev, body) ? prev : body))
             })
             .catch(() => {
               // 单次失败保留上一次的状态：轮询会再试，不给按钮闪一下禁用。
@@ -1387,7 +1735,7 @@ window.__ModuleLoader__.load({
           // 被宿主拒绝（例如已在运行）时也要把真实状态显示出来。
           try {
             const fresh = await fetchNapcat()
-            if (fresh !== undefined) setNapcat(fresh)
+            if (fresh !== undefined) setNapcat((prev) => (sameNapcat(prev, fresh) ? prev : fresh))
           } catch {
             // 拉取失败时保留上一次的状态
           }
@@ -1484,284 +1832,6 @@ window.__ModuleLoader__.load({
               h('span', { style: S.choiceDesc }, '跑在本机 9880，不联网；声音更像人，也能唱歌'),
             ),
           ),
-        )
-      }
-
-      /**
-       * 试听面板：写一句话 → 现场合成 → 直接播放。
-       *
-       * 三种模块共用一个面板，**显示哪些控件由服务端给的 controls 决定**：
-       * edge 有 rate / pitch，肥鱼有 style，mood / tone / semitones / speed 两边都有
-       * （后处理是 ffmpeg 干的，跟引擎无关）。控件按 controls 出现，不写死。
-       *
-       * 合成走 `POST /api/qq-bridge-neko/voice/preview`，成功时回的是音频字节，
-       * 这里拿 blob 造 objectURL 塞给 <audio>；失败回 JSON，把 error 显示出来。
-       * 每次重新试听都先 revoke 上一个 URL，免得 blob 越堆越多。
-       */
-      function VoicePreview(props) {
-        const shown = props.shown || {}
-        const writable = props.writable !== false
-        const [catalog, setCatalog] = react.useState(null)
-        const [catalogError, setCatalogError] = react.useState('')
-        const [text, setText] = react.useState('嗯？主人叫人家呀，在的在的。今天想听人家说点什么呢？')
-        const [provider, setProvider] = react.useState('')
-        const [voice, setVoice] = react.useState('')
-        const [style, setStyle] = react.useState('')
-        const [mood, setMood] = react.useState('')
-        const [tone, setTone] = react.useState('')
-        const [semitones, setSemitones] = react.useState(0)
-        const [speed, setSpeed] = react.useState(1)
-        const [busy, setBusy] = react.useState(false)
-        const [error, setError] = react.useState('')
-        const [info, setInfo] = react.useState('')
-        const [audioUrl, setAudioUrl] = react.useState('')
-
-        // 打开卡片时拉一次清单；拿不到就只显示文本框 + 按钮，试听照样能点。
-        react.useEffect(() => {
-          let alive = true
-          if (typeof fetch !== 'function') {
-            setCatalogError('这个环境没有 fetch')
-            return () => {}
-          }
-          fetch(VOICE_PREVIEW_API, { credentials: 'include', headers: { accept: 'application/json' } })
-            .then((res) => res.json())
-            .then((body) => {
-              if (!alive) return
-              if (body?.ok !== true) throw new Error(body?.error || '清单读不到')
-              setCatalog(body)
-              const d = body.defaults || {}
-              setProvider(String(d.provider || 'edge'))
-              setMood(String(d.mood || 'default'))
-              setTone(String(d.tone || 'natural'))
-              setSemitones(Number(d.semitones) || 0)
-              setSpeed(Number(d.speed) || 1)
-              setStyle(String(d.style || 'cute'))
-              setVoice(String(d.provider === 'feiyu' ? d.feiyuVoice : d.edgeVoice) || '')
-            })
-            .catch((e) => {
-              if (alive) setCatalogError(String(e?.message ?? e))
-            })
-          return () => {
-            alive = false
-          }
-        }, [])
-
-        // 切引擎时把音色跟着换成该引擎的默认值（别把 edge 的音色名发给肥鱼）。
-        react.useEffect(() => {
-          if (!catalog) return
-          const d = catalog.defaults || {}
-          setVoice(String(provider === 'feiyu' ? d.feiyuVoice : d.edgeVoice) || '')
-        }, [provider, catalog])
-
-        // 组件卸载时把最后一个 blob URL 释放掉。
-        react.useEffect(() => () => {
-          if (audioUrl) URL.revokeObjectURL(audioUrl)
-        }, [audioUrl])
-
-        const controls = new Set(
-          (catalog?.providers?.[provider]?.controls || (provider === 'feiyu'
-            ? ['voice', 'style', 'mood', 'tone', 'semitones', 'speed']
-            : ['voice', 'rate', 'pitch', 'mood', 'tone', 'semitones', 'speed'])),
-        )
-        const voiceOptions = catalog?.providers?.[provider]?.voices || []
-        const styleOptions = catalog?.providers?.[provider]?.styles || []
-        const maxChars = Number(catalog?.maxChars) || 300
-
-        const play = async () => {
-          if (busy || !writable) return
-          const body = String(text ?? '').trim()
-          if (body === '') {
-            setError('先写点要试听的内容。')
-            return
-          }
-          setBusy(true)
-          setError('')
-          setInfo('')
-          try {
-            const payload = {
-              text: body,
-              provider,
-              voice,
-              mood,
-              tone,
-              semitones: Number(semitones) || 0,
-              speed: Number(speed) || 1,
-            }
-            if (provider === 'feiyu' && style) payload.style = style
-            if (provider === 'edge') {
-              payload.rate = String(shown.ttsRate ?? '')
-              payload.pitch = String(shown.ttsPitch ?? '')
-            }
-            const res = await fetch(VOICE_PREVIEW_API, {
-              method: 'POST',
-              credentials: 'include',
-              headers: { 'content-type': 'application/json' },
-              body: JSON.stringify(payload),
-            })
-            const type = String(res.headers.get('content-type') || '')
-            if (!res.ok || type.includes('application/json')) {
-              const failBody = await res.json().catch(() => ({}))
-              throw new Error(failBody?.error || `HTTP ${res.status}`)
-            }
-            const blob = await res.blob()
-            if (audioUrl) URL.revokeObjectURL(audioUrl)
-            const url = URL.createObjectURL(blob)
-            setAudioUrl(url)
-            setInfo(`${(blob.size / 1024).toFixed(0)} KB · ${provider === 'feiyu' ? '肥鱼' : 'edge-tts'}`)
-          } catch (e) {
-            setError(String(e?.message ?? e))
-          } finally {
-            setBusy(false)
-          }
-        }
-
-        const row = (label, control, valueText) =>
-          h(
-            'div',
-            { style: S.previewRow, key: label },
-            h('div', { style: S.previewLabel }, label),
-            valueText === undefined
-              ? control
-              : h('div', { style: S.rangeRow }, control, h('span', { style: S.previewValue }, valueText)),
-          )
-
-        const slider = (value, min, max, step, onChange) =>
-          h('input', {
-            type: 'range',
-            style: { flex: '1 1 auto' },
-            min: String(min),
-            max: String(max),
-            step: String(step),
-            value: String(value),
-            disabled: busy || !writable,
-            onChange: (e) => onChange(Number(e.target.value)),
-          })
-
-        return h(
-          'div',
-          { style: S.preview },
-          h('div', { style: S.previewTitle }, '试听'),
-          h(
-            'div',
-            { style: S.hint },
-            `写一句想听的话（最多 ${maxChars} 字），下面调完点「试听」——用的就是当前这套设置，听到什么，发出去就是什么。`,
-          ),
-          h('textarea', {
-            style: S.textarea,
-            value: text,
-            spellCheck: false,
-            disabled: busy,
-            onChange: (e) => setText(String(e.target.value)),
-          }),
-          row(
-            '引擎',
-            h(
-              'select',
-              {
-                style: S.input,
-                value: provider,
-                disabled: busy || !writable,
-                onChange: (e) => setProvider(String(e.target.value)),
-              },
-              Object.entries(catalog?.providers || {}).map(([id, info]) =>
-                h('option', { style: OPTION_STYLE, key: id, value: id }, String(info?.label ?? id)),
-              ),
-            ),
-          ),
-          voiceOptions.length > 0 && controls.has('voice')
-            ? row(
-                '音色',
-                h(
-                  'select',
-                  {
-                    style: S.input,
-                    value: voice,
-                    disabled: busy || !writable,
-                    onChange: (e) => setVoice(String(e.target.value)),
-                  },
-                  voiceOptions.map((v) =>
-                    h('option', { style: OPTION_STYLE, key: String(v.id), value: String(v.id) }, String(v.label ?? v.id)),
-                  ),
-                ),
-              )
-            : null,
-          provider === 'feiyu' && styleOptions.length > 0 && controls.has('style')
-            ? row(
-                '语气',
-                h(
-                  'select',
-                  {
-                    style: S.input,
-                    value: style,
-                    disabled: busy || !writable,
-                    onChange: (e) => setStyle(String(e.target.value)),
-                  },
-                  styleOptions.map((v) => h('option', { style: OPTION_STYLE, key: v, value: v }, v === 'cute' ? 'cute（可爱）' : v === 'gentle' ? 'gentle（温柔）' : v)),
-                ),
-              )
-            : null,
-          catalog && Array.isArray(catalog.moods) && controls.has('mood')
-            ? row(
-                '情绪',
-                h(
-                  'select',
-                  {
-                    style: S.input,
-                    value: mood,
-                    disabled: busy || !writable,
-                    onChange: (e) => setMood(String(e.target.value)),
-                  },
-                  catalog.moods.map((m) =>
-                    h('option', { style: OPTION_STYLE, key: m, value: m }, String(VOICE_MOOD_LABELS[m] ?? m)),
-                  ),
-                ),
-              )
-            : null,
-          catalog && Array.isArray(catalog.tones) && controls.has('tone')
-            ? row(
-                '音色走向',
-                h(
-                  'select',
-                  {
-                    style: S.input,
-                    value: tone,
-                    disabled: busy || !writable,
-                    onChange: (e) => setTone(String(e.target.value)),
-                  },
-                  catalog.tones.map((t) =>
-                    h('option', { style: OPTION_STYLE, key: t, value: t }, String(VOICE_TONE_LABELS[t] ?? t)),
-                  ),
-                ),
-              )
-            : null,
-          controls.has('semitones')
-            ? row(
-                '音高',
-                slider(semitones, -12, 12, 1, setSemitones),
-                `${semitones > 0 ? '+' : ''}${semitones} 半音`,
-              )
-            : null,
-          controls.has('speed')
-            ? row('语速', slider(speed, 0.5, 2, 0.02, setSpeed), `${Number(speed).toFixed(2)}×`)
-            : null,
-          h(
-            'div',
-            { style: S.ops },
-            h(
-              'button',
-              {
-                type: 'button',
-                style: disabled({ ...S.btn, ...S.primary }, busy || !writable),
-                disabled: busy || !writable,
-                onClick: play,
-              },
-              busy ? '合成中…' : '试听',
-            ),
-            error ? h('span', { style: S.err }, error) : null,
-            !error && info ? h('span', { style: S.note }, info) : null,
-            catalogError ? h('span', { style: S.note }, `清单读不到：${catalogError}`) : null,
-          ),
-          audioUrl ? h('audio', { style: S.audio, src: audioUrl, controls: true, autoPlay: true }) : null,
         )
       }
 
@@ -2662,8 +2732,9 @@ window.__ModuleLoader__.load({
           'div',
           { style: S.panel },
           sectionNote,
-          h('div', { style: S.grid }, rows),
+          // 试听压在声音页最上方：先听、再配。它不是一块独立的盒子，只跟下面的字段留一段间距。
           activeGroup === 'voice' ? h(VoicePreview, { shown, writable: snap.writable }) : null,
+          h('div', { style: S.grid }, rows),
           activeGroup === 'about' ? updateBox : null,
         ),
         activeGroup === 'napcat' || activeGroup === 'connect' ? napcatOps : null,
@@ -2728,7 +2799,6 @@ window.__ModuleLoader__.load({
     const GROUP_META_API = '/api/qq-bridge-neko/groups'
     /** 可选项清单：已配置的提供商 / 模型 / 人设预设。只读，用来做下拉。 */
     const CATALOG_API = '/api/qq-bridge-neko/catalog'
-    const VOICE_PREVIEW_API = '/api/qq-bridge-neko/voice/preview'
     /** 已知的 QQ 目的地（群 / 私聊），给「单独设置」那栏用。只读。 */
     const PROFILES_API = '/api/qq-bridge-neko/profiles'
     /** 稳定引用：useSyncExternalStore 的 getSnapshot 每次返回新对象会死循环。 */
