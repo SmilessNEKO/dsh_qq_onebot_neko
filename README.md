@@ -86,7 +86,7 @@
 
 - 调 `qq_bridge_neko_sing` 工具，把一段**原创小曲**唱出来发到 QQ：`score` 给 ABC 记谱的单音主旋律，`lyrics` 给逐字歌词（只能有汉字，标点空格忽略），可选 `transpose`（移调半音）、`bpm`（覆盖谱面速度）、`pinyin`（逐字拼音，纠正多音字）。
 - 一个音符一个字，**一字多音用 `_` 占位**；歌词字数要等于音符数。
-- 只有 `ttsProvider = feiyu` 时唱得出来（唱歌 = SVS 出声 + RVC 换声，都在肥鱼服务里）；别的引擎直接报失败（`singing-needs-feiyu`），不会假装唱了，也不发替代文字。
+- 只有 `ttsProvider` 是 `feiyu` 或 `rvc` 时唱得出来（唱歌 = SVS 出声 + RVC 换声，都在肥鱼服务里；换声那条本来也走这个服务，所以一并放行）。`edge` 直接报失败（`singing-needs-feiyu`），不会假装唱了，也不发替代文字。
 - 唱歌比说话慢一个量级（谱面编译 → 分段 SVS → RVC → 混音），所以超时单独一个键 `feiyuSingTimeoutMs`（默认 600000 = 10 分钟），轮询沿用 `feiyuPollIntervalMs`。
 - 一首歌的歌词上限 `voiceMaxSongChars`（默认 400 字，约两三分钟）；超了直接拒唱并说明，不偷偷截断。
 - 合成失败同样**不发替代文字**，只把真实原因交回给模型。同一份谱 + 同一份词 + 同一个音色只合成一次，缓存在 `voiceCacheDir`。
@@ -229,7 +229,7 @@ DSH 0.2 的卡片把值写进 `$DSH_HOME/qq-bridge-neko-settings.json`。这份�
 | `voiceMood` | `default` | 语气预设：`default` / `sweet` 撒娇 / `gentle` 温柔 / `lively` 元气 / `serious` 认真 / `sleepy` 困倦。每个预设是一组参数（肥鱼语气 + 音色 + 变调 + 语速），下面三个单参数会覆盖它 |
 | `voiceTone` | `natural` | 音色预设：`natural` 自然 / `soft` 柔和 / `warm` 温暖 / `deep` 低沉 / `bright` 明亮。两个引擎都生效（ffmpeg 后处理） |
 | `voicePitchSemitones` | `0` | 音高偏移（半音，-12~12）。负数更沉、正数更尖 |
-| `voiceSpeedFactor` | `1` | 语速倍率（0.5~2）。1 = 原速，1.15 = 快一点。两个引擎都生效 |
+| `voiceSpeedFactor` | `1` | 语速倍率（0.5~2）。1 = 原速，1.15 = 快一点。`edge` / `feiyu` 都生效（换声不套这一层） |
 | `feiyuAutoStart` | `true` | 肥鱼服务没起时，插件自己按 `feiyuServerDir` 把它拉起来再合成。关掉后服务没起就直接报失败原因给 AI |
 | `feiyuServerDir` | 空 | 肥鱼服务端目录（里面有 `.venv` 与 `configs/voice_service.json`）。自动启动要用它；留空 = 不自动启动 |
 | `feiyuPythonPath` | 空 | 跑肥鱼服务的 python。留空 = 服务目录下的 `.venv`（Windows 的 `Scripts\python.exe` / Linux 的 `bin/python`）；找不到就报 `python-missing`，不拿系统 python 乱试 |
