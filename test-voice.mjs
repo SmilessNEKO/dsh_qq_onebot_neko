@@ -208,7 +208,7 @@ const dir = mkdtempSync(join(tmpdir(), 'qq-bridge-neko-voice-'))
 // 16) 默认值：默认引擎必须是 edge（升级后行为不变）
 {
   check('默认引擎是 edge', DEFAULT_VOICE_PROVIDER === 'edge')
-  check('两个引擎都在名单里', VOICE_PROVIDERS.join(',') === 'edge,feiyu', VOICE_PROVIDERS.join(','))
+  check('三个引擎都在名单里', VOICE_PROVIDERS.join(',') === 'edge,feiyu,rvc', VOICE_PROVIDERS.join(','))
   check(
     'normalizeVoiceProvider 认 feiyu（大小写无所谓）',
     normalizeVoiceProvider('FEIYU') === 'feiyu' && normalizeVoiceProvider('Edge') === 'edge',

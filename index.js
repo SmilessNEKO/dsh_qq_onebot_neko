@@ -51,6 +51,9 @@ import {
   DEFAULT_FEIYU_POLL_INTERVAL_MS,
   DEFAULT_FEIYU_IDLE_STOP_MINUTES,
   DEFAULT_FEIYU_SING_TIMEOUT_MS,
+  DEFAULT_FEIYU_CONVERT_TIMEOUT_MS,
+  DEFAULT_RVC_VOICE,
+  DEFAULT_RVC_BASE_PROVIDER,
   DEFAULT_FEIYU_STYLE,
   DEFAULT_FEIYU_TIMEOUT_MS,
   DEFAULT_FEIYU_VOICE,
@@ -66,6 +69,8 @@ import {
   FEIYU_STYLES,
   ensureFeiyuService,
   feiyuSing,
+  feiyuConvert,
+  VOICE_PROVIDERS,
   noteFeiyuActivity,
   resetFeiyuServices,
   hasVoiceBlock,
@@ -281,6 +286,8 @@ export const Config = Schema.object({
   feiyuBaseUrl: Schema.string().default(DEFAULT_FEIYU_BASE_URL).description('肥鱼声音服务的地址。默认 http://127.0.0.1:9880 —— 本机服务，别填公网地址。'),
   feiyuApiKey: Schema.string().default('').description('肥鱼声音服务的鉴权口令（Bearer）。留空 = 不带鉴权头。口令只存在设置里，不会写进日志。'),
   feiyuVoice: Schema.string().default(DEFAULT_FEIYU_VOICE).description('肥鱼服务用哪个音色。默认 feiyu。'),
+  rvcVoice: Schema.string().default(DEFAULT_RVC_VOICE).description('换声用哪个音色（`ttsProvider` 选 rvc 时生效）。填肥鱼服务 `/v1/capabilities` 里 rvc 那张表注册的音色 id，例如 feiyu 或新加的角色包。'),
+  rvcBaseProvider: Schema.union([Schema.const('feiyu'), Schema.const('edge')]).default(DEFAULT_RVC_BASE_PROVIDER).description('换声之前先用谁把字念出来（rvc 是两段式：先合成人声，再换音色）。feiyu = 肥鱼服务（默认，音质最好）；edge = 微软 edge-tts。'),
   feiyuStyle: Schema.union([Schema.const('cute'), Schema.const('gentle')]).default(DEFAULT_FEIYU_STYLE).description('肥鱼服务的语气：cute = 软一点（默认）、gentle = 温一点。'),
   feiyuTimeoutMs: Schema.number().default(DEFAULT_FEIYU_TIMEOUT_MS).description('等肥鱼服务合成完的最长时间（毫秒）。默认 180000 —— 首次请求要加载模型，几十秒到几分钟都正常。'),
   feiyuPollIntervalMs: Schema.number().default(DEFAULT_FEIYU_POLL_INTERVAL_MS).description('问肥鱼服务「好了没」的间隔（毫秒）。默认 1000。'),
@@ -399,6 +406,8 @@ const BridgeSettings = Schema.object({
   feiyuBaseUrl: Schema.string().default(DEFAULT_FEIYU_BASE_URL).description('肥鱼声音服务的地址。默认 http://127.0.0.1:9880 —— 本机服务，别填公网地址。'),
   feiyuApiKey: Schema.string().default('').description('肥鱼声音服务的鉴权口令（Bearer）。留空 = 不带鉴权头。口令只存在设置里，不会写进日志。'),
   feiyuVoice: Schema.string().default(DEFAULT_FEIYU_VOICE).description('肥鱼服务用哪个音色。默认 feiyu。'),
+  rvcVoice: Schema.string().default(DEFAULT_RVC_VOICE).description('换声用哪个音色（`ttsProvider` 选 rvc 时生效）。填肥鱼服务 `/v1/capabilities` 里 rvc 那张表注册的音色 id，例如 feiyu 或新加的角色包。'),
+  rvcBaseProvider: Schema.union([Schema.const('feiyu'), Schema.const('edge')]).default(DEFAULT_RVC_BASE_PROVIDER).description('换声之前先用谁把字念出来（rvc 是两段式：先合成人声，再换音色）。feiyu = 肥鱼服务（默认，音质最好）；edge = 微软 edge-tts。'),
   feiyuStyle: Schema.union([Schema.const('cute'), Schema.const('gentle')]).default(DEFAULT_FEIYU_STYLE).description('肥鱼服务的语气：cute = 软一点（默认）、gentle = 温一点。'),
   feiyuTimeoutMs: Schema.number().default(DEFAULT_FEIYU_TIMEOUT_MS).description('等肥鱼服务合成完的最长时间（毫秒）。默认 180000 —— 首次请求要加载模型，几十秒到几分钟都正常。'),
   feiyuPollIntervalMs: Schema.number().default(DEFAULT_FEIYU_POLL_INTERVAL_MS).description('问肥鱼服务「好了没」的间隔（毫秒）。默认 1000。'),
@@ -1317,6 +1326,8 @@ export function apply(ctx, config) {
         feiyuBaseUrl: config.feiyuBaseUrl ?? DEFAULT_FEIYU_BASE_URL,
         feiyuApiKey: config.feiyuApiKey ?? '',
         feiyuVoice: config.feiyuVoice ?? DEFAULT_FEIYU_VOICE,
+        rvcVoice: config.rvcVoice ?? DEFAULT_RVC_VOICE,
+        rvcBaseProvider: config.rvcBaseProvider ?? DEFAULT_RVC_BASE_PROVIDER,
         feiyuStyle: config.feiyuStyle ?? DEFAULT_FEIYU_STYLE,
         feiyuTimeoutMs: config.feiyuTimeoutMs ?? DEFAULT_FEIYU_TIMEOUT_MS,
         feiyuPollIntervalMs: config.feiyuPollIntervalMs ?? DEFAULT_FEIYU_POLL_INTERVAL_MS,
@@ -1408,6 +1419,8 @@ export function apply(ctx, config) {
       // 口令只在这里取一次，不 trim 掉中间字符、也绝不写进日志。
       feiyuApiKey: String(s.feiyuApiKey ?? config.feiyuApiKey ?? '').trim(),
       feiyuVoice: String(s.feiyuVoice ?? config.feiyuVoice ?? '').trim() || DEFAULT_FEIYU_VOICE,
+      rvcVoice: String(s.rvcVoice ?? config.rvcVoice ?? '').trim() || DEFAULT_RVC_VOICE,
+      rvcBaseProvider: String(s.rvcBaseProvider ?? config.rvcBaseProvider ?? '').trim().toLowerCase() === 'edge' ? 'edge' : DEFAULT_RVC_BASE_PROVIDER,
       feiyuStyle: normalizeFeiyuStyle(s.feiyuStyle ?? config.feiyuStyle),
       feiyuTimeoutMs: clampInt(s.feiyuTimeoutMs ?? config.feiyuTimeoutMs, 1000, 1800000, DEFAULT_FEIYU_TIMEOUT_MS),
       feiyuPollIntervalMs: clampInt(s.feiyuPollIntervalMs ?? config.feiyuPollIntervalMs, 50, 60000, DEFAULT_FEIYU_POLL_INTERVAL_MS),
@@ -4379,25 +4392,36 @@ export function apply(ctx, config) {
   }
 
   /**
-   * 按设置合成语音。`ttsProvider` 认 edge / feiyu 两个 —— 别偷偷换实现，
+   * 按设置合成语音。`ttsProvider` 认 edge / feiyu / rvc 三个 —— 别偷偷换实现，
    * 认不出的值直接失败并报原因，而不是无声地用别的东西顶着。
+   *
+   * `rvc` 是**两段式**：先按 `rvcBaseProvider`（feiyu 或 edge）把字念出来，
+   * 再把这段人声交给肥鱼服务换成 `rvcVoice` 指定的音色。服务端没有「文字直接进 RVC」
+   * 这条路（`/v1/voice-conversion` 只收音频），所以绕不开两段。
    *
    * `overrides` 是给工具调用用的单次覆盖（provider / voice / rate / pitch / style）；
    * 传空字符串等于没传，免得把设置里的值抹成空。
    */
   async function synthesizeWithSettings(text, s, cacheDir, overrides = {}) {
     const provider = String(overrides.provider ?? s?.ttsProvider ?? 'edge').trim().toLowerCase() || 'edge'
-    if (provider !== 'edge' && provider !== 'feiyu') {
+    if (!VOICE_PROVIDERS.includes(provider)) {
       return { ok: false, reason: `unsupported-tts-provider: ${provider}` }
     }
     // 音色名得按引擎分开取：`ttsVoice` 是 edge 的名字（zh-CN-XiaoyiNeural 这种），
     // 肥鱼只认自己注册的音色 id（`feiyuVoice`，默认 feiyu）。混用会让服务端回 422
     // 「Requested voice capability is not installed/configured」——踩过一次。
-    const voice = provider === 'feiyu'
+    //
+    // `rvc` 的 `voice` 是**第一段**（把字念出来）用的音色；换声目标在 `rvcVoice`。
+    const baseProvider = provider === 'rvc'
+      ? (String(overrides.baseProvider ?? s?.rvcBaseProvider ?? '').trim().toLowerCase() === 'edge' ? 'edge' : DEFAULT_RVC_BASE_PROVIDER)
+      : provider
+    const voice = baseProvider === 'feiyu'
       ? String(overrides.voice ?? s?.feiyuVoice ?? '').trim() || DEFAULT_FEIYU_VOICE
       : String(overrides.voice ?? s?.ttsVoice ?? '').trim() || DEFAULT_TTS_VOICE
     return await synthesize(text, {
       provider,
+      baseProvider,
+      rvcVoice: String(overrides.rvcVoice ?? s?.rvcVoice ?? '').trim() || DEFAULT_RVC_VOICE,
       pythonPath: String(s?.ttsPythonPath ?? '').trim(),
 
       voice,
@@ -4423,8 +4447,14 @@ export function apply(ctx, config) {
       feiyuPythonPath: String(s?.feiyuPythonPath ?? '').trim(),
       feiyuAutoStart: s?.feiyuAutoStart !== false,
       feiyuIdleStopMs: Math.max(0, Math.floor(Number(s?.feiyuIdleStopMinutes ?? DEFAULT_FEIYU_IDLE_STOP_MINUTES) || 0)) * 60000,
-      ...(provider === 'feiyu'
-        ? { timeoutMs: Number(s?.feiyuTimeoutMs) > 0 ? Number(s.feiyuTimeoutMs) : DEFAULT_FEIYU_TIMEOUT_MS }
+      // 换声是两段：第一段（feiyu）走 HTTP、第二段也走同一个服务，
+      // 所以 rvc 的超时按「两段累计」给足，而不是复用一个 180 秒。
+      ...(provider === 'feiyu' || provider === 'rvc'
+        ? {
+            timeoutMs: provider === 'rvc'
+              ? DEFAULT_FEIYU_CONVERT_TIMEOUT_MS
+              : (Number(s?.feiyuTimeoutMs) > 0 ? Number(s.feiyuTimeoutMs) : DEFAULT_FEIYU_TIMEOUT_MS),
+          }
         : {}),
       cacheDir,
     })
@@ -6077,8 +6107,12 @@ export function apply(ctx, config) {
    */
   async function readFeiyuVoiceOptions() {
     const fallback = {
-      voices: [{ id: DEFAULT_FEIYU_VOICE, label: DEFAULT_FEIYU_VOICE, styles: [...FEIYU_STYLES], source: 'builtin' }],
+      voices: [{ id: DEFAULT_FEIYU_VOICE, label: DEFAULT_FEIYU_VOICE, styles: [...FEIYU_STYLES], kind: 'tts', source: 'builtin' }],
       defaultVoice: DEFAULT_FEIYU_VOICE,
+      ttsVoices: [{ id: DEFAULT_FEIYU_VOICE, label: DEFAULT_FEIYU_VOICE, styles: [...FEIYU_STYLES], kind: 'tts', source: 'builtin' }],
+      rvcVoices: [],
+      defaultTtsVoice: DEFAULT_FEIYU_VOICE,
+      defaultRvcVoice: DEFAULT_RVC_VOICE,
       styles: [...FEIYU_STYLES],
       online: false,
     }
@@ -6148,6 +6182,12 @@ export function apply(ctx, config) {
     return {
       voices,
       defaultVoice: voices[0].id,
+      // 分开再给一份：tts 与 rvc 混在同一个下拉里，用户根本看不出
+      // 「这个能拿来说话」还是「这个只能换声」。UI 按 kind 分组要用这两张表。
+      ttsVoices: voices.filter((row) => row.kind === 'tts'),
+      rvcVoices: voices.filter((row) => row.kind === 'rvc'),
+      defaultTtsVoice: (voices.find((row) => row.kind === 'tts') ?? voices[0]).id,
+      defaultRvcVoice: (voices.find((row) => row.kind === 'rvc') ?? voices[0]).id,
       styles,
       online: true,
       ...(payload?.singing ? { singing: payload.singing } : {}),
@@ -6184,6 +6224,10 @@ export function apply(ctx, config) {
   const VOICE_PREVIEW_CONTROLS = {
     edge: ['voice', 'rate', 'pitch', 'mood', 'tone', 'semitones', 'speed'],
     feiyu: ['voice', 'style', 'mood', 'tone', 'semitones', 'speed'],
+    // 换声没有「语气」：音色走向 / 情绪 / 变调 / 语速都是「怎么念」的参数，
+    // 对一段已经念好的人声再套只会打薄音质。所以只露出两个下拉：
+    // 第一段用谁（rvcBase）与换成谁（voice = rvcVoice）。
+    rvc: ['voice', 'rvcBase'],
   }
   /** 试听的字数上限：比正式出站松一点（想多听几句），但别让人贴一整章。 */
   const VOICE_PREVIEW_MAX_CHARS = 300
@@ -6205,13 +6249,16 @@ export function apply(ctx, config) {
 
   async function voicePreviewCatalog(s) {
     // 音色清单跟 catalog 接口同一套探测：服务在线读真实注册的音色，离线回落内置项。
-    let feiyuVoices = []
+    let probed = null
     try {
-      const probed = await readFeiyuVoiceOptions()
-      if (Array.isArray(probed?.voices)) feiyuVoices = probed.voices
+      probed = await readFeiyuVoiceOptions()
     } catch {
       // 探测失败不算错：下面会回落成内置的那一个
     }
+    const ttsVoices = Array.isArray(probed?.ttsVoices) && probed.ttsVoices.length
+      ? probed.ttsVoices
+      : [{ id: DEFAULT_FEIYU_VOICE, label: DEFAULT_FEIYU_VOICE }]
+    const rvcVoices = Array.isArray(probed?.rvcVoices) ? probed.rvcVoices : []
     return {
       providers: {
         edge: {
@@ -6223,10 +6270,18 @@ export function apply(ctx, config) {
         feiyu: {
           label: '肥鱼声音服务',
           controls: [...VOICE_PREVIEW_CONTROLS.feiyu],
-          voices: feiyuVoices.length
-            ? feiyuVoices
-            : [{ id: DEFAULT_FEIYU_VOICE, label: DEFAULT_FEIYU_VOICE }],
+          voices: ttsVoices,
           styles: [...FEIYU_STYLES],
+        },
+        // `rvc` 不是引擎，是两段式：先念、再换声。`voices` 在这里是**换声目标**，
+        // 第一段用哪个引擎由 `baseVoices` 另给一份。
+        rvc: {
+          label: '换声（TTS → RVC）',
+          controls: [...VOICE_PREVIEW_CONTROLS.rvc],
+          voices: rvcVoices.length ? rvcVoices : [{ id: DEFAULT_RVC_VOICE, label: DEFAULT_RVC_VOICE }],
+          styles: [],
+          baseVoices: ttsVoices,
+          online: rvcVoices.length > 0,
         },
       },
       tones: Object.keys(VOICE_TONE_PRESETS),
@@ -6236,6 +6291,8 @@ export function apply(ctx, config) {
         provider: String(s?.ttsProvider ?? 'edge'),
         edgeVoice: String(s?.ttsVoice ?? DEFAULT_TTS_VOICE),
         feiyuVoice: String(s?.feiyuVoice ?? DEFAULT_FEIYU_VOICE),
+        rvcVoice: String(s?.rvcVoice ?? DEFAULT_RVC_VOICE),
+        rvcBaseProvider: String(s?.rvcBaseProvider ?? DEFAULT_RVC_BASE_PROVIDER),
         style: normalizeFeiyuStyle(s?.feiyuStyle),
         mood: normalizeVoiceMood(s?.voiceMood),
         tone: normalizeVoiceTone(s?.voiceTone),
@@ -6281,6 +6338,8 @@ export function apply(ctx, config) {
     }
     takeString('provider')
     takeString('voice')
+    takeString('rvcVoice')
+    takeString('baseProvider')
     takeString('rate')
     takeString('pitch')
     takeString('style')
@@ -6382,8 +6441,12 @@ export function apply(ctx, config) {
     } catch (error) {
       errors.push(`feiyu: ${error?.message ?? error}`)
       feiyuVoices = {
-        voices: [{ id: DEFAULT_FEIYU_VOICE, label: DEFAULT_FEIYU_VOICE, styles: [...FEIYU_STYLES], source: 'builtin' }],
+        voices: [{ id: DEFAULT_FEIYU_VOICE, label: DEFAULT_FEIYU_VOICE, styles: [...FEIYU_STYLES], kind: 'tts', source: 'builtin' }],
         defaultVoice: DEFAULT_FEIYU_VOICE,
+        ttsVoices: [{ id: DEFAULT_FEIYU_VOICE, label: DEFAULT_FEIYU_VOICE, styles: [...FEIYU_STYLES], kind: 'tts', source: 'builtin' }],
+        rvcVoices: [],
+        defaultTtsVoice: DEFAULT_FEIYU_VOICE,
+        defaultRvcVoice: DEFAULT_RVC_VOICE,
         styles: [...FEIYU_STYLES],
         online: false,
       }
@@ -6554,16 +6617,18 @@ export function apply(ctx, config) {
     description:
       '把一句话合成为语音发到 QQ（默认发给这一轮钉住的群或私聊）。' +
       '需要先打开设置里的「发语音」（voiceEnabled），否则返回 `reason: "voice-disabled"`，一个字都不发。' +
-      '音色 / 语速 / 音高 / 引擎 / 语气默认读设置，也可以用 voice / rate / pitch / provider / style / tone / semitones / speed 单次覆盖' +
-      '（provider 取 edge | feiyu；音色写 edge-tts 那种，例如 zh-CN-XiaoyiNeural、-8%、+12Hz）。' +
+      '音色 / 语速 / 音高 / 引擎 / 语气默认读设置，也可以用 voice / rvcVoice / rate / pitch / provider / style / tone / semitones / speed 单次覆盖' +
+      '（provider 取 edge | feiyu | rvc；音色写 edge-tts 那种，例如 zh-CN-XiaoyiNeural、-8%、+12Hz）。' +
+      'provider=rvc 是两段式：先用 rvcBaseProvider（默认肥鱼）把字念出来，再换成 rvcVoice 指定的音色。' +
       'text 只写要念的内容本体：不要带 [语音] 标记，也不带表情名和 Markdown，那些念不出来。' +
       '合成失败**不发替代文字**：返回 `sent: 0`、`dropped: true` 与真实的 `reason` / `error`，' +
       '一条消息都不会发到 QQ。要不要换引擎重试、缩短、还是改用文字发，由你读完错误自己决定。' +
       '合成好的音频会缓存（键里含引擎与参数），同一句同一套参数只合成一次。',
     parameters: {
       text: { type: 'string', required: true, description: '要念的内容本体，不要带标记或表情名。' },
-      provider: { type: 'string', enum: ['edge', 'feiyu'], description: '这次用哪个引擎，覆盖设置里的 ttsProvider。默认跟设置一致。' },
-      voice: { type: 'string', description: '音色，覆盖设置里的 ttsVoice（肥鱼时覆盖 feiyuVoice）。' },
+      provider: { type: 'string', enum: ['edge', 'feiyu', 'rvc'], description: '这次用哪个引擎，覆盖设置里的 ttsProvider。edge = 微软 edge-tts；feiyu = 本机肥鱼声音服务；rvc = 先念再换声（两段式，音色看 rvcVoice）。默认跟设置一致。' },
+      voice: { type: 'string', description: '音色，覆盖设置里的 ttsVoice（肥鱼时覆盖 feiyuVoice；rvc 时这是第一段念字用的音色）。' },
+      rvcVoice: { type: 'string', description: 'provider=rvc 时换成哪个音色，覆盖设置里的 rvcVoice。填肥鱼服务注册的换声包 id（例如 feiyu、nahida）。' },
       rate: { type: 'string', description: '语速，覆盖设置里的 ttsRate，例如 -8%。' },
       pitch: { type: 'string', description: '音高，覆盖设置里的 ttsPitch，例如 +12Hz。' },
       style: { type: 'string', enum: ['cute', 'gentle'], description: '肥鱼服务的语气，覆盖设置里的 feiyuStyle。' },
@@ -6629,6 +6694,7 @@ export function apply(ctx, config) {
       const tts = await synthesizeWithSettings(said, s, cacheDir, {
         provider,
         voice: String(args.voice ?? '').trim(),
+        rvcVoice: String(args.rvcVoice ?? '').trim(),
         rate: String(args.rate ?? '').trim(),
         pitch: String(args.pitch ?? '').trim(),
         style: String(args.style ?? '').trim(),
@@ -6736,15 +6802,17 @@ export function apply(ctx, config) {
       const dest = resolved.dest
       if (!dest?.kind) return JSON.stringify({ sent: 0, dropped: true, reason: 'no-destination' }, null, 2)
 
-      if (String(s.ttsProvider).trim().toLowerCase() !== 'feiyu') {
-        // 唱歌只有肥鱼这一条路（SVS + RVC 都在那个服务里），别的引擎唱不了。
+      const singProvider = String(s.ttsProvider).trim().toLowerCase() || 'feiyu'
+      if (singProvider !== 'feiyu' && singProvider !== 'rvc') {
+        // 唱歌只有肥鱼这一条路（SVS + RVC 都在那个服务里），edge 唱不了。
+        // rvc 也走同一个服务（唱歌本来就自带 RVC 换声），所以放行。
         // 不发替代文字：这是一条明确的「这件事现在做不了」，交给模型自己处理。
         return JSON.stringify({
           sent: 0,
           dropped: true,
           kind: 'song',
           reason: 'singing-needs-feiyu',
-          error: '唱歌只有肥鱼声音服务这一条路（SVS + RVC 都在那个服务里）。当前 ttsProvider 不是 feiyu，所以没有合成也没有发出任何消息。',
+          error: '唱歌只有肥鱼声音服务这一条路（SVS + RVC 都在那个服务里）。当前 ttsProvider 不是 feiyu / rvc，所以没有合成也没有发出任何消息。',
         }, null, 2)
       }
 

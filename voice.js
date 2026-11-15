@@ -14,7 +14,7 @@
 
 import { spawn } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { closeSync, existsSync, mkdirSync, openSync, readSync, statSync, writeFileSync } from 'node:fs'
+import { closeSync, existsSync, mkdirSync, openSync, readFileSync, readSync, statSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 
 /** 语音标记的正则：`[语音]…[/语音]`，允许跨行。 */
@@ -48,7 +48,7 @@ export const DEFAULT_TTS_TIMEOUT_MS = 20000
 /** 默认 provider：永远是 edge —— 没显式选肥鱼就绝不换实现。 */
 export const DEFAULT_VOICE_PROVIDER = 'edge'
 /** 认得出的 provider 名。 */
-export const VOICE_PROVIDERS = ['edge', 'feiyu']
+export const VOICE_PROVIDERS = ['edge', 'feiyu', 'rvc']
 /** 肥鱼声音服务的默认地址（本机、不对外）。 */
 export const DEFAULT_FEIYU_BASE_URL = 'http://127.0.0.1:9880'
 /** 默认音色名 / 语气。 */
@@ -73,6 +73,29 @@ export const DEFAULT_FFMPEG_TIMEOUT_MS = 30000
  * 15 秒的歌实测 60–90 秒；给足 10 分钟，别让长一点的曲子半路被掐。
  */
 export const DEFAULT_FEIYU_SING_TIMEOUT_MS = 600000
+/**
+ * 换声（RVC）的整体超时（毫秒）。
+ *
+ * 比说话慢：要先把待转换的音频传上去，再跑 RMVPE 取音高 + RVC 推理。
+ * 实测 4 秒素材在 RX 7900 GRE 上约 13 秒，给足 5 分钟。
+ */
+export const DEFAULT_FEIYU_CONVERT_TIMEOUT_MS = 300000
+/**
+ * 换声默认用哪个音色 id / 先用谁把字念出来。
+ *
+ * `rvcVoice` 填的是服务端 `/v1/capabilities` 里 rvc 那张表注册的 id；
+ * 第一个装好的永远是肥鱼自己（`feiyu`），所以默认就它。
+ */
+export const DEFAULT_RVC_VOICE = 'feiyu'
+export const DEFAULT_RVC_BASE_PROVIDER = 'feiyu'
+/**
+ * 换声产物的采样率（Hz）。
+ *
+ * 服务端的托管 RVC 适配器把这一条写死在产物校验里
+ * （`feiyu_runtime/rvc.py`：`rate != 40000 → Invalid converted audio`），
+ * 换包也只能是 40k。这里跟着写死，别让它悄悄漂。
+ */
+export const FEIYU_RVC_SAMPLE_RATE = 40000
 /**
  * 肥鱼服务空闲多久就自己停掉（分钟）。0 = 不停。
  *
@@ -410,10 +433,13 @@ function resolvePython(serverDir, pythonPath) {
 }
 
 /**
- * provider 归一化：只认 `edge` / `feiyu`，其它（含空）一律回落 `edge`。
+ * provider 归一化：只认 `edge` / `feiyu` / `rvc`，其它（含空）一律回落 `edge`。
  *
  * 回落而不是报错，是为了老配置里没有这个键、或用户手滑填错时，
  * 行为跟以前完全一样 —— 语音照发，只是用的还是 edge。
+ *
+ * `rvc` 不是独立引擎，是「先用别的引擎念、再换声」的两段式；它能进这个白名单
+ * 只是为了让设置页能存下 `ttsProvider = 'rvc'`，真正的分派在 `synthesize()` 里。
  */
 export function normalizeVoiceProvider(raw) {
   const kind = String(raw ?? '').trim().toLowerCase()
@@ -1080,6 +1106,255 @@ export async function feiyuSing(options) {
   return await finish(false, seconds)
 }
 
+/**
+ * 调肥鱼声音服务「把一段人声换成目标音色」（RVC）。
+ *
+ * 与 `feiyuSynthesize()` 的区别：那边输入**文字**，这边输入**已经录好的人声**。
+ * 所以它是「任意 TTS → RVC」两段式的第二段：先用任意引擎把字念出来，
+ * 再把这段干净人声扔进来换声。服务端侧对应 `POST /v1/voice-conversion`。
+ *
+ * 为什么不让服务端直接做两段式：`/v1/voice-conversion` 只收 `audio_id`，
+ * 不接受文字 —— 换声与文字转语音在服务端是两条独立能力，各有各的包。
+ *
+ * 失败同样只回 `{ok:false, reason}`，原因串里绝不含 API key。
+ *
+ * @param {{
+ *   inputPath: string, inputName?: string,
+ *   voice?: string, cacheDir: string, cacheKey?: string,
+ *   baseUrl?: string, apiKey?: string,
+ *   timeoutMs?: number, pollIntervalMs?: number,
+ *   ffmpegPath?: string, ffmpegTimeoutMs?: number,
+ *   serverDir?: string, pythonPath?: string, configPath?: string,
+ *   autoStart?: boolean, startTimeoutMs?: number, probeTimeoutMs?: number,
+ *   idleStopMs?: number, spawnImpl?: unknown, logger?: unknown, fetchImpl?: typeof fetch,
+ * }} options
+ * @returns {Promise<
+ *   { ok: true, path: string, cached: boolean, wavPath: string, converted: boolean }
+ *   | { ok: false, reason: string }
+ * >}
+ */
+export async function feiyuConvert(options) {
+  const {
+    inputPath = '',
+    inputName = '',
+    voice = DEFAULT_FEIYU_VOICE,
+    cacheDir,
+    cacheKey = '',
+    baseUrl = DEFAULT_FEIYU_BASE_URL,
+    apiKey = '',
+    timeoutMs = DEFAULT_FEIYU_CONVERT_TIMEOUT_MS,
+    pollIntervalMs = DEFAULT_FEIYU_POLL_INTERVAL_MS,
+    ffmpegPath = '',
+    ffmpegTimeoutMs = DEFAULT_FFMPEG_TIMEOUT_MS,
+    serverDir = '',
+    pythonPath = '',
+    configPath = '',
+    autoStart = true,
+    startTimeoutMs = DEFAULT_FEIYU_START_TIMEOUT_MS,
+    probeTimeoutMs = DEFAULT_FEIYU_PROBE_TIMEOUT_MS,
+    idleStopMs = DEFAULT_FEIYU_IDLE_STOP_MINUTES * 60000,
+    spawnImpl,
+    logger,
+    fetchImpl,
+  } = options ?? {}
+
+  const source = String(inputPath ?? '').trim()
+  if (source === '') return { ok: false, reason: 'no-input-audio' }
+  if (!cacheDir) return { ok: false, reason: 'no-cache-dir' }
+
+  let bytes
+  try {
+    if (!existsSync(source) || statSync(source).size === 0) return { ok: false, reason: 'input-audio-missing' }
+    bytes = readFileSync(source)
+  } catch (error) {
+    return { ok: false, reason: `input-audio-unreadable: ${error?.message ?? error}` }
+  }
+
+  let root
+  try {
+    root = new URL(String(baseUrl ?? '').trim() || DEFAULT_FEIYU_BASE_URL)
+  } catch {
+    return { ok: false, reason: 'bad-base-url' }
+  }
+  if (root.protocol !== 'http:' && root.protocol !== 'https:') {
+    return { ok: false, reason: `bad-base-url: ${root.protocol}` }
+  }
+  try {
+    mkdirSync(cacheDir, { recursive: true })
+  } catch (error) {
+    return { ok: false, reason: `cache-dir-unusable: ${error?.message ?? error}` }
+  }
+
+  const saidVoice = String(voice ?? '').trim() || DEFAULT_FEIYU_VOICE
+  // 缓存键：源音频内容 + 音色。内容用 sha1 而不是路径 —— 同一个文件换个目录名还是同一份产物。
+  const digestKey = cacheKey !== ''
+    ? cacheKey
+    : `${createHash('sha1').update(bytes).digest('hex')}|${FEIYU_RVC_SAMPLE_RATE}`
+  const outPath = join(
+    cacheDir,
+    `${createHash('sha1').update('feiyu-convert\u0000').update(digestKey).update('\u0000').update(saidVoice).digest('hex').slice(0, 16)}.wav`,
+  )
+  if (existsSync(outPath) && statSync(outPath).size > 0) {
+    noteFeiyuActivity({ baseUrl, idleStopMs })
+    return await finishConvert(outPath, true, { ffmpegPath, ffmpegTimeoutMs })
+  }
+
+  const ready = await ensureFeiyuService({
+    baseUrl,
+    apiKey,
+    serverDir,
+    pythonPath,
+    configPath,
+    autoStart: autoStart !== false,
+    startTimeoutMs,
+    probeTimeoutMs,
+    idleStopMs,
+    fetchImpl,
+    spawnImpl,
+    logger,
+  })
+  if (!ready.ok) return { ok: false, reason: ready.reason ?? 'service-unavailable' }
+
+  const doFetch = fetchImpl ?? globalThis.fetch
+  if (typeof doFetch !== 'function') return { ok: false, reason: 'no-fetch' }
+
+  const budgetMs = Math.max(1, Math.floor(Number(timeoutMs) || DEFAULT_FEIYU_CONVERT_TIMEOUT_MS))
+  const gapMs = Math.max(1, Math.floor(Number(pollIntervalMs) || DEFAULT_FEIYU_POLL_INTERVAL_MS))
+  const deadline = Date.now() + budgetMs
+  const remaining = () => deadline - Date.now()
+  const timedOut = () => ({ ok: false, reason: `timeout: ${budgetMs}ms` })
+
+  const auth = String(apiKey ?? '').trim()
+  const authHeaders = auth === '' ? {} : { authorization: `Bearer ${auth}` }
+  const jsonHeaders = { ...authHeaders, 'content-type': 'application/json' }
+  const baseHref = root.href.endsWith('/') ? root.href : `${root.href}/`
+  const url = (path) => new URL(String(path).replace(/^\//, ''), baseHref).toString()
+
+  async function request(target, init) {
+    const left = remaining()
+    if (left <= 0) return { ok: false, reason: `timeout: ${budgetMs}ms` }
+    try {
+      const response = await doFetch(target, { ...init, signal: AbortSignal.timeout(Math.max(1, left)) })
+      return { ok: true, response }
+    } catch (error) {
+      if (error?.name === 'TimeoutError' || error?.name === 'AbortError') return timedOut()
+      const code = error?.cause?.code ?? error?.code ?? ''
+      const msg = String(error?.message ?? error)
+      return { ok: false, reason: `connect-failed: ${code ? `${code}: ` : ''}${msg}` }
+    }
+  }
+
+  function httpReason(response, kind, acceptStatus) {
+    if (response.status === 401 || response.status === 403) return `auth-failed: ${response.status}`
+    if (!acceptStatus.includes(response.status) && !(response.status >= 200 && response.status < 300)) {
+      return `${kind}-http-${response.status}`
+    }
+    return ''
+  }
+
+  // 1) 把人声传成资源（`/v1/assets` 只认白名单后缀，wav/flac 都在里面）
+  let form
+  try {
+    form = new FormData()
+    form.append('file', new Blob([bytes]), inputName !== '' ? inputName : source.replace(/^.*[\\/]/, ''))
+  } catch (error) {
+    return { ok: false, reason: `form-unavailable: ${error?.message ?? error}` }
+  }
+  const sent = await request(url('/v1/assets'), { method: 'POST', headers: authHeaders, body: form })
+  if (!sent.ok) return sent
+  const uploadReason = httpReason(sent.response, 'upload', [201])
+  if (uploadReason) return { ok: false, reason: uploadReason }
+  const uploadPayload = await readJsonSafe(sent.response)
+  const audioId = String(uploadPayload?.id ?? '').trim()
+  if (audioId === '') return { ok: false, reason: 'no-audio-id' }
+
+  // 2) 提交换声任务
+  const submit = await request(url('/v1/voice-conversion'), {
+    method: 'POST',
+    headers: jsonHeaders,
+    body: JSON.stringify({ voice: saidVoice, audio_id: audioId }),
+  })
+  if (!submit.ok) return submit
+  const submitReason = httpReason(submit.response, 'conversion', [202])
+  if (submitReason) return { ok: false, reason: submitReason }
+  const submitPayload = await readJsonSafe(submit.response)
+  const jobId = pickJobId(submitPayload)
+  if (jobId === '') return { ok: false, reason: 'no-job-id' }
+  let audioUrl = pickJobAudioUrl(submitPayload)
+
+  // 3) 轮询
+  const jobUrl = url(`/v1/jobs/${encodeURIComponent(jobId)}`)
+  for (;;) {
+    const poll = await request(jobUrl, { method: 'GET', headers: authHeaders })
+    if (!poll.ok) return poll
+    const pollReason = httpReason(poll.response, 'job', [])
+    if (pollReason) return { ok: false, reason: pollReason }
+    const payload = await readJsonSafe(poll.response)
+    const status = pickJobStatus(payload)
+    if (status === 'success' || status === 'succeeded' || status === 'done' || status === 'completed') {
+      audioUrl = pickJobAudioUrl(payload) || audioUrl
+      break
+    }
+    if (status === 'failed' || status === 'error') {
+      return { ok: false, reason: `job-failed: ${pickJobError(payload) || 'unknown'}` }
+    }
+    if (status === 'interrupted' || status === 'cancelled' || status === 'canceled') {
+      return { ok: false, reason: `job-${status}` }
+    }
+    if (remaining() <= 0) return timedOut()
+    await sleep(Math.min(gapMs, Math.max(1, remaining())))
+  }
+
+  // 4) 下音频
+  const audioTarget = audioUrl === ''
+    ? url(`/v1/jobs/${encodeURIComponent(jobId)}/audio`)
+    : (/^https?:\/\//i.test(audioUrl) ? audioUrl : url(audioUrl))
+  const audio = await request(audioTarget, { method: 'GET', headers: authHeaders })
+  if (!audio.ok) return audio
+  const audioReason = httpReason(audio.response, 'audio', [])
+  if (audioReason) return { ok: false, reason: audioReason }
+  let buf
+  try {
+    buf = Buffer.from(await audio.response.arrayBuffer())
+  } catch (error) {
+    return { ok: false, reason: `audio-read-failed: ${error?.message ?? error}` }
+  }
+  if (buf.length === 0) return { ok: false, reason: 'audio-empty' }
+  try {
+    writeFileSync(outPath, buf)
+  } catch (error) {
+    return { ok: false, reason: `cache-write-failed: ${error?.message ?? error}` }
+  }
+  noteFeiyuActivity({ baseUrl, idleStopMs })
+  return await finishConvert(outPath, false, { ffmpegPath, ffmpegTimeoutMs })
+}
+
+/**
+ * 换声产物的收尾：转 mp3（NapCat 吃 mp3 最稳），转不了就照发 WAV。
+ *
+ * 与说话/唱歌不同，换声这里**不套语气滤镜链**：音色走向、变调、语速都是
+ * 「让引擎怎么念」的参数，对一段已经念好的人声再套一遍只会把音质打薄。
+ * 想调这些就去调第一段（TTS）。
+ */
+async function finishConvert(wavPath, cached, { ffmpegPath, ffmpegTimeoutMs }) {
+  // 换声产物固定 40000Hz（服务端写死校验），而 40000 不是合法 MP3 采样率，
+  // 所以转码时明确降到 44.1k。这里降采样是**有损但必要**：不转就只能发 wav，
+  // 而 NapCat 收 wav 的兼容性不如 mp3。
+  const audio = await ensureRecordAudio(wavPath, {
+    ffmpegPath,
+    timeoutMs: ffmpegTimeoutMs,
+    sampleRate: VOICE_OUTPUT_SAMPLE_RATE,
+  })
+  return {
+    ok: true,
+    path: audio.path,
+    cached,
+    wavPath,
+    converted: audio.converted === true,
+    ...(audio.reason ? { convertReason: audio.reason } : {}),
+  }
+}
+
 /** 谱子文本的短指纹（只用于缓存键，不是完整性校验）。 */
 function cacheKeyOfScore(bytes) {
   return createHash('sha1').update(bytes).digest('hex').slice(0, 16)
@@ -1134,7 +1409,7 @@ export async function ensureRecordAudio(absPath, options) {
   const src = String(absPath ?? '')
   if (src === '') return { path: '', converted: false, reason: 'empty-path' }
 
-  const { ffmpegPath = '', timeoutMs = DEFAULT_FFMPEG_TIMEOUT_MS, filterChain = '', dst: dstOption = '' } = options ?? {}
+  const { ffmpegPath = '', timeoutMs = DEFAULT_FFMPEG_TIMEOUT_MS, filterChain = '', dst: dstOption = '', sampleRate = 0 } = options ?? {}
   const custom = String(filterChain ?? '').trim()
   // 不是 wav、也没要求额外处理：原样发（edge 的 mp3 走这条）。
   if (!/\.wav$/i.test(src) && custom === '') return { path: src, converted: false }
@@ -1155,7 +1430,7 @@ export async function ensureRecordAudio(absPath, options) {
 
   let lastReason = 'ffmpeg-missing: 找不到可用的 ffmpeg'
   for (const bin of candidates) {
-    const result = await runFfmpeg(bin, src, dst, timeoutMs, custom)
+    const result = await runFfmpeg(bin, src, dst, timeoutMs, custom, sampleRate)
     if (result.ok) {
       try {
         if (!existsSync(dst) || statSync(dst).size === 0) {
@@ -1348,8 +1623,12 @@ export function sampleRateFor(src) {
  * @param {string} dst
  * @param {number} timeoutMs
  */
-async function runFfmpeg(bin, src, dst, timeoutMs, filterChain) {
-  const encode = ['-ar', String(sampleRateFor(src)), '-codec:a', 'libmp3lame', '-b:a', VOICE_OUTPUT_BITRATE, dst]
+async function runFfmpeg(bin, src, dst, timeoutMs, filterChain, sampleRate) {
+  // MP3 只认 32/44.1/48k（MPEG-1）与 8–24k（MPEG-2），**40000 不是合法 MP3 采样率**。
+  // 换声产物正好是 40000Hz，照 sampleRateFor 直接喂会编码失败，所以允许显式指定。
+  const forced = Number(sampleRate) > 0 ? Math.round(Number(sampleRate)) : 0
+  const rate = forced > 0 ? forced : sampleRateFor(src)
+  const encode = ['-ar', String(rate), '-codec:a', 'libmp3lame', '-b:a', VOICE_OUTPUT_BITRATE, dst]
   const chain = String(filterChain ?? '').trim() || VOICE_FILTER_CHAIN
   const first = await runFfmpegOnce(bin, ['-y', '-i', src, '-af', chain, ...encode], timeoutMs)
   if (first.ok) return first
@@ -1403,9 +1682,12 @@ async function runFfmpegOnce(bin, args, timeoutMs) {
 /**
  * 调本地 TTS 合成一段语音。
  *
- * `provider` 二选一：
+ * `provider` 三选一：
  *   - `edge`（默认）：调 edge-tts，吐 mp3；
- *   - `feiyu`：转调 `feiyuSynthesize()`（HTTP 服务，吐 wav，会顺手转 mp3）。
+ *   - `feiyu`：转调 `feiyuSynthesize()`（HTTP 服务，吐 wav，会顺手转 mp3）；
+ *   - `rvc`：**两段式** —— 先按 `baseProvider`（默认 feiyu）把文字念出来，
+ *     再把这段人声交给 `feiyuConvert()` 换成 `rvcVoice` 指定的音色。
+ *     服务端没有「文字直接进 RVC」这条路，所以必须两段。
  * 认不出的值直接失败（让调用方降级），**不会**偷偷拿别的引擎顶着。
  *
  * 文本走**环境变量**传给 python，不走命令行参数：
@@ -1426,6 +1708,31 @@ async function runFfmpegOnce(bin, args, timeoutMs) {
 export async function synthesize(text, options) {
   const said = String(text ?? '').trim()
   if (said === '') return { ok: false, reason: 'empty-text' }
+
+  // 换声走两段式：先让 baseProvider 把字念出来，再把这段人声换成目标音色。
+  // 服务端 `/v1/voice-conversion` 只收音频，不收文字，所以绕不开两段。
+  if (normalizeVoiceProvider(options?.provider) === 'rvc') {
+    const o = options ?? {}
+    const baseProvider = normalizeVoiceProvider(o.baseProvider ?? 'feiyu')
+    if (baseProvider === 'rvc') {
+      return { ok: false, reason: 'rvc-needs-a-speech-provider' }
+    }
+    const first = await synthesize(said, { ...o, provider: baseProvider, rvcVoice: undefined })
+    if (first?.ok !== true) return first
+    // 换声要的是干净人声：优先拿 wav 原件，没有就用第一段的产物。
+    const inputPath = String(first.wavPath ?? first.path ?? '')
+    return await feiyuConvert({
+      ...o,
+      ...(o.feiyuServerDir !== undefined ? { serverDir: o.feiyuServerDir } : {}),
+      ...(o.feiyuPythonPath !== undefined ? { pythonPath: o.feiyuPythonPath } : {}),
+      ...(o.feiyuAutoStart !== undefined ? { autoStart: o.feiyuAutoStart } : {}),
+      ...(o.feiyuIdleStopMs !== undefined ? { idleStopMs: o.feiyuIdleStopMs } : {}),
+      inputPath,
+      voice: String(o.rvcVoice ?? '').trim() || DEFAULT_FEIYU_VOICE,
+      // 缓存键里带上第一段用的引擎与音色：同一句话换第一段，产物也该不同。
+      cacheKey: `${baseProvider}|${String(o.voice ?? '').trim()}|${String(o.rvcVoice ?? '')}|${said}`,
+    })
+  }
 
   // 肥鱼走 HTTP，超时/轮询参数跟子进程那套完全不同，所以先分派出去再解构。
   if (normalizeVoiceProvider(options?.provider) === 'feiyu') {

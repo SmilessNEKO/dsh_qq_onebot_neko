@@ -1,5 +1,17 @@
 # 更新日志
 
+## v1.4.0 — 2026-11-15
+
+- **新的第三套声音：换声（`ttsProvider = rvc`）**。不用训 TTS，也能让鲸鲸用别人的音色说话：先用 `rvcBaseProvider`（默认肥鱼）把字念成一段人声，再把这段人声整个换成 `rvcVoice` 指定的音色 —— 两段式，走服务端的 `POST /v1/assets` → `POST /v1/voice-conversion` → 轮询 → 下载。
+  - `voice.js` 新增 `feiyuConvert(options)`，照 `feiyuSing` 的 upload / 轮询 / 下载骨架写；`synthesize()` 新增 rvc 分支（先递归调第一段，再用它的 `wavPath` 换声），缓存键里带上「第一段用了哪个引擎、哪个音色」，换任何一段都不会命中旧缓存。
+  - `ensureRecordAudio` / `runFfmpeg` 新增 `sampleRate` 覆盖：换声产物固定 40000Hz，而 **40000 不是合法 MP3 采样率**（`libmp3lame` 直接 `return code -22 (Invalid argument)`、一个字节都不写），转码时明确降到 44.1k。
+  - 换声**不套语气滤镜链**：音色走向 / 情绪 / 变调 / 语速都是「怎么念」的参数，对已经念好的人声再套只会打薄音质。
+- **新增两个设置项**（schema 那两份都加了）：`rvcVoice`（换声用哪个音色，默认 `feiyu`）、`rvcBaseProvider`（换声前先用谁念，`feiyu` / `edge`，默认 `feiyu`）。
+- **声音页 UI**：引擎那块从两块变三块（肥鱼 / edge-tts / 换声）；`feiyuVoice` 下拉现在按 `kind` 过滤，只列「能说话」的音色，换声的 `rvcVoice` 只列「能换声」的 —— 以前 tts 与 rvc 混在同一张清单里，用户看不出哪个能说话、哪个只能换声；试听面板在换声时只露两个下拉（「先用谁念」+「换成谁」）。
+- **音色探测返回拆表**：`readFeiyuVoiceOptions()` 多回 `ttsVoices` / `rvcVoices` / `defaultTtsVoice` / `defaultRvcVoice`，`voices` 保留兼容；试听 catalog 里新增 `providers.rvc`（带 `baseVoices`）。
+- **唱歌的 provider 判定放宽**：`ttsProvider = rvc` 也能唱（唱歌本来就走 SVS + RVC，同一个服务），只有 `edge` 会拿到 `singing-needs-feiyu`。
+- `qq_bridge_neko_voice` 工具：`provider` enum 加 `rvc`，新增 `rvcVoice` 参数；`voice` 描述补明「rvc 时这是第一段念字用的音色」。
+
 ## v1.3.0 — 2026-11-14
 
 - **合成失败不再自动降级发文字**。以前语音合成不出来（或超过 `voiceMaxChars`）会替你发一条「（语音没合成出来）…」，唱歌失败会发「（歌没唱出来）…」。这套兜底撤掉了：那条语音就算**失败**，一条消息都不发到 QQ，失败原因原样回给模型 —— marker 路径走既有的「出站被拒」回注，工具路径直接在返回值里给 `sent: 0` / `dropped: true` / `reason` / `error`。要不要缩短重试、换引擎、还是自己改用文字发，由模型读完错误决定。

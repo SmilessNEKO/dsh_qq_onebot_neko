@@ -698,6 +698,43 @@ QQ 的“拍一拍”在 OneBot 里走的是 **notice 事件**，不是消息段
 > 卡片按 settings 命名空间派发，`client/client.js` 里的 key 必须逐字等于 `qq-bridge-neko`。
 > 对不上不会报错，只是静默不显示（`test-smoke.mjs` 包含该一致性的断言）。
 
+## 语音：三套引擎与换声链路
+
+`ttsProvider` 三个值：`edge` / `feiyu` / `rvc`。前两个是**真引擎**（各自出人声），
+第三个是**两段式**——它本身不合成，只是「先用前两个之一念字，再把人声换成另一个音色」。
+
+```
+文字 ──┬─ edge  ──┐
+       └─ feiyu ──┴─ 人声 wav ──[rvc]── POST /v1/assets → /v1/voice-conversion → 轮询 → 下载 → 换好的人声
+```
+
+- **`rvc` 为什么进 `VOICE_PROVIDERS`**：只为让 `ttsProvider` 能存下 `rvc` 这个值；
+  真正分派在 `voice.js` 的 `synthesize()` 顶部——rvc 分支先递归调自己一次（`provider = baseProvider`），
+  拿回 `first.wavPath`，再交给 `feiyuConvert()`。`baseProvider = rvc` 会直接返回
+  `rvc-needs-a-speech-provider`，不允许套娃。
+- **缓存键必须带第一段的身份**：`${baseProvider}|${voice}|${rvcVoice}|${text}`。
+  少了前两项，换了念字引擎或念字音色还会命中上一次的换声结果。
+- **采样率是硬约束**：服务端 `feiyu_runtime/rvc.py` 把产物写成
+  `rate != 40000 → Invalid converted audio`。而 **40000 不是合法 MP3 采样率**
+  （`libmp3lame` 会 `return code -22 (Invalid argument)`，一个字节都不写）。
+  所以 `ensureRecordAudio` / `runFfmpeg` 加了一个 `sampleRate` 覆盖参数，
+  换声产物转码时显式降到 44.1k。降采样有损，但不转就只能发 wav。
+- **换声不套语气滤镜链**：`voiceTone` / `voiceMood` / `voicePitchSemitones` / `voiceSpeedFactor`
+  都是「让引擎怎么念」的参数。对一段已经念好、已经换过声的人声再套一次变调 + 低通 + 压缩，
+  只会打薄音质。要调语气就去调第一段。
+- **音色清单要分表**：服务端 `GET /v1/capabilities` 里 `tts[]` 与 `rvc[]` 是两张表，
+  `readFeiyuVoiceOptions()` 原来把它们并成一个 `voices`，设置卡片看不出哪个「能说话」、
+  哪个只能换声。现在额外回 `ttsVoices` / `rvcVoices` / `defaultTtsVoice` / `defaultRvcVoice`，
+  `voices` 保留兼容；`renderFeiyuVoice()` 按字段上的 `voiceKind`（`tts` / `rvc`）过滤。
+- **加一个换声音色 = 装一个 RVC 包**：目录要符合 `feiyu-rvc-release-v1`
+  （`manifest.json` + `files_sha256.json` + `.pth` + `.index` + `run_rvc.py` + `runtime_pins.json`），
+  然后在 `configs/voice_service.json` 的 `rvc` 下加一个键指向它，`POST /v1/admin/reload`。
+  **服务端代码不用改**——`registry.py` 是按 config 遍历的。托管跑法靠 config 里的
+  `runtime_profile`，包内不必放 `runtime.local.json`（那是独立跑法用的）。
+- **唱歌与换声不是一回事**：唱歌走 `/v1/singing`（SVS 出声 → RVC 换声 → 混音），
+  服务端固定用 `singing.rvc_voice`（当前 `feiyu`）。`ttsProvider = rvc` 时也能唱
+  （同一个服务），只有 `edge` 会拿到 `singing-needs-feiyu`。
+
 ## 注入给目标会话的系统提示
 
 插件会给目标会话注入一段用法说明（`buildUsagePrompt()`，在 `index.js` 里导出，便于测试检查），分 6 节：

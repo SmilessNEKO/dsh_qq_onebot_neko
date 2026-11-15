@@ -252,6 +252,27 @@ window.__ModuleLoader__.load({
         hint: '选声音服务里注册的音色，默认 feiyu。没连上服务时只能选内置的那一个。',
       },
       {
+        key: 'rvcVoice',
+        section: '换声',
+        label: '换声用哪个音色',
+        // 也是下拉，清单来自声音服务的 /v1/capabilities 里 `rvc[]` 那一段。
+        kind: 'feiyu-voice',
+        voiceKind: 'rvc',
+        options: [['feiyu', 'feiyu（默认）']],
+        hint: '「引擎」里选「换声」时才用。换声是两段式：先念字，再把人声换成这里选的音色。想加新角色就往声音服务里装一个 RVC 包。',
+      },
+      {
+        key: 'rvcBaseProvider',
+        section: '换声',
+        label: '换声前先用谁念',
+        kind: 'select',
+        options: [
+          ['feiyu', '肥鱼声音服务（默认，音质最好）'],
+          ['edge', 'edge-tts'],
+        ],
+        hint: '换声要先有一段人声。这里选谁把字念出来，念完再换音色。',
+      },
+      {
         key: 'feiyuStyle',
         section: '引擎',
         label: '肥鱼语气',
@@ -574,6 +595,8 @@ window.__ModuleLoader__.load({
           'feiyuBaseUrl',
           'feiyuApiKey',
           'feiyuVoice',
+          'rvcVoice',
+          'rvcBaseProvider',
           'feiyuStyle',
           'feiyuTimeoutMs',
           'feiyuPollIntervalMs',
@@ -630,6 +653,8 @@ window.__ModuleLoader__.load({
       'feiyuBaseUrl',
       'feiyuApiKey',
       'feiyuVoice',
+      'rvcVoice',
+      'rvcBaseProvider',
       'feiyuStyle',
       'feiyuTimeoutMs',
       'feiyuPollIntervalMs',
@@ -641,9 +666,10 @@ window.__ModuleLoader__.load({
       'feiyuIdleStopMinutes',
     ])
 
-    /** 当前是不是「肥鱼声音服务」（本机那套）。 */
+    /** 当前是不是「肥鱼声音服务」（本机那套）。换声（rvc）也要用同一套服务，所以一起算。 */
     function usesFeiyu(shown) {
-      return String(shown?.ttsProvider ?? '') === 'feiyu'
+      const kind = String(shown?.ttsProvider ?? '')
+      return kind === 'feiyu' || kind === 'rvc'
     }
 
     function isIdList(kind) {
@@ -1091,6 +1117,9 @@ window.__ModuleLoader__.load({
       const [text, setText] = react.useState('嗯？主人叫人家呀，在的在的。今天想听人家说点什么呢？')
       const [provider, setProvider] = react.useState('')
       const [voice, setVoice] = react.useState('')
+      // 换声（rvc）要两个：换成谁（rvcVoice）与先用谁把字念出来（rvcBaseProvider）。
+      const [rvcVoice, setRvcVoice] = react.useState('')
+      const [rvcBase, setRvcBase] = react.useState('feiyu')
       const [style, setStyle] = react.useState('')
       const [mood, setMood] = react.useState('')
       const [tone, setTone] = react.useState('')
@@ -1127,7 +1156,9 @@ window.__ModuleLoader__.load({
             setSemitones(Number(d.semitones) || 0)
             setSpeed(Number(d.speed) || 1)
             setStyle(String(d.style || 'cute'))
-            setVoice(String(d.provider === 'feiyu' ? d.feiyuVoice : d.edgeVoice) || '')
+            setVoice(String((d.provider === 'feiyu' ? d.feiyuVoice : d.provider === 'rvc' ? d.feiyuVoice : d.edgeVoice)) || '')
+            setRvcVoice(String(d.rvcVoice || '') || '')
+            setRvcBase(String(d.rvcBaseProvider || 'feiyu'))
           })
           .catch((e) => {
             if (alive) setCatalogError(String(e?.message ?? e))
@@ -1141,8 +1172,9 @@ window.__ModuleLoader__.load({
       react.useEffect(() => {
         if (!catalog) return
         const d = catalog.defaults || {}
-        setVoice(String(provider === 'feiyu' ? d.feiyuVoice : d.edgeVoice) || '')
-      }, [provider, catalog])
+        const base = provider === 'rvc' ? String(rvcBase || 'feiyu') : provider
+        setVoice(String((base === 'feiyu' ? d.feiyuVoice : d.edgeVoice) || ''))
+      }, [provider, catalog, rvcBase])
 
       // 换新音频就试着自动播一次；被拦下（自动播放策略）就把播放条留着让用户自己点。
       react.useEffect(() => {
@@ -1179,9 +1211,14 @@ window.__ModuleLoader__.load({
       const controls = new Set(
         (catalog?.providers?.[provider]?.controls || (provider === 'feiyu'
           ? ['voice', 'style', 'mood', 'tone', 'semitones', 'speed']
-          : ['voice', 'rate', 'pitch', 'mood', 'tone', 'semitones', 'speed'])),
+          : provider === 'rvc'
+            ? ['voice', 'rvcBase']
+            : ['voice', 'rate', 'pitch', 'mood', 'tone', 'semitones', 'speed'])),
       )
-      const voiceOptions = catalog?.providers?.[provider]?.voices || []
+      // 换声要两份清单：「第一段用谁念」是 baseVoices，「换成谁」是 rvc 那张表的 voices。
+      const baseVoiceOptions = catalog?.providers?.rvc?.baseVoices || catalog?.providers?.feiyu?.voices || []
+      const rvcVoiceOptions = catalog?.providers?.rvc?.voices || []
+      const voiceOptions = provider === 'rvc' ? baseVoiceOptions : (catalog?.providers?.[provider]?.voices || [])
       const styleOptions = catalog?.providers?.[provider]?.styles || []
       const maxChars = Number(catalog?.maxChars) || 300
 
@@ -1206,7 +1243,11 @@ window.__ModuleLoader__.load({
             speed: Number(speed) || 1,
           }
           if (provider === 'feiyu' && style) payload.style = style
-          if (provider === 'edge') {
+          if (provider === 'rvc') {
+            payload.rvcVoice = String(rvcVoice || '')
+            payload.baseProvider = String(rvcBase || 'feiyu')
+          }
+          if (provider === 'edge' || (provider === 'rvc' && rvcBase === 'edge')) {
             payload.rate = String(shown.ttsRate ?? '')
             payload.pitch = String(shown.ttsPitch ?? '')
           }
@@ -1227,7 +1268,7 @@ window.__ModuleLoader__.load({
           const url = URL.createObjectURL(blob)
           urlRef.current = url
           setAudioUrl(url)
-          setInfo(`${(blob.size / 1024).toFixed(0)} KB · ${provider === 'feiyu' ? '肥鱼' : 'edge-tts'}`)
+          setInfo(`${(blob.size / 1024).toFixed(0)} KB · ${provider === 'feiyu' ? '肥鱼' : provider === 'rvc' ? '换声' : 'edge-tts'}`)
         } catch (e) {
           setError(String(e?.message ?? e))
         } finally {
@@ -1288,9 +1329,34 @@ window.__ModuleLoader__.load({
             ),
           ),
         ),
+        provider === 'rvc' ? row('换成谁', h('select', {
+          style: S.input,
+          value: rvcVoice,
+          disabled: busy || !writable,
+          onChange: (e) => {
+            const next = String(e.target.value)
+            setRvcVoice(next)
+            pick('rvcVoice', next)
+          },
+        }, (rvcVoiceOptions.length > 0 ? rvcVoiceOptions : [{ id: rvcVoice, label: rvcVoice || '（还没有换声包）' }]).map((v) =>
+          h('option', { style: OPTION_STYLE, key: String(v.id), value: String(v.id) }, String(v.label ?? v.id)),
+        ))) : null,
+        provider === 'rvc' ? row('先用谁念', h('select', {
+          style: S.input,
+          value: rvcBase,
+          disabled: busy || !writable,
+          onChange: (e) => {
+            const next = String(e.target.value)
+            setRvcBase(next)
+            pick('rvcBaseProvider', next)
+          },
+        }, [
+          ['feiyu', '肥鱼声音服务'],
+          ['edge', 'edge-tts'],
+        ].map(([v, text]) => h('option', { style: OPTION_STYLE, key: v, value: v }, text)))) : null,
         voiceOptions.length > 0 && controls.has('voice')
           ? row(
-              '音色',
+              provider === 'rvc' ? '念字音色' : '音色',
               h(
                 'select',
                 {
@@ -1300,7 +1366,7 @@ window.__ModuleLoader__.load({
                   onChange: (e) => {
                     const next = String(e.target.value)
                     setVoice(next)
-                    pick(provider === 'feiyu' ? 'feiyuVoice' : 'ttsVoice', next)
+                    pick(provider === 'feiyu' || provider === 'rvc' ? 'feiyuVoice' : 'ttsVoice', next)
                   },
                 },
                 voiceOptions.map((v) =>
@@ -1811,6 +1877,7 @@ window.__ModuleLoader__.load({
         const value = String(cur ?? '')
         const localOn = value === 'edge'
         const feiyuOn = value === 'feiyu'
+        const rvcOn = value === 'rvc'
 
         const pick = (next) => () => {
           if (!snap.writable || busy) return
@@ -1868,6 +1935,17 @@ window.__ModuleLoader__.load({
               '肥鱼声音服务',
               h('span', { style: S.choiceDesc }, '跑在本机 9880，不联网；声音更像人，也能唱歌'),
             ),
+            h(
+              'button',
+              {
+                type: 'button',
+                style: { ...S.choiceCard, ...(rvcOn ? S.choiceOn : {}) },
+                disabled: !snap.writable || busy,
+                onClick: pick('rvc'),
+              },
+              '换声（TTS → RVC）',
+              h('span', { style: S.choiceDesc }, '先念出人声，再换成另一个人的音色；两段式，比纯 TTS 慢一点'),
+            ),
           ),
         )
       }
@@ -1883,7 +1961,10 @@ window.__ModuleLoader__.load({
        */
       function renderFeiyuVoice(field, cur) {
         const probed = catalog?.feiyuVoices
-        const probedVoices = Array.isArray(probed?.voices) ? probed.voices : []
+        const wantKind = String(field?.voiceKind ?? 'tts')
+        const allProbed = Array.isArray(probed?.voices) ? probed.voices : []
+        // 说话音色与换声音色混在一张表里，用户分不清；按字段要的那一类过滤。
+        const probedVoices = allProbed.filter((row) => String(row?.kind ?? 'tts') === wantKind)
         const pairs = []
         const seen = new Set()
         const pushOption = (value, label) => {
@@ -1898,7 +1979,7 @@ window.__ModuleLoader__.load({
             if (id === '') continue
             const styles = Array.isArray(row?.styles) ? row.styles.filter((x) => String(x ?? '').trim() !== '') : []
             const tags = []
-            if (row?.kind === 'rvc') tags.push('换声')
+            if (wantKind !== 'tts') tags.push('换声')
             if (styles.length > 0) tags.push(`语气 ${styles.map(String).join(' / ')}`)
             if (row?.available === false) tags.push('当前不可用')
             pushOption(id, tags.length > 0 ? `${id}（${tags.join('，')}）` : id)
