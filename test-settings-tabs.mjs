@@ -247,6 +247,29 @@ function renderAt(groupId, settingsValue = base) {
   const sherpaTree = expand(renderAt('voice', { ...base, ttsProvider: 'sherpa' }))
   const sherpaKeys = shownKeys(sherpaTree)
   check('旧配置写着 sherpa：按本地那套渲染，不报错', sherpaKeys.has('ttsVoice') && !sherpaKeys.has('feiyuVoice'))
+
+  // ── 换声（rvc）是第三套：字段集必须真的不一样 ──────────────────────────
+  // 用户报的 bug：点了「换声」，下面设置一动不动，看着像没切过去。
+  // 原因是 rvcVoice / rvcBaseProvider 当时混在 FEIYU_ONLY_KEYS 里，
+  // feiyu 与 rvc 的字段集完全相同。这里把差异钉住。
+  const rvcTree = expand(renderAt('voice', { ...base, ttsProvider: 'rvc' }))
+  const rvcKeys = shownKeys(rvcTree)
+  check('选换声时显示换声那两项', rvcKeys.has('rvcVoice') && rvcKeys.has('rvcBaseProvider'))
+  check('选换声时仍显示肥鱼那套（换声也要用它）', rvcKeys.has('feiyuBaseUrl') && rvcKeys.has('feiyuVoice'))
+  check(
+    '选换声时本地那套收起来',
+    !rvcKeys.has('ttsVoice') && !rvcKeys.has('ttsPythonPath'),
+    [...rvcKeys].filter((k) => k.startsWith('tts') && k !== 'ttsProvider').join(', '),
+  )
+  check(
+    '选肥鱼时不显示换声那两项',
+    !feiyuKeys.has('rvcVoice') && !feiyuKeys.has('rvcBaseProvider'),
+    [...feiyuKeys].filter((k) => k.startsWith('rvc')).join(', '),
+  )
+  check('换声与肥鱼的字段集不完全相同', rvcKeys.size !== feiyuKeys.size || [...rvcKeys].some((k) => !feiyuKeys.has(k)))
+  check('三个模块都列出来可选', ['edge-tts', '肥鱼声音服务', '换声'].every((t) => all(rvcTree).some((n) => textOf(n).includes(t))))
+  check('换声那块写着两段式', /两段式/.test(buttons(rvcTree).map(textOf).find((t) => t.includes('换声')) ?? ''))
+  check('ttsProvider 的 options 里有 rvc', (providerField?.options ?? []).some(([v]) => v === 'rvc'))
 }
 
 // ── 4. 设置页入口 ─────────────────────────────────────────────────────────

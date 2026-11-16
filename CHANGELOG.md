@@ -1,5 +1,13 @@
 # 更新日志
 
+## v1.4.1 — 2026-11-16
+
+v1.4.0 把换声做出来之后，实际点过去会撞上三个问题，这一版全修掉：
+
+- **切到换声点保存会报 `$.ttsProvider expected "edge" | "feiyu" but got "rvc"`**。`ttsProvider` 的 schema 是 `Schema.union([Schema.const('edge'), Schema.const('feiyu')])`，加第三套声音时只改了运行时的 `VOICE_PROVIDERS`，忘了把 schema 的 union 也扩开 —— 界面能切、一存就被校验打回来。两份 schema（插件配置表单与本机设置接口各一份）都补上了 `Schema.const('rvc')`，描述也写了换声是两段式。
+- **切到换声后下面的设置项一动不动**。`rvcVoice` / `rvcBaseProvider` 原来被塞进了 `FEIYU_ONLY_KEYS`，于是 `feiyu` 与 `rvc` 的字段集**完全一样** —— 切过去看着什么都没变，以为没切成功。现在拆出独立的 `RVC_ONLY_KEYS` 与 `usesRvc()`：选换声会多出「换成谁」「先用谁念」两项，选纯肥鱼则不显示。
+- **换声试听两次听起来都是同一个人（肥鱼）**。`DEFAULT_RVC_VOICE` 原来是 `'feiyu'`，而 `feiyu` 正是肥鱼自己的换声包 —— 把肥鱼的声音换成肥鱼的声音，等于什么都没做。现在默认留空，由新增的 `pickRvcVoice()` 从服务端 `rvc[]` 清单里挑第一个**不是 `feiyu`** 的；设置里存的值不在清单里时也走同一条规则。试听面板切到换声时同样自动挑一次，下拉显示的和实际发出去的是同一个。
+
 ## v1.4.0 — 2026-11-15
 
 - **新的第三套声音：换声（`ttsProvider = rvc`）**。不用训 TTS，也能让鲸鲸用别人的音色说话：先用 `rvcBaseProvider`（默认肥鱼）把字念成一段人声，再把这段人声整个换成 `rvcVoice` 指定的音色 —— 两段式，走服务端的 `POST /v1/assets` → `POST /v1/voice-conversion` → 轮询 → 下载。

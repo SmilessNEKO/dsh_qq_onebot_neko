@@ -83,11 +83,31 @@ export const DEFAULT_FEIYU_CONVERT_TIMEOUT_MS = 300000
 /**
  * 换声默认用哪个音色 id / 先用谁把字念出来。
  *
- * `rvcVoice` 填的是服务端 `/v1/capabilities` 里 rvc 那张表注册的 id；
- * 第一个装好的永远是肥鱼自己（`feiyu`），所以默认就它。
+ * **默认留空，不要写成 `feiyu`**。`feiyu` 是肥鱼自己那个 RVC 包，
+ * 把「肥鱼的声音」换成「肥鱼的声音」等于什么都没做 —— 用户点了换声、
+ * 试听听起来还是原来那个人，就会以为功能没生效（真实报障）。
+ * 留空之后由 `pickRvcVoice()` 从服务端清单里挑第一个**不是 feiyu** 的。
  */
-export const DEFAULT_RVC_VOICE = 'feiyu'
+export const DEFAULT_RVC_VOICE = ''
 export const DEFAULT_RVC_BASE_PROVIDER = 'feiyu'
+
+/**
+ * 从服务端给的换声音色清单里定一个真正要用的 id。
+ *
+ * 规则：指定的 id 在清单里就用它；不在（或压根没指定）就挑第一个不是
+ * `feiyu` 的 —— `feiyu` 换到 `feiyu` 听不出任何区别，选它等于白跑一遍。
+ * 清单里只有 `feiyu` 时才退回它（至少能跑通），调用方可以据此提示用户去装包。
+ */
+export function pickRvcVoice(voices, wanted) {
+  const want = String(wanted ?? '').trim()
+  const ids = (Array.isArray(voices) ? voices : [])
+    .map((row) => String((row && typeof row === 'object' ? row.id : row) ?? '').trim())
+    .filter((id) => id !== '')
+  if (want !== '' && (ids.length === 0 || ids.includes(want))) return want
+  const other = ids.find((id) => id !== DEFAULT_FEIYU_VOICE)
+  if (other !== undefined) return other
+  return ids[0] ?? want
+}
 /**
  * 换声产物的采样率（Hz）。
  *

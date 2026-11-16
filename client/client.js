@@ -187,8 +187,9 @@ window.__ModuleLoader__.load({
         options: [
           ['feiyu', '肥鱼声音服务（跑在本机，不联网）'],
           ['edge', 'edge-tts（联网调微软接口，免费备选）'],
+          ['rvc', '换声（TTS → RVC，先念再换音色）'],
         ],
-        hint: '二选一：肥鱼跑在本机、不联网；edge-tts 要连微软的服务器。选哪个就只显示哪一套设置，另一套收起来但值不会丢。',
+        hint: '三选一：肥鱼跑在本机、不联网；edge-tts 要连微软的服务器；换声先用其中一个把字念出来、再换成另一个人的音色。选哪个就只显示哪一套设置，其余收起来但值不会丢。',
       },
       {
         key: 'ttsVoice',
@@ -653,8 +654,6 @@ window.__ModuleLoader__.load({
       'feiyuBaseUrl',
       'feiyuApiKey',
       'feiyuVoice',
-      'rvcVoice',
-      'rvcBaseProvider',
       'feiyuStyle',
       'feiyuTimeoutMs',
       'feiyuPollIntervalMs',
@@ -665,11 +664,23 @@ window.__ModuleLoader__.load({
       'feiyuPythonPath',
       'feiyuIdleStopMinutes',
     ])
+    /**
+     * 只有「换声」才需要的键。
+     *
+     * 以前这两项混在 `FEIYU_ONLY_KEYS` 里，结果 `feiyu` 与 `rvc` 的字段集一模一样，
+     * 用户点了「换声」下面的设置一动不动，以为没切过去。分开之后切过去会多出这两项。
+     */
+    const RVC_ONLY_KEYS = new Set(['rvcVoice', 'rvcBaseProvider'])
 
     /** 当前是不是「肥鱼声音服务」（本机那套）。换声（rvc）也要用同一套服务，所以一起算。 */
     function usesFeiyu(shown) {
       const kind = String(shown?.ttsProvider ?? '')
       return kind === 'feiyu' || kind === 'rvc'
+    }
+
+    /** 当前是不是「换声」（TTS → RVC 两段式）。 */
+    function usesRvc(shown) {
+      return String(shown?.ttsProvider ?? '') === 'rvc'
     }
 
     function isIdList(kind) {
@@ -1174,6 +1185,15 @@ window.__ModuleLoader__.load({
         const d = catalog.defaults || {}
         const base = provider === 'rvc' ? String(rvcBase || 'feiyu') : provider
         setVoice(String((base === 'feiyu' ? d.feiyuVoice : d.edgeVoice) || ''))
+        // 换声目标单独定：默认值可能是空的，或者指向 feiyu（换成自己 = 听不出差别）。
+        // 从清单里挑第一个不是 feiyu 的，让「点了换声」真能听出另一个人的声音。
+        if (provider === 'rvc') {
+          const list = Array.isArray(catalog?.providers?.rvc?.voices) ? catalog.providers.rvc.voices : []
+          const ids = list.map((v) => String(v?.id ?? v ?? '')).filter((id) => id !== '')
+          const wanted = String(d.rvcVoice || '')
+          if (wanted !== '' && (ids.length === 0 || ids.includes(wanted))) setRvcVoice(wanted)
+          else setRvcVoice(ids.find((id) => id !== 'feiyu') ?? ids[0] ?? wanted)
+        }
       }, [provider, catalog, rvcBase])
 
       // 换新音频就试着自动播一次；被拦下（自动播放策略）就把播放条留着让用户自己点。
@@ -2397,6 +2417,7 @@ window.__ModuleLoader__.load({
         (GROUPS.find((g) => g.id === activeGroup) ?? GROUPS[0] ?? { keys: [] }).keys,
       )
       const feiyu = usesFeiyu(shown)
+      const rvc = usesRvc(shown)
       /** 页内小节的显示顺序。没列到的排在最后。 */
       const SECTION_ORDER = ['开关', '引擎', '音色与语气', '通用', '唱歌', '服务']
       /** 当前页要显示的字段：按小节顺序稳定排一遍。 */
@@ -2422,6 +2443,8 @@ window.__ModuleLoader__.load({
         // 藏起来只是不显示，值仍原样留在配置里 —— 切回去还在。
         if (feiyu && LOCAL_ONLY_KEYS.has(f.key)) continue
         if (!feiyu && FEIYU_ONLY_KEYS.has(f.key)) continue
+        // 换声才有「换成谁 / 先用谁念」这两项；纯肥鱼与 edge 都不显示。
+        if (!rvc && RVC_ONLY_KEYS.has(f.key)) continue
         if (f.section && f.section !== lastSection) {
           lastSection = f.section
           rows.push(
@@ -3263,7 +3286,7 @@ window.__ModuleLoader__.load({
     exports.name = 'dsh-qq-bridge-neko'
     // 纯函数给离线测试用（test-smoke.mjs 会在假 ctx 里真跑这个 bundle）。
     // Cordis 只认 apply / inject / name / Config，多余的导出它不管。
-    exports.__test = { sessionOptions, draftFrom, parse, fields: FIELDS, bindSettings, groupDisplayRows, groups: GROUPS, usesFeiyu, localOnlyKeys: [...LOCAL_ONLY_KEYS], feiyuOnlyKeys: [...FEIYU_ONLY_KEYS] }
+    exports.__test = { sessionOptions, draftFrom, parse, fields: FIELDS, bindSettings, groupDisplayRows, groups: GROUPS, usesFeiyu, usesRvc, localOnlyKeys: [...LOCAL_ONLY_KEYS], feiyuOnlyKeys: [...FEIYU_ONLY_KEYS], rvcOnlyKeys: [...RVC_ONLY_KEYS] }
     return module.exports
   },
 })

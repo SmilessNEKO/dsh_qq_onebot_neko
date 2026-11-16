@@ -57,6 +57,8 @@ import {
   sampleRateFor,
   ttsFailureHint,
   VOICE_PROVIDERS,
+  pickRvcVoice,
+  DEFAULT_RVC_VOICE,
 } from './voice.js'
 
 let failed = 0
@@ -205,6 +207,23 @@ const dir = mkdtempSync(join(tmpdir(), 'qq-bridge-neko-voice-'))
   check('ext 可以覆盖后缀', voiceCacheName('同一句话', { provider: 'feiyu', ext: 'mp3' }).endsWith('.mp3'))
 }
 
+// 15.5) 换声目标怎么挑：默认绝不能是 feiyu（换成自己 = 听不出差别）
+{
+  const both = [{ id: 'feiyu' }, { id: 'nahida' }]
+  check('默认值不是 feiyu', DEFAULT_RVC_VOICE !== 'feiyu', DEFAULT_RVC_VOICE)
+  check('默认值留空，由清单决定', DEFAULT_RVC_VOICE === '')
+  check('没指定时挑第一个不是 feiyu 的', pickRvcVoice(both, '') === 'nahida')
+  check('没指定时（undefined）同样挑非 feiyu', pickRvcVoice(both, undefined) === 'nahida')
+  check('指定的在清单里就照用', pickRvcVoice(both, 'feiyu') === 'feiyu')
+  check('指定的不在清单里就改成挑非 feiyu', pickRvcVoice(both, 'ghost') === 'nahida')
+  check('清单只有 feiyu 时退回 feiyu（至少能跑通）', pickRvcVoice([{ id: 'feiyu' }], '') === 'feiyu')
+  check('清单为空时返回指定的那个', pickRvcVoice([], 'nahida') === 'nahida')
+  check('清单为空且没指定时返回空串', pickRvcVoice([], '') === '')
+  check('清单是纯字符串数组也认', pickRvcVoice(['feiyu', 'nahida'], '') === 'nahida')
+  check('非数组不炸', pickRvcVoice('oops', 'nahida') === 'nahida')
+  check('空 id 的行被忽略', pickRvcVoice([{ id: '' }, { id: 'nahida' }], '') === 'nahida')
+  check('三个候选时挑第一个非 feiyu', pickRvcVoice([{ id: 'feiyu' }, { id: 'a' }, { id: 'b' }], '') === 'a')
+}
 // 16) 默认值：默认引擎必须是 edge（升级后行为不变）
 {
   check('默认引擎是 edge', DEFAULT_VOICE_PROVIDER === 'edge')
