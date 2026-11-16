@@ -310,6 +310,24 @@ function renderAt(groupId, settingsValue = base) {
   // ── 切完要告诉用户下面显示的是哪一套 ───────────────────────────────────
   check('切换后有一句话说明当前显示的是哪一套', /下面显示的是「换声/.test(textOf(rvcTree)))
   check('肥鱼那套也说明清楚', /下面显示的是「肥鱼声音服务」/.test(textOf(feiyuTree)))
+
+  // ── 网格里的每一格必须成对：标签格 + 控件格，跨列元素要显式跨列 ────────────
+  // 用户报的 bug：加了小节说明之后整页变成「左边全是元素、右边空荡荡」。
+  // 根因是小节说明没写 gridColumn，被当成第一列的一格，后面所有字段错位一格。
+  const flat = all(rvcTree)
+  // 网格的直接子格：小节标题 / 小节说明 / 字段标签格 / 字段控件格。
+  // 前两类必须显式跨满两列，否则会占掉第一列，后面所有字段整体错位一格。
+  const sectionNodes = flat.filter((n) => /^section-/.test(String(n.props?.key ?? '')))
+  check('找到了小节标题与小节说明', sectionNodes.length >= 4, `${sectionNodes.length} 个`)
+  check(
+    '小节标题与说明都跨满两列（否则整页变成左边挤、右边空）',
+    sectionNodes.every((n) => n.props?.style?.gridColumn === '1 / -1'),
+    sectionNodes.filter((n) => n.props?.style?.gridColumn !== '1 / -1').map((n) => String(n.props?.key)).join(' | '),
+  )
+  // 字段标签格与控件格必须成对出现，数量相等。
+  const labelCells = flat.filter((n) => fieldKeys.includes(String(n.props?.key ?? '')))
+  const ctlCells = flat.filter((n) => /-ctl$/.test(String(n.props?.key ?? '')))
+  check('每个字段都有标签格和控件格，一一对应', labelCells.length === ctlCells.length, `${labelCells.length} vs ${ctlCells.length}`)
 }
 
 // ── 4. 设置页入口 ─────────────────────────────────────────────────────────

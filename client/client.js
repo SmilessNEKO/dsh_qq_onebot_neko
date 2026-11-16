@@ -960,6 +960,9 @@ window.__ModuleLoader__.load({
       },
       // 当前页的一句话说明：压在字段上方，字小、不抢戏
       sectionNote: { fontSize: '12px', opacity: 0.6, lineHeight: 1.5 },
+      // 网格里的小节说明：必须跨两列，否则它会占掉第一列（标签列），
+      // 后面的字段全被挤到第二列起，整页变成「左边一堆、右边空着」。
+      sectionSub: { gridColumn: '1 / -1', fontSize: '12px', opacity: 0.6, lineHeight: 1.5, marginTop: '-4px' },
       // 页内小节标题：跨两列，压在字段上面，字小但加粗
       sectionHead: {
         gridColumn: '1 / -1',
@@ -2464,7 +2467,7 @@ window.__ModuleLoader__.load({
           // 小节下面那句定位说明：跨列，跟标题一起出现。
           if (SECTION_NOTE[f.section]) {
             rows.push(
-              h('div', { key: `section-note-${f.section}`, style: S.sectionNote }, SECTION_NOTE[f.section]),
+              h('div', { key: `section-note-${f.section}`, style: S.sectionSub }, SECTION_NOTE[f.section]),
             )
           }
         }
