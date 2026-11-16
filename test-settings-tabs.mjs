@@ -120,6 +120,14 @@ function shownKeys(node) {
   )
 }
 
+/** 渲染树里字段出现的先后顺序（按 DOM 顺序，用来钉「换声字段不能甩到页尾」）。 */
+function orderOfKeys(node) {
+  return all(node)
+    .map((n) => n.props?.key)
+    .filter((k) => typeof k === 'string' && fieldKeys.includes(k))
+    .filter((k, i, list) => list.indexOf(k) === i)
+}
+
 // ── 起一张卡片 ─────────────────────────────────────────────────────────────
 let registry = []
 
@@ -270,6 +278,38 @@ function renderAt(groupId, settingsValue = base) {
   check('三个模块都列出来可选', ['edge-tts', '肥鱼声音服务', '换声'].every((t) => all(rvcTree).some((n) => textOf(n).includes(t))))
   check('换声那块写着两段式', /两段式/.test(buttons(rvcTree).map(textOf).find((t) => t.includes('换声')) ?? ''))
   check('ttsProvider 的 options 里有 rvc', (providerField?.options ?? []).some(([v]) => v === 'rvc'))
+
+  // ── 换声的字段必须紧跟着选择卡出现，不能甩到整页最底下 ────────────────────
+  // 用户报的 bug：点完「换声」，变化的菜单出现在几屏之外，以为没切。
+  // 根因是 '换声' 不在 SECTION_ORDER 里，被排到末尾。
+  const order = orderOfKeys(rvcTree)
+  const atProvider = order.indexOf('ttsProvider')
+  const atRvcVoice = order.indexOf('rvcVoice')
+  check(
+    '换声字段紧跟在「用哪套声音」之后（不超过 3 个字段）',
+    atProvider >= 0 && atRvcVoice >= 0 && atRvcVoice - atProvider <= 3,
+    `ttsProvider=#${atProvider} rvcVoice=#${atRvcVoice}`,
+  )
+  check(
+    '换声字段排在「服务」那一节之前',
+    order.indexOf('rvcVoice') > -1 && order.indexOf('feiyuServerDir') > order.indexOf('rvcVoice'),
+  )
+
+  // ── edge 不能套两层卡 ──────────────────────────────────────────────────
+  const edgeTree = expand(renderAt('voice', { ...base, ttsProvider: 'edge' }))
+  // 判据是「卡里套卡」：外层 div 带卡片边框、内层 button 又带一次，视觉上两层。
+  // 不能只数 button 个数 —— 改前外层是 div，按钮也只有 1 个，数不出来。
+  const cardLike = (n) => {
+    const st = n.props?.style
+    return Boolean(st && typeof st === 'object' && st.borderRadius && st.padding)
+  }
+  const nested = all(edgeTree).filter((n) => cardLike(n) && (n.children ?? []).some(cardLike))
+  check('edge 那块没有卡里再套卡', nested.length === 0, `嵌套了 ${nested.length} 层`)
+  check('edge 那块是单个按钮卡', buttons(edgeTree).filter((b) => textOf(b).includes('edge-tts')).length === 1)
+
+  // ── 切完要告诉用户下面显示的是哪一套 ───────────────────────────────────
+  check('切换后有一句话说明当前显示的是哪一套', /下面显示的是「换声/.test(textOf(rvcTree)))
+  check('肥鱼那套也说明清楚', /下面显示的是「肥鱼声音服务」/.test(textOf(feiyuTree)))
 }
 
 // ── 4. 设置页入口 ─────────────────────────────────────────────────────────

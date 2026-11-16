@@ -181,8 +181,8 @@ window.__ModuleLoader__.load({
       },
       {
         key: 'ttsProvider',
-        section: '引擎',
-        label: '声音模块',
+        section: '选哪套声音',
+        label: '用哪套声音',
         kind: 'voice-module',
         options: [
           ['feiyu', '肥鱼声音服务（跑在本机，不联网）'],
@@ -193,59 +193,59 @@ window.__ModuleLoader__.load({
       },
       {
         key: 'ttsVoice',
-        section: '引擎',
-        label: '音色',
+        section: 'edge-tts 的设置',
+        label: 'edge 音色（音色名）',
         kind: 'text',
         hint: 'edge-tts 的音色名，例如 zh-CN-XiaoyiNeural（女声，偏软）、zh-CN-XiaoxiaoNeural、zh-CN-YunxiNeural（男声）。',
       },
-      { section: '引擎', key: 'ttsRate', label: '语速', kind: 'text', hint: '相对语速，例如 -8%（慢一点）、+0%。' },
-      { section: '引擎', key: 'ttsPitch', label: '音高', kind: 'text', hint: '相对音高，例如 +12Hz（高一点）、+0Hz。' },
+      { section: 'edge-tts 的设置', key: 'ttsRate', label: '语速', kind: 'text', hint: '相对语速，例如 -8%（慢一点）、+0%。' },
+      { section: 'edge-tts 的设置', key: 'ttsPitch', label: '音高', kind: 'text', hint: '相对音高，例如 +12Hz（高一点）、+0Hz。' },
       {
         key: 'ttsPythonPath',
-        section: '引擎',
+        section: 'edge-tts 的设置',
         label: '哪个 python 能跑 edge-tts',
         kind: 'text',
         hint: '填装好 edge-tts 的 python.exe 绝对路径。留空 = 用 PATH 里的 python（大多数系统 python 没装 edge-tts，合成会直接失败，错误会原样报给 AI）。',
       },
       {
         key: 'voiceMaxChars',
-        section: '通用',
+        section: '几套共用的设置',
         label: '一条语音最多多少字',
         kind: 'number',
         hint: '超过这个字数就不合成，直接把失败原因回给 AI（一条消息都不发）。默认 120。',
       },
       {
         key: 'voiceCacheDir',
-        section: '通用',
+        section: '几套共用的设置',
         label: '语音缓存放哪',
         kind: 'text',
         hint: '留空 = $DSH_HOME/qq-bridge-neko-voice。同一段话 + 同一个引擎同一套参数命中缓存，不会重复合成。',
       },
       {
         key: 'ffmpegPath',
-        section: '通用',
+        section: '几套共用的设置',
         label: '转 mp3 用哪个 ffmpeg',
         kind: 'text',
         hint: '肥鱼吐的是 wav，转成 mp3 更好发。留空 = 先找 PATH 上的 ffmpeg，再找本机自带的 D:\\小丸\\tools\\ffmpeg.exe；都没有就原样发 wav，不算失败。',
       },
       {
         key: 'feiyuBaseUrl',
-        section: '引擎',
+        section: '肥鱼声音服务的设置',
         label: '肥鱼声音服务地址',
         kind: 'text',
         hint: '本机那个声音服务的地址，默认 http://127.0.0.1:9880。得先把服务起起来，语音才合成得出来。',
       },
       {
         key: 'feiyuApiKey',
-        section: '引擎',
+        section: '肥鱼声音服务的设置',
         label: '肥鱼服务口令',
         kind: 'secret',
         hint: '服务要求的 Bearer 口令。留空 = 不带鉴权头。存过之后这里不会再显示出来，想换直接重填。',
       },
       {
         key: 'feiyuVoice',
-        section: '引擎',
-        label: '肥鱼音色',
+        section: '肥鱼声音服务的设置',
+        label: '说话音色',
         // 下拉而不是手打：清单由宿主半去打声音服务的 /v1/capabilities 拿（见 catalog 接口）。
         // 服务没起时退回下面这份内置项 —— 当前发布的包里确实只注册了 feiyu 一个音色。
         kind: 'feiyu-voice',
@@ -254,8 +254,8 @@ window.__ModuleLoader__.load({
       },
       {
         key: 'rvcVoice',
-        section: '换声',
-        label: '换声用哪个音色',
+        section: '换声的设置',
+        label: '换成谁（换声包）',
         // 也是下拉，清单来自声音服务的 /v1/capabilities 里 `rvc[]` 那一段。
         kind: 'feiyu-voice',
         voiceKind: 'rvc',
@@ -264,7 +264,7 @@ window.__ModuleLoader__.load({
       },
       {
         key: 'rvcBaseProvider',
-        section: '换声',
+        section: '换声的设置',
         label: '换声前先用谁念',
         kind: 'select',
         options: [
@@ -275,7 +275,7 @@ window.__ModuleLoader__.load({
       },
       {
         key: 'feiyuStyle',
-        section: '引擎',
+        section: '肥鱼声音服务的设置',
         label: '肥鱼语气',
         kind: 'select',
         options: [
@@ -284,8 +284,8 @@ window.__ModuleLoader__.load({
         ],
         hint: '肥鱼服务的语气风格，默认 cute。只在合成时用得上。',
       },
-      { section: '引擎', key: 'feiyuTimeoutMs', label: '肥鱼最多等多久', kind: 'number', hint: '毫秒。第一次合成本机要加载模型、会慢一些，默认 180000。' },
-      { section: '引擎', key: 'feiyuPollIntervalMs', label: '肥鱼隔多久问一次', kind: 'number', hint: '毫秒。任务排队时多久查一次进度，默认 1000。' },
+      { section: '肥鱼声音服务的设置', key: 'feiyuTimeoutMs', label: '肥鱼最多等多久', kind: 'number', hint: '毫秒。第一次合成本机要加载模型、会慢一些，默认 180000。' },
+      { section: '肥鱼声音服务的设置', key: 'feiyuPollIntervalMs', label: '肥鱼隔多久问一次', kind: 'number', hint: '毫秒。任务排队时多久查一次进度，默认 1000。' },
       {
         key: 'feiyuSingTimeoutMs',
         section: '唱歌',
@@ -303,7 +303,7 @@ window.__ModuleLoader__.load({
       {
         key: 'voiceMood',
         section: '音色与语气',
-        label: '语气',
+        label: '整体语气预设',
         kind: 'select',
         options: [
           ['default', '默认（不改参数）'],
@@ -318,7 +318,7 @@ window.__ModuleLoader__.load({
       {
         key: 'voiceTone',
         section: '音色与语气',
-        label: '音色',
+        label: '音色走向',
         kind: 'select',
         options: [
           ['natural', '自然'],
@@ -327,7 +327,7 @@ window.__ModuleLoader__.load({
           ['deep', '低沉（明显更沉）'],
           ['bright', '明亮（更清亮）'],
         ],
-        hint: '两个引擎都生效：合成完在本地用 ffmpeg 调一遍。觉得尖就选「温暖」或「低沉」。',
+        hint: '合成完在本地用 ffmpeg 调一遍，edge / 肥鱼 / 换声都生效。觉得尖就选「温暖」或「低沉」。',
       },
       {
         key: 'voicePitchSemitones',
@@ -341,32 +341,32 @@ window.__ModuleLoader__.load({
         section: '音色与语气',
         label: '语速倍率',
         kind: 'number',
-        hint: '1 = 原速，0.9 = 慢一点，1.15 = 快一点，范围 0.5 ~ 2。两个引擎都生效。',
+        hint: '1 = 原速，0.9 = 慢一点，1.15 = 快一点，范围 0.5 ~ 2。edge / 肥鱼 生效；换声要调去调第一段那个引擎。',
       },
       {
         key: 'feiyuAutoStart',
-        section: '服务',
+        section: '肥鱼声音服务的设置',
         label: '服务没起就自动拉起',
         kind: 'boolean',
         hint: '合成前先问一下本地声音服务；没开就自己把它启动起来再合成。关掉后服务没起就直接报失败原因给 AI。',
       },
       {
         key: 'feiyuServerDir',
-        section: '服务',
+        section: '肥鱼声音服务的设置',
         label: '声音服务目录',
         kind: 'text',
         hint: '服务端项目目录（里面有 .venv 与 configs/voice_service.json）。自动启动要用它；留空 = 不自动启动。',
       },
       {
         key: 'feiyuPythonPath',
-        section: '服务',
+        section: '肥鱼声音服务的设置',
         label: '跑服务的 python',
         kind: 'text',
         hint: '留空 = 用服务目录下的 .venv（Windows 的 Scripts\python.exe、Linux 的 bin/python）。',
       },
       {
         key: 'feiyuIdleStopMinutes',
-        section: '服务',
+        section: '肥鱼声音服务的设置',
         label: '空闲多久自动停',
         kind: 'number',
         hint: '分钟。这么久没有合成请求就把服务停掉、释放显存。默认 10；填 0 = 一直开着。只停插件自己启动的那个进程。',
@@ -1349,31 +1349,54 @@ window.__ModuleLoader__.load({
             ),
           ),
         ),
-        provider === 'rvc' ? row('换成谁', h('select', {
-          style: S.input,
-          value: rvcVoice,
-          disabled: busy || !writable,
-          onChange: (e) => {
-            const next = String(e.target.value)
-            setRvcVoice(next)
-            pick('rvcVoice', next)
-          },
-        }, (rvcVoiceOptions.length > 0 ? rvcVoiceOptions : [{ id: rvcVoice, label: rvcVoice || '（还没有换声包）' }]).map((v) =>
-          h('option', { style: OPTION_STYLE, key: String(v.id), value: String(v.id) }, String(v.label ?? v.id)),
-        ))) : null,
-        provider === 'rvc' ? row('先用谁念', h('select', {
-          style: S.input,
-          value: rvcBase,
-          disabled: busy || !writable,
-          onChange: (e) => {
-            const next = String(e.target.value)
-            setRvcBase(next)
-            pick('rvcBaseProvider', next)
-          },
-        }, [
-          ['feiyu', '肥鱼声音服务'],
-          ['edge', 'edge-tts'],
-        ].map(([v, text]) => h('option', { style: OPTION_STYLE, key: v, value: v }, text)))) : null,
+        // 换声是两段式，按实际顺序排：「先用谁念」在前，「换成谁」在后。
+        provider === 'rvc'
+          ? row(
+              '先用谁念',
+              h(
+                'select',
+                {
+                  style: S.input,
+                  value: rvcBase,
+                  disabled: busy || !writable,
+                  onChange: (e) => {
+                    const next = String(e.target.value)
+                    setRvcBase(next)
+                    pick('rvcBaseProvider', next)
+                  },
+                },
+                [
+                  ['feiyu', '肥鱼声音服务'],
+                  ['edge', 'edge-tts'],
+                ].map(([v, text]) => h('option', { style: OPTION_STYLE, key: v, value: v }, text)),
+              ),
+            )
+          : null,
+        // 「换成谁」的清单来自声音服务。一条都没有时不能给个空壳选项假装能选，
+        // 直接禁用 + 说清怎么办 —— 之前兜底成「（还没有换声包）」等于让用户猜。
+        provider === 'rvc'
+          ? row(
+              '换成谁',
+              rvcVoiceOptions.length > 0
+                ? h(
+                    'select',
+                    {
+                      style: S.input,
+                      value: rvcVoice,
+                      disabled: busy || !writable,
+                      onChange: (e) => {
+                        const next = String(e.target.value)
+                        setRvcVoice(next)
+                        pick('rvcVoice', next)
+                      },
+                    },
+                    rvcVoiceOptions.map((v) =>
+                      h('option', { style: OPTION_STYLE, key: String(v.id), value: String(v.id) }, String(v.label ?? v.id)),
+                    ),
+                  )
+                : h('span', { style: S.hint }, '还没拿到换声包清单：先把肥鱼声音服务起起来（下面「肥鱼声音服务的设置」里可以打开自动拉起），装好 RVC 包后这里会出现可选音色。'),
+            )
+          : null,
         voiceOptions.length > 0 && controls.has('voice')
           ? row(
               provider === 'rvc' ? '念字音色' : '音色',
@@ -1895,9 +1918,6 @@ window.__ModuleLoader__.load({
        */
       function renderVoiceModule(field, cur) {
         const value = String(cur ?? '')
-        const localOn = value === 'edge'
-        const feiyuOn = value === 'feiyu'
-        const rvcOn = value === 'rvc'
 
         const pick = (next) => () => {
           if (!snap.writable || busy) return
@@ -1908,8 +1928,12 @@ window.__ModuleLoader__.load({
           setError('')
         }
 
-        // 本地那组只剩 edge —— 原来是 edge / sherpa 两个，sherpa 因音色调教不到位被摘掉。
-        const localEngine = (engine, label, desc) =>
+        // 三块同构的卡：点哪块就切到哪套引擎。
+        //
+        // 以前 edge 那块外面套了一个 div 卡、里面又塞了一个同名 button，
+        // 视觉上两层套着（sherpa 被摘掉之后留下的残骸），现在一律单层。
+        // 顺序按「用得多的排前面」：肥鱼 → 换声 → edge。
+        const card = (engine, label, desc) =>
           h(
             'button',
             {
@@ -1923,50 +1947,21 @@ window.__ModuleLoader__.load({
             h('span', { style: S.choiceDesc }, desc),
           )
 
+        // 切完立刻告诉用户「下面显示的是哪一套」，省得他去猜菜单为什么变长变短。
+        const CURRENT_LABEL = { feiyu: '肥鱼声音服务', rvc: '换声（TTS → RVC）', edge: 'edge-tts' }
+        const nowLabel = CURRENT_LABEL[value] ?? '还没选'
+
         return h(
           'div',
           null,
           h(
             'div',
             { style: S.choice },
-            h(
-              'div',
-              { style: { ...S.choiceCard, ...(localOn ? S.choiceOn : {}) } },
-              h(
-                'div',
-                { style: { fontWeight: 600, marginBottom: '6px' } },
-                'edge-tts',
-                h('span', { style: S.choiceDesc }, '联网调微软的接口，免费备选'),
-              ),
-              h(
-                'div',
-                { style: { display: 'flex', gap: '6px', flexWrap: 'wrap' } },
-                localEngine('edge', 'edge-tts', '联网调微软的接口；本机 python 里得装好 edge-tts'),
-              ),
-            ),
-            h(
-              'button',
-              {
-                type: 'button',
-                style: { ...S.choiceCard, ...(feiyuOn ? S.choiceOn : {}) },
-                disabled: !snap.writable || busy,
-                onClick: pick('feiyu'),
-              },
-              '肥鱼声音服务',
-              h('span', { style: S.choiceDesc }, '跑在本机 9880，不联网；声音更像人，也能唱歌'),
-            ),
-            h(
-              'button',
-              {
-                type: 'button',
-                style: { ...S.choiceCard, ...(rvcOn ? S.choiceOn : {}) },
-                disabled: !snap.writable || busy,
-                onClick: pick('rvc'),
-              },
-              '换声（TTS → RVC）',
-              h('span', { style: S.choiceDesc }, '先念出人声，再换成另一个人的音色；两段式，比纯 TTS 慢一点'),
-            ),
+            card('feiyu', '肥鱼声音服务', '跑在本机 9880，不联网；声音更像人，也能唱歌'),
+            card('rvc', '换声（TTS → RVC）', '先念出人声，再换成另一个人的音色；两段式，比纯 TTS 慢一点'),
+            card('edge', 'edge-tts', '联网调微软的接口，免费备选；本机 python 里得装好 edge-tts'),
           ),
+          h('div', { style: S.sectionNote }, `下面显示的是「${nowLabel}」这一套设置；换一套时上一套的值会留着，切回来还在。`),
         )
       }
 
@@ -2419,7 +2414,23 @@ window.__ModuleLoader__.load({
       const feiyu = usesFeiyu(shown)
       const rvc = usesRvc(shown)
       /** 页内小节的显示顺序。没列到的排在最后。 */
-      const SECTION_ORDER = ['开关', '引擎', '音色与语气', '通用', '唱歌', '服务']
+      const SECTION_ORDER = ['开关', '选哪套声音', '换声的设置', 'edge-tts 的设置', '肥鱼声音服务的设置', '音色与语气', '几套共用的设置', '唱歌']
+      /**
+       * 每一小节下面那句话：告诉用户「这一节是管什么的、什么时候才用得上」。
+       *
+       * 之前只有小节标题，字段一多就得靠 hint 一个个读。这一句是给整节的定位，
+       * 让人扫一眼就知道该不该往下看。
+       */
+      const SECTION_NOTE = {
+        开关: '这一页总开关。关掉就一句语音都不发。',
+        '选哪套声音': '三套只会用一套；选哪套，下面就只显示哪套的设置，其余收起来但值不丢。',
+        '换声的设置': '换声是两段式：先用一边把字念出来，再换成另一个人的音色。',
+        'edge-tts 的设置': '走微软的在线接口，免费；本机 python 得装好 edge-tts。',
+        '肥鱼声音服务的设置': '跑在本机 9880 的声音服务：地址、口令、说话音色、超时、自动拉起都在这。',
+        音色与语气: '这三项对 edge 与肥鱼都生效，作用在合成完之后。',
+        '几套共用的设置': '不管用哪套声音都生效：字数上限、缓存目录、转 mp3 用的 ffmpeg。',
+        唱歌: '唱歌走肥鱼服务里的 SVS，比说话慢一个量级。',
+      }
       /** 当前页要显示的字段：按小节顺序稳定排一遍。 */
       function activeFields() {
         const rank = (f) => {
@@ -2450,6 +2461,12 @@ window.__ModuleLoader__.load({
           rows.push(
             h('div', { key: `section-${f.section}`, style: S.sectionHead }, f.section),
           )
+          // 小节下面那句定位说明：跨列，跟标题一起出现。
+          if (SECTION_NOTE[f.section]) {
+            rows.push(
+              h('div', { key: `section-note-${f.section}`, style: S.sectionNote }, SECTION_NOTE[f.section]),
+            )
+          }
         }
         const value = shown[f.key]
         const overridden = Object.prototype.hasOwnProperty.call(user, f.key)
