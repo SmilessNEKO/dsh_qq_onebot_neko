@@ -1,5 +1,14 @@
 # 更新日志
 
+## v1.6.2 — 2026-11-17
+
+紧急修复：**插件整个加载失败**（设置页消失、所有 `qq_bridge_neko_*` 工具调不动）。
+
+- **根因是版本混杂**：15:35 一次脚本更新把 `voice.js` 覆盖回了 v1.2.0 旧版（62931 字节），而 `index.js` 是 v1.6.1（新版）。新版 `index.js` 从 `voice.js` 静态导入 38 个符号，其中 `DEFAULT_RVC_VOICE` / `pickRvcVoice` / `feiyuConvert` / `DEFAULT_RVC_BASE_PROVIDER` / `synthesize` / `recordSegment` 等 6 个，**旧版 voice.js 一个都不导出**。ES 模块在链接阶段就抛 `does not provide an export named …`，整条 fiber 挂掉 —— 所以设置页和工具一起消失。旧版单独跑是好的，新版单独跑也是好的，**混起来必崩**。
+- **发版保障**：这一版整包发布（含配套 `voice.js`），不再走"只同步改动过的几个文件"的脚本 —— 那正是造成混杂的原因。对应关系以 `npm pack` 打出的 tgz 为准。
+- **防御性修复**：`normalizeProactiveTasks()` 整个循环体包进 try/catch，单条配置坏到读不出也不让它抛到 `readSettings()` —— 那个函数会在 `apply()` 早期调用，一抛就又是"整条 fiber failed、工具全没"。
+- **修 `setProactiveOpen` 的调用**：`useState` 的 setter 只接一个参数，之前误传了 `(id, bool)`，把展开状态写成了字符串。改成函数式 setter `(prev) => ({ ...prev, [id]: bool })`。
+
 ## v1.6.1 — 2026-11-17
 
 v1.6.0 的主动发消息有三处实际用不了，这一版全部修掉。

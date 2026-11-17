@@ -7741,59 +7741,76 @@ export function formatProactiveTime(minute) {
 /**
  * 主动配置的归一化。
  *
- * ⚠️ **这里不丢弃任何一行**（v1.6.1 改）。v1.6.0 曾经把「目标不在白名单」「时间点解析不出」
- * 的行整条丢掉，结果是：用户在卡片上新建一条、还没填目标就点保存，这一行直接从界面上消失
- * ——他以为保存成功了，其实配置被自己的归一化吃掉了（真实报障：「新建了一个配置项，点击保存，
- * 这个配置项直接消失了」）。
+ * ⚠️ **这个函数绝不能抛异常**。它在 `readSettings()` 的热路径上，而 `readSettings()`
+ * 在 `apply()` 早期就会被调用；这里抛任何东西都会让整条 Cordis fiber failed ——
+ * 现象是「设置页没了 + 所有工具都调不动」，而且日志里只看到一句毫不相干的报错。
+ * 所以整个循环体包在 try 里：某一条坏得离谱就跳过那一条，别的照常。
  *
- * 现在改成：**行留下来，问题写在 `problems` 里**。界面按 `problems` 标红、按下的发送按钮拦住。
- * 判据是「坏配置要能被看见、能被修」，而不是「悄悄消失」。
- * 真正的硬闸放在发送那一刻（`runProactiveTick`）：白名单不通过就一条都不发。
+ * ⚠️ **这里也不丢「还没填完」的行**（v1.6.1 改）。v1.6.0 曾把「目标不在白名单」
+ * 「时间点解析不出」的行整条丢掉，结果是用户新建一条、还没填就保存，它直接消失
+ * （真实报障：「新建了一个配置项，点击保存，这个配置项直接消失了」）。
+ * 现在：**行留下来，问题写在 `problems` 里**；真正的硬闸在发送那一刻（`proactiveReady`）。
  *
  * @param {unknown} raw 设置里的原始值。
  * @returns {Array<object>} 归一化后的配置（含 `problems` 数组）。
  */
 export function normalizeProactiveTasks(raw) {
-  const list = Array.isArray(raw) ? raw : []
+  let list = []
+  try {
+    list = Array.isArray(raw) ? raw : []
+  } catch {
+    // 连长度都读不出来（Proxy 抛错之类）：当作没有配置，绝不让它冒出去。
+    return []
+  }
   // 用 Map 而不是 Set + push：同一个 id 再次出现时**后者覆盖前者**
   // （老配置没有显式 id，两条同目标同时间的行会派生出同一个 id，覆盖才符合直觉）。
   const byId = new Map()
   for (const item of list) {
-    if (!item || typeof item !== 'object') continue
-    const target = String(item.target ?? '').trim()
-    const minutes = parseProactiveTimes(item.times).slice(0, PROACTIVE_MAX_TIMES)
-    // id 优先用界面给的（新建时生成，稳定），没有就由 target + 时间点派生。
-    // 派生 id 保留是为了兼容 v1.6.0 存下来的老配置（它们没有显式 id）。
-    const derived = `${target}|${minutes.join(',')}`
-    const id = String(item.id ?? '').trim() || derived || `draft-${byId.size}`
-    const problems = []
-    if (!/^(group|private):\d{1,16}$/.test(target)) {
-      problems.push(target === '' ? '还没选发给谁' : '发给谁要写成 group:群号 或 private:QQ号')
+    try {
+      if (!item || typeof item !== 'object') continue
+      const target = String(item.target ?? '').trim()
+      const minutes = parseProactiveTimes(item.times).slice(0, PROACTIVE_MAX_TIMES)
+      // id 优先用界面给的（新建时生成，稳定），没有就由 target + 时间点派生。
+      // 派生 id 保留是为了兼容 v1.6.0 存下来的老配置（它们没有显式 id）。
+      const derived = `${target}|${minutes.join(',')}`
+      const id = String(item.id ?? '').trim() || derived || `draft-${byId.size}`
+      const problems = []
+      if (!/^(group|private):\d{1,16}$/.test(target)) {
+        problems.push(target === '' ? '还没选发给谁' : '发给谁要写成 group:群号 或 private:QQ号')
+      }
+      if (minutes.length === 0) problems.push('每天几点发：一个能看懂的时间都还没有（例如 09:00）')
+      const mode = item.mode === 'ai' ? 'ai' : 'fixed'
+      if (mode !== 'ai') {
+        const hasCopy = (() => {
+          try {
+            return proactiveVariants({ variants: item.variants, text: item.text }).length > 0
+          } catch {
+            return false
+          }
+        })()
+        if (!hasCopy) problems.push('发什么：文案和文案池都空着')
+      }
+      byId.set(id, {
+        id,
+        enabled: item.enabled === true,
+        target,
+        label: String(item.label ?? '').trim().slice(0, 60),
+        times: minutes.map(formatProactiveTime).join(','),
+        window: String(item.window ?? '').trim(),
+        jitterMinutes: clampInt(item.jitterMinutes, 0, 180, 30),
+        mode,
+        text: String(item.text ?? '').trim().slice(0, 1500),
+        variants: String(item.variants ?? '').trim().slice(0, 8000),
+        aiStyle: String(item.aiStyle ?? '').trim().slice(0, 300),
+        maxPerDay: clampInt(item.maxPerDay, 1, PROACTIVE_MAX_PER_DAY_CAP, 3),
+        onlyIfQuietHours: clampInt(item.onlyIfQuietHours, 0, 168, 0),
+        respectQuietHours: item.respectQuietHours !== false,
+        problems,
+      })
+    } catch {
+      // 单条坏掉不该连累整份设置，更不该把插件拖垮。
+      continue
     }
-    if (minutes.length === 0) problems.push('每天几点发：一个能看懂的时间都还没有（例如 09:00）')
-    const mode = item.mode === 'ai' ? 'ai' : 'fixed'
-    if (mode === 'ai') {
-      // AI 模式下文案由模型现写，所以固定文案/文案池可以空着。
-    } else if (proactiveVariants({ variants: item.variants, text: item.text }).length === 0) {
-      problems.push('发什么：文案和文案池都空着')
-    }
-    byId.set(id, {
-      id,
-      enabled: item.enabled === true,
-      target,
-      label: String(item.label ?? '').trim().slice(0, 60),
-      times: minutes.map(formatProactiveTime).join(','),
-      window: String(item.window ?? '').trim(),
-      jitterMinutes: clampInt(item.jitterMinutes, 0, 180, 30),
-      mode,
-      text: String(item.text ?? '').trim().slice(0, 1500),
-      variants: String(item.variants ?? '').trim().slice(0, 8000),
-      aiStyle: String(item.aiStyle ?? '').trim().slice(0, 300),
-      maxPerDay: clampInt(item.maxPerDay, 1, PROACTIVE_MAX_PER_DAY_CAP, 3),
-      onlyIfQuietHours: clampInt(item.onlyIfQuietHours, 0, 168, 0),
-      respectQuietHours: item.respectQuietHours !== false,
-      problems,
-    })
   }
   return [...byId.values()]
 }

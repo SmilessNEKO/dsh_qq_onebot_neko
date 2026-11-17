@@ -2593,7 +2593,7 @@ window.__ModuleLoader__.load({
                 {
                   type: 'button',
                   style: { ...S.link, marginLeft: 0, textDecoration: 'none', fontSize: '12px' },
-                  onClick: () => setProactiveOpen(row?.id ?? '', open === false),
+                  onClick: () => setProactiveOpen((prev) => ({ ...(prev ?? {}), [row?.id ?? '']: open === false })),
                   title: open ? '收起这一条' : '展开这一条',
                 },
                 open ? '▾' : '▸',
