@@ -708,6 +708,9 @@ window.__ModuleLoader__.load({
       const id = target.split(':')[1] ?? ''
       const name = String(row?.label ?? '').trim()
       if (name !== '') return `${name}（${target}）`
+      // 刚点「加一个群 / 私聊」时 target 还是空的：不能拼成「私聊 」这种半截名字，
+      // 得明说还没选，用户才知道这一步没做完。
+      if (target === '') return '还没选目的地'
       return target.startsWith('group:') ? `群 ${id}` : `私聊 ${id}`
     }
 
@@ -809,12 +812,11 @@ window.__ModuleLoader__.load({
      * **归档的会话不列出来**（用户报的 bug：下拉里混进了一堆早就归档的会话）——
      * 归档集在 workspace 域：`ctx.workspaces.list.getSnapshot().archivedSessionIds`。
      *
-     * ⚠️ **TODO（下次修）：子代理会话也会被列进来。**
-     * `SessionSummary` 上有 `origin?: 'subagent'` 与 `parentId?: SessionId`
-     * （见 `@deepseek-ai/dsh-api-session-controller` 的 `SessionSummary`），据此可以剔除。
+     * **子代理会话也不列出来**：`SessionSummary` 上有 `origin: 'subagent'` 与 `parentId`
+     * （见 `@deepseek-ai/dsh-api-session-controller` 的 `SessionSummary`）。主会话被派活时
+     * 会顺手建一串子代理会话，全铺进下拉就是几十条没人认识的标题，把真正要选的那条挤没了。
      * 剔除之后同样要给**当前选中项**兜底，规则与下面的归档处理一致 ——
      * 否则子代理会话是当前目标时，一保存就把目标会话清空。
-     * 退化做法也可接受：把它们折叠进一个“显示子代理会话”的展开项，别一次铺开一长串。
      *
      * 两个兜底项都是必要的：
      * - 配置里那个 id 可能**不在**列表里（别的工作区、宿主还没加载完）；
@@ -830,15 +832,17 @@ window.__ModuleLoader__.load({
       const seen = new Set([''])
       for (const id of ids) {
         const key = String(id)
-        const isArchived = archived.has(key)
-        // 归档的一律不显示 —— 除非它就是当前选中的那个（不显示的话就没法保留/换掉了）
-        if (isArchived && key !== cur) continue
-        seen.add(key)
         const row = byId[id] ?? {}
+        const isArchived = archived.has(key)
+        // 子代理会话：主会话每派一次活就多一条，混进下拉等于一屏陌生标题。
+        const isSubagent = row.origin === 'subagent' || (row.parentId !== undefined && row.parentId !== null && row.parentId !== '')
+        // 归档 / 子代理的一律不显示 —— 除非它就是当前选中的那个（不显示的话就没法保留/换掉了）
+        if ((isArchived || isSubagent) && key !== cur) continue
+        seen.add(key)
         const title = typeof row.displayTitle === 'string' && row.displayTitle !== '' ? row.displayTitle : key
         out.push({
           value: key,
-          label: `${title}${row.running ? '（运行中）' : ''}${isArchived ? '（已归档）' : ''}`,
+          label: `${title}${row.running ? '（运行中）' : ''}${isArchived ? '（已归档）' : ''}${isSubagent ? '（子代理）' : ''}`,
         })
       }
       if (cur !== '' && !seen.has(cur)) {
@@ -856,12 +860,28 @@ window.__ModuleLoader__.load({
     // 宿主给明暗两套主题各定义了一套设计令牌（挂在 body 上）。插件卡片不能写死颜色：
     // 硬编码 #fff 在暗色主题里就是白底白字，原生下拉的弹层也会跟着变纯白。
     // 这里的变量两套主题各有值，写 var() 才能跟着宿主一起换。
+    //
+    // 每一档都带 fallback：宿主某个版本没定义这个令牌时，退回一个中性灰而不是变成透明/纯白。
+    // 层级（主/次/弱）走宿主的 label-* 三档，**不再靠 opacity 假装**——opacity 在暗色主题下
+    // 会把文字压成糊掉的灰，而且叠在别的半透明层上时深浅不可控。
     const TOKEN = {
       surface: 'var(--dsw-alias-bg-layer-2, var(--dsw-alias-bg-layer-1, #ffffff))',
       field: 'var(--dsw-specific-input-major, var(--dsw-alias-bg-layer-1, #ffffff))',
       text: 'var(--dsw-alias-label-primary, #1a1a1a)',
       textSoft: 'var(--dsw-alias-label-secondary, #4a4a4a)',
+      // 第三档：说明、单位、计数这类「要看但不抢戏」的字。
+      textFaint: 'var(--dsw-alias-label-tertiary, var(--dsw-alias-label-dimmed, #6b6b6b))',
       border: 'var(--dsw-alias-border-l2, rgba(127,127,127,0.35))',
+      // 更淡的线：只用来分节，不围盒子。
+      borderSoft: 'var(--dsw-alias-border-l1, rgba(127,127,127,0.22))',
+      // 交互态：鼠标悬停 / 按下。内联样式写不了 :hover，靠 onMouseEnter 切这两个底色。
+      hover: 'var(--dsw-alias-interactive-bg-hover, rgba(127,127,127,0.10))',
+      active: 'var(--dsw-alias-interactive-bg-active, rgba(127,127,127,0.18))',
+      // 语义色：选中、警告、错误。宿主两套主题各有一套，比写死 #e5a53b / #e5534b 稳。
+      accent: 'var(--dsw-alias-brand-primary, #4f7cff)',
+      warn: 'var(--dsw-alias-state-warn-primary, #c9822a)',
+      error: 'var(--dsw-alias-state-error-primary, #e5534b)',
+      ok: 'var(--dsw-alias-state-success-primary, #2ea36b)',
     }
     // 原生 <option> 不继承 select 的配色，弹层底色由 UA 决定；显式给一层才跟主题走。
     const OPTION_STYLE = { background: TOKEN.surface, color: TOKEN.text }
@@ -894,24 +914,28 @@ window.__ModuleLoader__.load({
 
     const S = {
       wrap: { display: 'flex', flexDirection: 'column', gap: '12px' },
-      head: { display: 'flex', flexDirection: 'column', gap: '2px' },
-      title: { fontSize: '15px', fontWeight: 600, letterSpacing: '0.2px' },
-      sub: { fontSize: '12px', opacity: 0.55, lineHeight: 1.5, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' },
+      title: { fontSize: '15px', fontWeight: 600, letterSpacing: '0.2px', color: TOKEN.text },
+      // 副标题不再 nowrap + ellipsis：版本号 / 状态这类字被裁掉一半比换行更难看。
+      sub: { fontSize: '12px', color: TOKEN.textFaint, lineHeight: 1.5 },
       grid: { display: 'grid', gridTemplateColumns: 'minmax(120px, 180px) 1fr', gap: '10px 14px', alignItems: 'start' },
-      label: { fontSize: '13px', fontWeight: 500, paddingTop: '5px', lineHeight: 1.45 },
+      label: { fontSize: '13px', fontWeight: 500, paddingTop: '5px', lineHeight: 1.45, color: TOKEN.textSoft },
       input: {
         width: '100%',
         boxSizing: 'border-box',
         padding: '5px 8px',
-        borderRadius: '6px',
+        borderRadius: 'var(--dsw-radius-sm, 6px)',
         border: BORDER,
         background: TOKEN.field,
         color: TOKEN.text,
         font: 'inherit',
         fontSize: '13px',
       },
-      hint: { fontSize: '11px', opacity: 0.5, marginTop: '4px', lineHeight: 1.55 },
-      check: { display: 'flex', alignItems: 'center', gap: '6px', fontSize: '13px', paddingTop: '4px' },
+      // 说明文字：走宿主的第三档字色，不用 opacity —— opacity 在暗色主题里会把字压成糊灰，
+      // 而且和半透明底叠在一起时深浅不可控（README 里「全部走设计令牌」那句才站得住）。
+      hint: { fontSize: '11px', color: TOKEN.textFaint, marginTop: '4px', lineHeight: 1.55 },
+      // 警告用的说明：同一个位置、换成语义色，比在句首加 ⚠️ 更容易被看见。
+      hintWarn: { fontSize: '11px', color: TOKEN.warn, marginTop: '4px', lineHeight: 1.55 },
+      check: { display: 'flex', alignItems: 'center', gap: '6px', fontSize: '13px', paddingTop: '4px', color: TOKEN.text },
       foot: {
         display: 'flex',
         alignItems: 'center',
@@ -925,15 +949,24 @@ window.__ModuleLoader__.load({
       },
       btn: {
         padding: '5px 14px',
-        borderRadius: '6px',
+        borderRadius: 'var(--dsw-radius-sm, 6px)',
         border: BORDER,
         background: 'transparent',
         color: TOKEN.text,
         cursor: 'pointer',
         font: 'inherit',
         fontSize: '13px',
+        transition: 'background 120ms ease, border-color 120ms ease',
       },
-      primary: { background: 'rgba(127,127,127,0.18)', fontWeight: 600 },
+      // 主按钮：宿主的实心填充 + 反色字。以前是 rgba(127,127,127,0.18) 的半透明块，
+      // 在暗色主题里跟普通底几乎分不出来，主次不明。
+      primary: {
+        background: 'var(--dsw-alias-button-primary-fill, rgba(127,127,127,0.18))',
+        // 填充色由宿主给，字色必须跟着换，否则亮色主题下白字压白底。
+        color: 'var(--dsw-alias-label-on-accent, inherit)',
+        borderColor: 'transparent',
+        fontWeight: 600,
+      },
       header: {
         display: 'flex',
         alignItems: 'center',
@@ -947,38 +980,54 @@ window.__ModuleLoader__.load({
         font: 'inherit',
         textAlign: 'left',
       },
-      chevron: { marginLeft: 'auto', opacity: 0.6, fontSize: '11px' },
-      // 一页内容装进一张卡：边框 + 内边距，视觉上和页签分开
+      chevron: { marginLeft: 'auto', color: TOKEN.textFaint, fontSize: '11px' },
+      // 一页内容装进一张卡：边框 + 内边距，视觉上和页签分开。
+      // 但**不铺底色、不加阴影** —— 宿主本身已经把整块设置区放在一张卡里，
+      // 这里再叠一层实心底就是「卡里套卡」。分隔感只靠最淡的那档边框做。
       panel: {
         display: 'flex',
         flexDirection: 'column',
         gap: '10px',
         padding: '12px',
-        borderRadius: '8px',
-        border: BORDER,
+        borderRadius: 'var(--dsw-radius-md, 8px)',
+        border: `1px solid ${TOKEN.borderSoft}`,
         background: 'transparent',
       },
+      // 载入中 / 不可用：此时页面上没有别的容器，这里就是唯一的那张卡，可以铺底色。
+      stateBox: {
+        display: 'flex',
+        flexDirection: 'column',
+        gap: '6px',
+        padding: '14px 16px',
+        borderRadius: 'var(--dsw-radius-md, 8px)',
+        border: BORDER,
+        background: TOKEN.surface,
+      },
       // 当前页的一句话说明：压在字段上方，字小、不抢戏
-      sectionNote: { fontSize: '12px', opacity: 0.6, lineHeight: 1.5 },
+      sectionNote: { fontSize: '12px', color: TOKEN.textSoft, lineHeight: 1.5 },
       // 网格里的小节说明：必须跨两列，否则它会占掉第一列（标签列），
       // 后面的字段全被挤到第二列起，整页变成「左边一堆、右边空着」。
-      sectionSub: { gridColumn: '1 / -1', fontSize: '12px', opacity: 0.6, lineHeight: 1.5, marginTop: '-4px' },
-      // 页内小节标题：跨两列，压在字段上面，字小但加粗
+      sectionSub: { gridColumn: '1 / -1', fontSize: '11px', color: TOKEN.textFaint, lineHeight: 1.55, marginTop: '-4px' },
+      // 页内小节标题：跨两列，压在字段上面。分隔线用更淡的 border-l1 ——
+      // 它只是分节，不该和卡片边框一样重（以前两者同一个 BORDER，视觉上分成三层）。
       sectionHead: {
         gridColumn: '1 / -1',
         fontSize: '12px',
         fontWeight: 600,
-        opacity: 0.75,
+        color: TOKEN.textSoft,
         paddingTop: '2px',
         marginTop: '2px',
-        borderTop: BORDER,
+        borderTop: `1px solid ${TOKEN.borderSoft}`,
       },
       // 未保存提示点：标题右侧一个小圆点，比整句话省地方
-      dot: { width: '6px', height: '6px', borderRadius: '999px', background: '#e5a53b', flex: '0 0 auto' },
+      dot: { width: '6px', height: '6px', borderRadius: '999px', background: TOKEN.warn, flex: '0 0 auto' },
       headerMain: { display: 'flex', alignItems: 'baseline', gap: '8px', minWidth: 0, flex: '1 1 auto' },
-      note: { fontSize: '12px', opacity: 0.7 },
-      err: { fontSize: '12px', color: '#e5534b' },
-      overridden: { fontSize: '11px', opacity: 0.5, marginLeft: '4px' },
+      note: { fontSize: '12px', color: TOKEN.textSoft },
+      // 成功提示（已保存 / 已撤销）用绿色：和「没有改动」这种中性回执区分开，
+      // 不然存完一行灰字，跟没反应一样。
+      noteOk: { fontSize: '12px', color: TOKEN.ok },
+      err: { fontSize: '12px', color: TOKEN.error },
+      overridden: { fontSize: '11px', color: TOKEN.textFaint, marginLeft: '4px' },
       // “撤销覆盖”：与“·已覆盖”并排的小按钮。文案本身就是动作，不加图标。
       link: {
         marginLeft: '4px',
@@ -986,7 +1035,6 @@ window.__ModuleLoader__.load({
         border: 'none',
         background: 'transparent',
         color: TOKEN.textSoft,
-        opacity: 0.75,
         textDecoration: 'underline',
         cursor: 'pointer',
         font: 'inherit',
@@ -1005,22 +1053,23 @@ window.__ModuleLoader__.load({
       groupAvatar: {
         width: '28px',
         height: '28px',
-        borderRadius: '6px',
+        borderRadius: 'var(--dsw-radius-sm, 6px)',
         objectFit: 'cover',
         flex: '0 0 auto',
-        background: 'rgba(127,127,127,0.15)',
+        // 头像没加载出来时的占位底色：走宿主的悬停令牌，不再写死一层 rgba 灰。
+        background: TOKEN.hover,
       },
       groupText: { display: 'flex', flexDirection: 'column', minWidth: 0 },
-      groupName: { fontSize: '13px', lineHeight: 1.3 },
-      groupId: { fontSize: '11px', opacity: 0.55, lineHeight: 1.3 },
-      groupIdOnly: { fontSize: '13px', lineHeight: 1.3 },
+      groupName: { fontSize: '13px', lineHeight: 1.3, color: TOKEN.text },
+      groupId: { fontSize: '11px', color: TOKEN.textFaint, lineHeight: 1.3 },
+      groupIdOnly: { fontSize: '13px', lineHeight: 1.3, color: TOKEN.text },
       // 结构化编辑器（模型优先级 / 每目标设置）
       structBox: { display: 'flex', flexDirection: 'column', gap: '8px' },
       chainRow: { display: 'flex', alignItems: 'center', gap: '6px' },
-      chainIndex: { fontSize: '11px', opacity: 0.55, width: '14px', textAlign: 'right', flex: '0 0 auto' },
+      chainIndex: { fontSize: '11px', color: TOKEN.textFaint, width: '14px', textAlign: 'right', flex: '0 0 auto' },
       miniBtn: {
         padding: '2px 8px',
-        borderRadius: '5px',
+        borderRadius: 'var(--dsw-radius-sm, 5px)',
         border: BORDER,
         background: 'transparent',
         color: TOKEN.text,
@@ -1035,14 +1084,15 @@ window.__ModuleLoader__.load({
         flexDirection: 'column',
         gap: '8px',
         padding: '10px',
-        borderRadius: '6px',
+        borderRadius: 'var(--dsw-radius-sm, 6px)',
         border: BORDER,
       },
       profileHead: { display: 'flex', alignItems: 'center', gap: '8px' },
-      profileName: { fontSize: '13px', fontWeight: 600, flex: '1 1 auto', overflow: 'hidden', textOverflow: 'ellipsis' },
+      profileName: { fontSize: '13px', fontWeight: 600, flex: '1 1 auto', overflow: 'hidden', textOverflow: 'ellipsis', color: TOKEN.text },
       profileGrid: { display: 'grid', gridTemplateColumns: 'minmax(96px, 130px) 1fr', gap: '6px 10px', alignItems: 'start' },
-      profileLabel: { fontSize: '12px', opacity: 0.7, paddingTop: '6px' },
-      // 分类页签：一排能点的小标签，当前页描边加深
+      profileLabel: { fontSize: '12px', color: TOKEN.textSoft, paddingTop: '6px' },
+      // 分类页签：一排能点的小标签。选中态以前只是 0.16 的灰度填充，
+      // 暗色主题里几乎看不出选了谁 —— 现在用宿主的悬停/按下底色 + 加粗字重区分。
       tabs: { display: 'flex', gap: '4px', flexWrap: 'nowrap', overflowX: 'auto', paddingBottom: '2px' },
       tab: {
         padding: '3px 11px',
@@ -1056,21 +1106,22 @@ window.__ModuleLoader__.load({
         lineHeight: 1.6,
         whiteSpace: 'nowrap',
         flex: '0 0 auto',
+        transition: 'background 120ms ease, color 120ms ease',
       },
-      tabActive: { background: 'rgba(127,127,127,0.16)', color: TOKEN.text, fontWeight: 600, border: BORDER },
+      tabActive: { background: TOKEN.active, color: TOKEN.text, fontWeight: 600, border: BORDER },
       // 试听：放在声音页最上方，**不做成盒子** —— 不描边、不填底，只用间距和下面的字段分开。
       preview: { display: 'flex', flexDirection: 'column', gap: '8px', marginBottom: '14px' },
-      previewTitle: { fontSize: '13px', fontWeight: 600 },
+      previewTitle: { fontSize: '13px', fontWeight: 600, color: TOKEN.text },
       previewRow: { display: 'grid', gridTemplateColumns: 'minmax(72px, 96px) 1fr', gap: '6px 10px', alignItems: 'center' },
-      previewLabel: { fontSize: '12px', opacity: 0.7 },
-      previewValue: { fontSize: '12px', opacity: 0.8, minWidth: '44px', textAlign: 'right' },
+      previewLabel: { fontSize: '12px', color: TOKEN.textSoft },
+      previewValue: { fontSize: '12px', color: TOKEN.textFaint, minWidth: '44px', textAlign: 'right' },
       rangeRow: { display: 'flex', alignItems: 'center', gap: '8px' },
       textarea: {
         width: '100%',
         boxSizing: 'border-box',
         minHeight: '56px',
         padding: '6px 8px',
-        borderRadius: '6px',
+        borderRadius: 'var(--dsw-radius-sm, 6px)',
         border: BORDER,
         background: TOKEN.field,
         color: TOKEN.text,
@@ -1085,20 +1136,74 @@ window.__ModuleLoader__.load({
         flex: '1 1 180px',
         textAlign: 'left',
         padding: '8px 10px',
-        borderRadius: '6px',
+        borderRadius: 'var(--dsw-radius-sm, 6px)',
         border: BORDER,
         background: 'transparent',
         color: TOKEN.text,
         cursor: 'pointer',
         font: 'inherit',
         fontSize: '13px',
+        transition: 'background 120ms ease, border-color 120ms ease',
       },
-      choiceOn: { background: 'rgba(127,127,127,0.16)', fontWeight: 600 },
-      choiceDesc: { display: 'block', fontSize: '11px', opacity: 0.6, marginTop: '3px', fontWeight: 400 },
+      // 选中的那张：左边一条强调色 + 稍深的底。只靠灰底在暗色主题里认不出来。
+      choiceOn: {
+        background: TOKEN.active,
+        borderColor: TOKEN.accent,
+        boxShadow: `inset 3px 0 0 ${TOKEN.accent}`,
+        fontWeight: 600,
+      },
+      choiceDesc: { display: 'block', fontSize: '11px', color: TOKEN.textFaint, marginTop: '3px', fontWeight: 400, lineHeight: 1.5 },
     }
 
     function disabled(btn, off) {
       return off ? { ...btn, opacity: 0.5, cursor: 'default' } : btn
+    }
+
+    /**
+     * 这条提示该用哪种颜色。
+     *
+     * 不新增 state 记「是成功还是中性」：`note` 本来就是一个字符串，多存一份布尔就得在
+     * 12 个 `setNote` 调用点各同步一次，迟早有一处忘了改。改成按内容判——只有真正干成了
+     * 事的那两种回执算成功（`已保存 N 项` / `已撤销…`），`没有改动` 仍是中性灰。
+     */
+    function noteStyle(note) {
+      return note.startsWith('已保存') || note.startsWith('已撤销') ? S.noteOk : S.note
+    }
+
+    /**
+     * 可点元素的悬停反馈：把 style 和两个事件处理器一起给出。
+     *
+     * 内联样式写不了 `:hover`，这里也不能引 CSS 文件（浏览器半只有这一个 JS 入口）。
+     * 两条都不能走的路：① 加 useState 记悬停 —— 每加一个 hook 都会打乱 `Card` 的 hook
+     * 顺序，离线测试是按索引定位 `activeGroup` 的；而且鼠标每划过一次就整卡重渲染，太贵。
+     * 所以直接改 DOM 节点的样式：不重渲染、不占 hook；万一拿不到节点，退化成
+     * 「没有悬停反馈」，不影响点击。
+     *
+     * 实心按钮（主按钮、选中的引擎卡）不铺悬停底色 —— 那会让它在鼠标下变淡，看着像失效；
+     * 它们改用亮度微调。只有透明底的小按钮才铺 TOKEN.hover。
+     */
+    function hoverProps(style) {
+      const bg = style && typeof style.background === 'string' ? style.background : 'transparent'
+      const solid = bg !== 'transparent'
+      const on = solid ? 'filter' : 'background'
+      const lit = solid ? 'brightness(1.12)' : TOKEN.hover
+      const back = solid ? '' : bg
+      return {
+        style,
+        onMouseEnter: (e) => {
+          const el = e && e.currentTarget
+          if (el && el.style) el.style[on] = lit
+        },
+        onMouseLeave: (e) => {
+          const el = e && e.currentTarget
+          if (el && el.style) el.style[on] = back
+        },
+      }
+    }
+
+    /** 可点元素 + 禁用态：禁用时只给灰掉的样子，不挂悬停处理器 —— 否则划过还会亮一下。 */
+    function btnProps(btn, off) {
+      return off ? { style: disabled(btn, true) } : hoverProps(disabled(btn, false))
     }
 
     /**
@@ -1509,7 +1614,7 @@ window.__ModuleLoader__.load({
             'button',
             {
               type: 'button',
-              style: disabled({ ...S.btn, ...S.primary }, busy || !writable),
+              ...btnProps({ ...S.btn, ...S.primary }, busy || !writable),
               disabled: busy || !writable,
               onClick: play,
             },
@@ -2088,21 +2193,21 @@ window.__ModuleLoader__.load({
             h('button', {
               type: 'button',
               title: '往上挪',
-              style: disabled(S.miniBtn, busy || !snap.writable || index === 0),
+              ...btnProps(S.miniBtn, busy || !snap.writable || index === 0),
               disabled: busy || !snap.writable || index === 0,
               onClick: () => move(-1),
             }, '↑'),
             h('button', {
               type: 'button',
               title: '往下挪',
-              style: disabled(S.miniBtn, busy || !snap.writable || index === list.length - 1),
+              ...btnProps(S.miniBtn, busy || !snap.writable || index === list.length - 1),
               disabled: busy || !snap.writable || index === list.length - 1,
               onClick: () => move(1),
             }, '↓'),
             h('button', {
               type: 'button',
               title: '从优先级里去掉',
-              style: disabled(S.miniBtn, busy || !snap.writable),
+              ...btnProps(S.miniBtn, busy || !snap.writable),
               disabled: busy || !snap.writable,
               onClick: () => setStructured(field.key, list.filter((_x, i) => i !== index)),
             }, '✕'),
@@ -2120,7 +2225,7 @@ window.__ModuleLoader__.load({
               'button',
               {
                 type: 'button',
-                style: disabled(S.btn, busy || !snap.writable || !canAdd),
+                ...btnProps(S.btn, busy || !snap.writable || !canAdd),
                 disabled: busy || !snap.writable || !canAdd,
                 onClick: () => setStructured(field.key, [...list, '']),
               },
@@ -2162,7 +2267,7 @@ window.__ModuleLoader__.load({
                 {
                   type: 'button',
                   title: '删掉这一行',
-                  style: disabled(S.miniBtn, busy || !snap.writable),
+                  ...btnProps(S.miniBtn, busy || !snap.writable),
                   disabled: busy || !snap.writable,
                   onClick: () => setStructured(field.key, list.filter((_x, i) => i !== index)),
                 },
@@ -2294,7 +2399,7 @@ window.__ModuleLoader__.load({
               'button',
               {
                 type: 'button',
-                style: disabled(S.btn, busy || !snap.writable),
+                ...btnProps(S.btn, busy || !snap.writable),
                 disabled: busy || !snap.writable,
                 onClick: () =>
                   setStructured(field.key, [
@@ -2308,7 +2413,7 @@ window.__ModuleLoader__.load({
               'button',
               {
                 type: 'button',
-                style: disabled(S.btn, busy || !snap.writable),
+                ...btnProps(S.btn, busy || !snap.writable),
                 disabled: busy || !snap.writable,
                 onClick: () =>
                   setStructured(field.key, [
@@ -2380,32 +2485,40 @@ window.__ModuleLoader__.load({
       }
 
       if (snap.status === 'loading') {
-        return h('div', { style: S.wrap }, h('div', { style: S.sub }, '载入设置中…'))
+        return h(
+          'div',
+          { style: S.wrap },
+          h('div', { style: S.stateBox }, h('div', { style: S.sub }, '载入设置中…')),
+        )
       }
       if (snap.status === 'unavailable') {
         return h(
           'div',
           { style: S.wrap },
-          h('div', { style: S.title }, 'QQ 桥接 Neko'),
           h(
             'div',
-            { style: S.sub },
-            '这个部署没有为 qq-bridge-neko 提供可写的设置服务（settings 提供者没挂载，或连接处于内存模式）。',
-          ),
-          h(
-            'div',
-            { style: S.hint },
-            '宿主的两条设置通道都没拿到：插件配置表单（DSH 0.2.0 的 #677 迁移未完成）与本插件的本机设置接口。',
-          ),
-          h(
-            'div',
-            { style: S.hint },
-            '先看诊断里「本机接口」那项：若宿主没有 webServer 服务，接口挂不上（此时仍可点右上角「打开配置文件」，改 profile 的 cordis.patch.yml 里 `- id: qq-bridge-neko` 的 config 后重启）。',
-          ),
-          h(
-            'div',
-            { style: S.hint },
-            `诊断：${typeof scope.detail === 'function' ? scope.detail() : '（无诊断信息）'}`,
+            { style: S.stateBox },
+            h('div', { style: S.title }, 'QQ 桥接 Neko'),
+            h(
+              'div',
+              { style: S.sub },
+              '这个部署没有为 qq-bridge-neko 提供可写的设置服务（settings 提供者没挂载，或连接处于内存模式）。',
+            ),
+            h(
+              'div',
+              { style: S.hint },
+              '宿主的两条设置通道都没拿到：插件配置表单（DSH 0.2.0 的 #677 迁移未完成）与本插件的本机设置接口。',
+            ),
+            h(
+              'div',
+              { style: S.hint },
+              '先看诊断里「本机接口」那项：若宿主没有 webServer 服务，接口挂不上（此时仍可点右上角「打开配置文件」，改 profile 的 cordis.patch.yml 里 `- id: qq-bridge-neko` 的 config 后重启）。',
+            ),
+            h(
+              'div',
+              { style: S.hintWarn },
+              `诊断：${typeof scope.detail === 'function' ? scope.detail() : '（无诊断信息）'}`,
+            ),
           ),
         )
       }
@@ -2718,7 +2831,7 @@ window.__ModuleLoader__.load({
                   'button',
                   {
                     type: 'button',
-                    style: disabled(S.link, busy || !snap.writable),
+                    ...btnProps(S.link, busy || !snap.writable),
                     disabled: busy || !snap.writable,
                     title: '清掉设置文件里的这一项，回落到 composition config 的值',
                     onClick: () => unsetOverride(f.key),
@@ -2738,9 +2851,13 @@ window.__ModuleLoader__.load({
                   'div',
                   { style: S.hint },
                   // 会话下拉额外把真实 id 显示出来：看着名字选，但真要手抄/核对时 id 就在旁边
-                  (f.kind === 'session' && String(value) !== '' ? `${f.hint}当前：${value}` : f.hint) +
-                    (typeof f.check === 'function' && f.check(value) ? `\n⚠️ ${f.check(value)}` : ''),
+                  f.kind === 'session' && String(value) !== '' ? `${f.hint}当前：${value}` : f.hint,
                 )
+              : null,
+            // 校验警告单独一行、单独配色：和普通说明混在一段里只靠 ⚠️ 前缀区分，
+            // 扫一眼分不出「这只是解释」还是「这么填会出问题」。
+            typeof f.check === 'function' && f.check(value)
+              ? h('div', { style: S.hintWarn }, `⚠️ ${f.check(value)}`)
               : null,
           ),
         )
@@ -2763,7 +2880,7 @@ window.__ModuleLoader__.load({
             'button',
             {
               type: 'button',
-              style: disabled(S.btn, webuiUrl === '' || napcatBusy !== ''),
+              ...btnProps(S.btn, webuiUrl === '' || napcatBusy !== ''),
               disabled: webuiUrl === '' || napcatBusy !== '',
               onClick: () => {
                 if (webuiUrl !== '') window.open(webuiUrl, '_blank', 'noopener')
@@ -2775,7 +2892,7 @@ window.__ModuleLoader__.load({
             'button',
             {
               type: 'button',
-              style: disabled(S.btn, napcatRunning || napcatBusy !== ''),
+              ...btnProps(S.btn, napcatRunning || napcatBusy !== ''),
               disabled: napcatRunning || napcatBusy !== '',
               onClick: () => postNapcat('launch', '已启动 NapCat'),
             },
@@ -2785,7 +2902,7 @@ window.__ModuleLoader__.load({
             'button',
             {
               type: 'button',
-              style: disabled(S.btn, napcatBusy !== ''),
+              ...btnProps(S.btn, napcatBusy !== ''),
               disabled: napcatBusy !== '',
               onClick: () =>
                 postNapcat('reveal', napcat && napcat.installDir ? `已打开文件夹：${napcat.installDir}` : '已打开文件夹'),
@@ -2802,12 +2919,24 @@ window.__ModuleLoader__.load({
 
       const header = h(
         'button',
-        { type: 'button', onClick: () => setOpen(!open), 'aria-expanded': open, style: S.header },
+        {
+          type: 'button',
+          onClick: () => setOpen(!open),
+          'aria-expanded': open,
+          ...hoverProps({ ...S.header, borderRadius: 'var(--dsw-radius-sm, 6px)' }),
+        },
         h(
           'span',
           { style: S.headerMain },
           h('span', { style: S.title }, 'QQ 桥接 Neko'),
-          h('span', { style: S.sub }, dirty ? '有未保存的改动' : pluginVersion ? `v${pluginVersion}` : '接到 QQ'),
+          // 有未保存改动时副标题转成警告色：只有一个小圆点太容易被忽略，
+          // 折叠起来以后更是完全看不见，用户会以为已经存好了。
+          // 尺寸沿用 S.sub（不套 S.hintWarn，那是 11px 的小字，做副标题会缩一号）。
+          h(
+            'span',
+            { style: dirty ? { ...S.sub, color: TOKEN.warn } : S.sub },
+            dirty ? '有未保存的改动' : pluginVersion ? `v${pluginVersion}` : '接到 QQ',
+          ),
         ),
         dirty ? h('span', { style: S.dot }) : null,
         h('span', { style: S.chevron }, open ? '▴' : '▾'),
@@ -2817,9 +2946,20 @@ window.__ModuleLoader__.load({
         : versionState === 'loading'
           ? '正在读取当前版本…'
           : '当前版本暂时读不到。确认 dsh-web 已重启后再打开这张卡片。'
+      // 版本与更新：跟上面的字段不是一类东西，用一条淡分隔线切开，
+      // 不然「检查更新」按钮混在字段堆里像是又一个设置项。
       const updateBox = h(
         'div',
-        { style: { display: 'flex', flexDirection: 'column', gap: '6px' } },
+        {
+          style: {
+            display: 'flex',
+            flexDirection: 'column',
+            gap: '6px',
+            marginTop: '4px',
+            paddingTop: '10px',
+            borderTop: `1px solid ${TOKEN.borderSoft}`,
+          },
+        },
         h('div', { style: S.sub }, versionLine),
         h(
           'div',
@@ -2828,7 +2968,7 @@ window.__ModuleLoader__.load({
             'button',
             {
               type: 'button',
-              style: disabled(S.btn, updateBusy),
+              ...btnProps(S.btn, updateBusy),
               disabled: updateBusy,
               onClick: () => {
                 checkForUpdate()
@@ -2841,7 +2981,7 @@ window.__ModuleLoader__.load({
                 'button',
                 {
                   type: 'button',
-                  style: disabled({ ...S.btn, ...S.primary }, updateBusy),
+                  ...btnProps({ ...S.btn, ...S.primary }, updateBusy),
                   disabled: updateBusy,
                   onClick: () => {
                     applyUpdate()
@@ -2856,12 +2996,22 @@ window.__ModuleLoader__.load({
           ? h('div', { style: S.hint }, '装完会重启面板。请刷新；登录口令可能会变。不改 NapCat。')
           : null,
         updateNote
-          ? h('div', { style: { ...(updateIsError ? S.err : S.note), whiteSpace: 'pre-wrap' } }, updateNote)
+          ? h(
+              'div',
+              {
+                style: {
+                  ...(updateIsError ? S.err : updateBusy ? S.note : S.noteOk),
+                  whiteSpace: 'pre-wrap',
+                },
+              },
+              updateNote,
+            )
           : null,
       )
 
       // 分类页签：60 多个字段铺成一条太长了，一次只看一页。
       // 每页只列属于它的字段；当前页高亮。
+      // 页签也有悬停反馈：不然一排小胶囊看着像静态文字，不知道能点。
       const tabsRow = h(
         'div',
         { style: S.tabs },
@@ -2871,7 +3021,7 @@ window.__ModuleLoader__.load({
             {
               key: g.id,
               type: 'button',
-              style: { ...S.tab, ...(g.id === activeGroup ? S.tabActive : {}) },
+              ...hoverProps({ ...S.tab, ...(g.id === activeGroup ? S.tabActive : {}) }),
               onClick: () => setActiveGroup(g.id),
             },
             g.label,
@@ -2918,7 +3068,7 @@ window.__ModuleLoader__.load({
             'button',
             {
               type: 'button',
-              style: disabled({ ...S.btn, ...S.primary }, !dirty || busy || !snap.writable),
+              ...btnProps({ ...S.btn, ...S.primary }, !dirty || busy || !snap.writable),
               disabled: !dirty || busy || !snap.writable,
               onClick: save,
             },
@@ -2928,7 +3078,7 @@ window.__ModuleLoader__.load({
             'button',
             {
               type: 'button',
-              style: disabled(S.btn, !dirty || busy),
+              ...btnProps(S.btn, !dirty || busy),
               disabled: !dirty || busy,
               onClick: () => {
                 setDraft(null)
@@ -2940,7 +3090,7 @@ window.__ModuleLoader__.load({
           ),
           !snap.writable ? h('span', { style: S.note }, '（只读：这个连接不改宿主文档）') : null,
           error ? h('span', { style: S.err }, error) : null,
-          !error && note ? h('span', { style: S.note }, note) : null,
+          !error && note ? h('span', { style: noteStyle(note) }, note) : null,
         ),
       )
     }
@@ -3306,7 +3456,7 @@ window.__ModuleLoader__.load({
     exports.name = 'dsh-qq-bridge-neko'
     // 纯函数给离线测试用（test-smoke.mjs 会在假 ctx 里真跑这个 bundle）。
     // Cordis 只认 apply / inject / name / Config，多余的导出它不管。
-    exports.__test = { sessionOptions, draftFrom, parse, fields: FIELDS, bindSettings, groupDisplayRows, groups: GROUPS, usesFeiyu, usesRvc, localOnlyKeys: [...LOCAL_ONLY_KEYS], feiyuOnlyKeys: [...FEIYU_ONLY_KEYS], rvcOnlyKeys: [...RVC_ONLY_KEYS] }
+    exports.__test = { sessionOptions, draftFrom, parse, fields: FIELDS, bindSettings, groupDisplayRows, targetLabel, groups: GROUPS, usesFeiyu, usesRvc, localOnlyKeys: [...LOCAL_ONLY_KEYS], feiyuOnlyKeys: [...FEIYU_ONLY_KEYS], rvcOnlyKeys: [...RVC_ONLY_KEYS] }
     return module.exports
   },
 })

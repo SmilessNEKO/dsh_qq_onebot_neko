@@ -1882,6 +1882,38 @@ function sawSentText(s) {
     const missing = so(list, 'gone', [])
     check('不在列表里的当前值保留为兜底项', missing.some((o) => o.value === 'gone'), JSON.stringify(missing))
     check('没有归档集时不会误删（fail-open）', so(list, 's1', undefined).length === 4)
+
+    // 子代理会话也不该占下拉（主会话每派一次活就多一条，全铺进来会把要选的那条挤没）。
+    const crew = {
+      ids: ['main', 'kid1', 'kid2', 'deep'],
+      byId: {
+        main: { displayTitle: '主会话' },
+        kid1: { displayTitle: '子代理一', origin: 'subagent' },
+        kid2: { displayTitle: '子代理二', parentId: 'main' },
+        deep: { displayTitle: '子代理三', origin: 'subagent', parentId: 'main' },
+      },
+    }
+    const crewOpts = so(crew, 'main', [])
+    check(
+      '子代理会话不出现在下拉里',
+      !crewOpts.some((o) => ['kid1', 'kid2', 'deep'].includes(o.value)),
+      JSON.stringify(crewOpts.map((o) => o.value)),
+    )
+    check('主会话照常列在前面', crewOpts.some((o) => o.value === 'main'))
+    const keepSub = so(crew, 'kid1', [])
+    check(
+      '当前选中的恰好是子代理会话时仍保留并标记（否则一保存就把目标清空）',
+      keepSub.some((o) => o.value === 'kid1' && String(o.label).includes('子代理')),
+      JSON.stringify(keepSub),
+    )
+
+    // 每目标设置那一行的标题：target 为空时不能拼出「私聊 」这种半截名字。
+    const tl = mod.__test?.targetLabel
+    check('导出 targetLabel 供离线测试', typeof tl === 'function')
+    check('空目的地：明说还没选', tl({ target: '', label: '' }) === '还没选目的地', tl({ target: '', label: '' }))
+    check('有备注名：备注名 + 原始 target', tl({ target: 'group:123', label: '家族群' }) === '家族群（group:123）', tl({ target: 'group:123', label: '家族群' }))
+    check('没备注名：群号兜底', tl({ target: 'group:123', label: '' }) === '群 123', tl({ target: 'group:123', label: '' }))
+    check('没备注名：私聊号兜底', tl({ target: 'private:456', label: '' }) === '私聊 456', tl({ target: 'private:456', label: '' }))
   }
 
   // status 要能回答“浏览器半到底装上没有”—— 界面里不显示时全靠这一条排障

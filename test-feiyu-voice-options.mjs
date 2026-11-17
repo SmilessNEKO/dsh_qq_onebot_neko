@@ -72,6 +72,9 @@ async function loadProbe(settings) {
   const prelude = [
     "const DEFAULT_FEIYU_VOICE = 'feiyu'",
     "const DEFAULT_FEIYU_BASE_URL = 'http://127.0.0.1:9880'",
+    // v1.4.0 加换声时 readFeiyuVoiceOptions 的 fallback 多了 defaultRvcVoice，
+    // 这里的桩子漏了它，于是切出来的函数一跑就 ReferenceError —— 补上，值取和 voice.js 一致的「留空」。
+    "const DEFAULT_RVC_VOICE = ''",
     "const FEIYU_STYLES = ['cute', 'gentle']",
     `const SETTINGS = ${JSON.stringify(settings)}`,
     'function readSettings() { return SETTINGS }',
@@ -214,7 +217,7 @@ function readNode(node) {
   check('无 catalog：不显示提示', hint === '' && node.children.length === 1, node.children.length)
 }
 
-// 8) 在线多音色：标签带语气 / 换声 / 不可用
+// 8) 在线多音色：标签带语气 / 不可用；换声包按 voiceKind 分开列
 {
   renderer.setCatalog({
     feiyuVoices: {
@@ -226,11 +229,16 @@ function readNode(node) {
       online: true,
     },
   })
-  const { options } = readNode(renderer.renderFeiyuVoice(field, 'feiyu'))
-  check('在线：三个音色都在', options.map(([v]) => v).join(',') === 'feiyu,luna,a60', options)
-  check('在线：标签带语气', /语气 cute \/ gentle/.test(options[0][1]), options)
-  check('在线：不可用有标记', /不可用/.test(options[1][1]), options)
-  check('在线：换声有标记', /换声/.test(options[2][1]), options)
+  // v1.4.0 起按 voiceKind 过滤：说话音色下拉里不该出现只能换声的包（README 有这条口径）。
+  const tts = readNode(renderer.renderFeiyuVoice(field, 'feiyu'))
+  check('在线：说话下拉不含换声包', tts.options.map(([v]) => v).join(',') === 'feiyu,luna', tts.options)
+  check('在线：标签带语气', /语气 cute \/ gentle/.test(tts.options[0][1]), tts.options)
+  check('在线：不可用有标记', /不可用/.test(tts.options[1][1]), tts.options)
+
+  // 换声那一栏（voiceKind = rvc）反过来：只有换声包，并标「换声」。
+  const rvc = readNode(renderer.renderFeiyuVoice({ ...field, key: 'rvcVoice', voiceKind: 'rvc' }, 'a60'))
+  check('换声下拉只列换声包', rvc.options.map(([v]) => v).join(',') === 'a60', rvc.options)
+  check('在线：换声有标记', /换声/.test(rvc.options[0][1]), rvc.options)
 }
 
 // 9) 在线但一个音色都没注册：仍给兜底项，并说明
