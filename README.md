@@ -109,7 +109,8 @@
 - **跟随主题配色**：卡片里的底色、文字色、边框、交互态、语义色全部走宿主的 `--dsw-*` 设计令牌，亮色暗色各有一套值自动切换，不再有硬编码 `#fff` / `#e5534b` 造成的白底白字或暗色下发灰。用到的令牌分四类：
   - 底与线：`--dsw-alias-bg-layer-2`（卡片底 / 吸底栏 / 下拉弹层）、`--dsw-alias-bg-layer-1`、`--dsw-specific-input-major`（输入框）、`--dsw-alias-border-l2`（盒子边框）、`--dsw-alias-border-l1`（只用来分节，比盒子边框淡一档）；
   - 字的三档：`--dsw-alias-label-primary`（正文 / 字段名）、`--dsw-alias-label-secondary`（小节标题 / 标签列）、`--dsw-alias-label-tertiary`（说明、单位、计数，回落到 `--dsw-alias-label-dimmed`）。**层级靠这三档真令牌，不靠 `opacity`** —— 透明度在暗色主题里会把字压成糊灰，叠在别的半透明层上时深浅还不可控；
-  - 交互态：`--dsw-alias-interactive-bg-hover` / `--dsw-alias-interactive-bg-active`（页签、引擎卡、各种小按钮悬停与按下）、`--dsw-alias-button-primary-fill` + `--dsw-alias-label-on-accent`（主按钮实心底与反色字）。内联样式写不了 `:hover`，卡片里也没有 CSS 入口，所以悬停是 `hoverProps()` 直接改 DOM 节点的样式：实心按钮走 `brightness(1.12)`（铺底色会让它看着像失效），透明底按钮才铺 hover 底色；禁用态不挂这个处理器；
+  - 交互态：`--dsw-alias-interactive-bg-hover` / `--dsw-alias-interactive-bg-active`（页签、引擎卡、各种小按钮悬停与按下）。内联样式写不了 `:hover`，卡片里也没有 CSS 入口，所以悬停是 `hoverProps()` 直接改 DOM 节点的样式：实心按钮走 `brightness(1.12)`（铺底色会让它看着像失效），透明底按钮才铺 hover 底色；禁用态不挂这个处理器；
+  - **主按钮不借宿主的实心令牌**：`--dsw-alias-button-primary-fill` 配 `--dsw-alias-label-on-accent` 在本机宿主上没有配套的反色字，实测渲染成「中灰底 + 灰字」，按钮糊成一团看不清写的是什么（2026-11-17 主人截图点名）。现在仍是 `rgba(127,127,127,0.18)` 半透明底 + 普通字色，主次只靠 `fontWeight: 600` 区分；
   - 语义色：`--dsw-alias-state-warn-primary`（未保存提示点、副标题里的「有未保存的改动」、字段校验警告、诊断行）、`--dsw-alias-state-error-primary`（报错）、`--dsw-alias-state-success-primary`（「已保存 N 项」这类成功回执）、`--dsw-alias-brand-primary`（选中的引擎卡左侧强调条）。
   圆角与阴影也走令牌（`--dsw-radius-md` / `--dsw-radius-sm`）。原生下拉的弹层不吃 `<select>` 的配色，所以每个 `<option>` 也单独上了 `background` / `color`，展开时同样是暗色而不是纯白。
 

@@ -958,13 +958,12 @@ window.__ModuleLoader__.load({
         fontSize: '13px',
         transition: 'background 120ms ease, border-color 120ms ease',
       },
-      // 主按钮：宿主的实心填充 + 反色字。以前是 rgba(127,127,127,0.18) 的半透明块，
-      // 在暗色主题里跟普通底几乎分不出来，主次不明。
+      // 主按钮：半透明灰块 + 普通字色。
+      // 曾经改成宿主的 button-primary-fill + label-on-accent，结果这对令牌在本机宿主上没有
+      // 配套的反色字 —— 实测渲染成「中灰底 + 灰字」，整颗按钮糊成一团，主人直接看不出写的什么。
+      // 主次靠字重区分就够了，填充色不再借宿主的实心令牌。
       primary: {
-        background: 'var(--dsw-alias-button-primary-fill, rgba(127,127,127,0.18))',
-        // 填充色由宿主给，字色必须跟着换，否则亮色主题下白字压白底。
-        color: 'var(--dsw-alias-label-on-accent, inherit)',
-        borderColor: 'transparent',
+        background: 'rgba(127,127,127,0.18)',
         fontWeight: 600,
       },
       header: {
