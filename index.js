@@ -238,8 +238,10 @@ const ProactiveTask = Schema.object({
   times: Schema.string().default('').description('每天什么时候发，例如 09:00, 21:30。用逗号分隔，最多 12 个。留空 = 不发。'),
   window: Schema.string().default('').description('只在每天这个时段里发，例如 09:00-23:00。留空 = 全天都能发。跨零点（23:00-02:00）也认。'),
   jitterMinutes: Schema.number().default(30).description('在每个时间点上随机前后浮动这么多分钟（0–180）。固定整点发一眼就是机器，默认 30。'),
-  text: Schema.string().default('').description('正文。支持占位符 {time} 当前时间、{weekday} 星期几、{name} 对方昵称、{gap} 距上次说话多久。'),
+  mode: Schema.union([Schema.const('fixed'), Schema.const('ai')]).default('fixed').description('内容怎么来：fixed = 发下面写好的文案（不花钱）；ai = 到点叫模型现写一条（按目标的了解程度与最近聊的话来写，会花一点 token）。'),
+  text: Schema.string().default('').description('正文（mode = fixed 时用）。支持占位符 {time} 当前时间、{weekday} 星期几、{name} 对方昵称、{gap} 距上次说话多久。'),
   variants: Schema.string().default('').description('文案池：一行一条，每次随机挑一条（会避开最近发过的三条）。填了就优先用它，`text` 只当兜底。'),
+  aiStyle: Schema.string().default('').description('mode = ai 时额外给模型的一句话要求，例如「用撒娇的语气，别提工作」。留空 = 不给额外要求。'),
   maxPerDay: Schema.number().default(3).description('这条配置一天最多发几条（1–48）。防止时间写成每分钟就把群刷爆。'),
   onlyIfQuietHours: Schema.number().default(0).description('只在对方安静了这么多小时之后才发（0 = 不限制）。这是让「主动」显得自然的关键：人家刚聊完就别再插一句。'),
   respectQuietHours: Schema.boolean().default(true).description('目标在「每个群/私聊单独设置」里填了休眠时段时，休眠期间不发。默认开。'),
@@ -335,7 +337,8 @@ export const Config = Schema.object({
   destinationProfiles: Schema.array(DestinationProfile).default([]).description('按群 / 私聊分别设置休眠时段、24 小时实时回复、等待合并与停听时间。'),
   // ── 主动发消息 ────────────────────────────────────────────────────────────
   // 到点由插件自己的定时器直接发，**不唤醒模型**（0 token）。见 ProactiveTask 的注释。
-  proactiveTasks: Schema.array(ProactiveTask).default([]).description('主动发消息：到点直接给指定群 / 私聊发一条写好的话。不调用模型，不花钱。'),
+  proactiveTasks: Schema.array(ProactiveTask).default([]).description('主动发消息：到点给指定群 / 私聊发一条。mode=fixed 发写好的文案（不花钱）；mode=ai 叫模型按对目标的了解现写（花少量 token）。'),
+  proactiveAiModel: Schema.string().default('').description('mode=ai 时用哪个模型写，写成 provider/model。留空 = 用宿主已配置的第一个提供商。'),
   // 以下是 settings 命名空间的 composition base（装好的默认值）：
   // 设置界面里的用户层会覆盖它们。
   nicknames: Schema.array(Schema.string()).default(['244']).description('听到这些名字就回应。'),
@@ -457,7 +460,8 @@ const BridgeSettings = Schema.object({
   destinationProfiles: Schema.array(DestinationProfile).default([]).description('按群 / 私聊分别设置休眠时段、24 小时实时回复、等待合并与停听时间。'),
   // ── 主动发消息 ────────────────────────────────────────────────────────────
   // 到点由插件自己的定时器直接发，**不唤醒模型**（0 token）。见 ProactiveTask 的注释。
-  proactiveTasks: Schema.array(ProactiveTask).default([]).description('主动发消息：到点直接给指定群 / 私聊发一条写好的话。不调用模型，不花钱。'),
+  proactiveTasks: Schema.array(ProactiveTask).default([]).description('主动发消息：到点给指定群 / 私聊发一条。mode=fixed 发写好的文案（不花钱）；mode=ai 叫模型按对目标的了解现写（花少量 token）。'),
+  proactiveAiModel: Schema.string().default('').description('mode=ai 时用哪个模型写，写成 provider/model。留空 = 用宿主已配置的第一个提供商。'),
 })
 
 /** OneBot 非文本消息段 → 可读占位符。
@@ -1478,11 +1482,10 @@ export function apply(ctx, config) {
       voiceMaxChars: clampInt(s.voiceMaxChars ?? config.voiceMaxChars, 1, 2000, DEFAULT_VOICE_MAX_CHARS),
       voiceCacheDir: String(s.voiceCacheDir ?? config.voiceCacheDir ?? '').trim(),
       destinationProfiles: normalizeDestinationProfiles(s.destinationProfiles ?? config.destinationProfiles),
-      // 主动发消息：白名单传进去做硬闸（不在名单里的行直接丢）。
-      proactiveTasks: normalizeProactiveTasks(s.proactiveTasks ?? config.proactiveTasks, {
-        groupWhitelist: normalizeIdList(s.groupWhitelist ?? config.groupWhitelist),
-        whitelist: normalizeIdList(s.whitelist ?? config.whitelist),
-      }),
+      // 主动发消息：这里**只归一化，不按白名单筛**（筛会在发送那一刻做，见 runProactiveTick）。
+      // 否则用户在卡片上新建一条、还没填目标就保存，这一行会被自己的归一化吃掉、直接消失。
+      proactiveTasks: normalizeProactiveTasks(s.proactiveTasks ?? config.proactiveTasks),
+      proactiveAiModel: String(s.proactiveAiModel ?? config.proactiveAiModel ?? '').trim(),
       imageDescribeSafeBytes: Math.max(1, Number(s.imageDescribeSafeBytes ?? config.imageDescribeSafeBytes ?? IMAGE_DESCRIBE_SAFE_BYTES)),
       imageDescribeMaxBytes: Math.max(1, Number(s.imageDescribeMaxBytes ?? config.imageDescribeMaxBytes ?? IMAGE_DESCRIBE_MAX_BYTES)),
       imageWakeTotalBytes: Math.max(1, Number(s.imageWakeTotalBytes ?? config.imageWakeTotalBytes ?? IMAGE_WAKE_TOTAL_BYTES)),
@@ -4645,8 +4648,28 @@ export function apply(ctx, config) {
     return cur
   }
 
-  /** 这个目的地最后一条入站消息是多久以前（毫秒）。没记录过返回 null。 */
-  function quietForMs(target, at = Date.now()) {
+  /**
+   * 这条配置现在能不能发。返回 `null` = 可以；否则返回一句原因（写进台账）。
+   *
+   * **白名单闸放在这里，而不是归一化里**（v1.6.1 改）：归一化丢掉不合格的行，
+   * 用户就会遇到「新建一条、保存、它消失了」。现在行一直留着、卡片标红，
+   * 真正的拦截发生在「要发出去」这一刻 —— 既不会误发，也不会让人以为配置丢了。
+   */
+  function proactiveReady(task, s) {
+    const target = String(task?.target ?? '')
+    const matched = target.match(/^(group|private):(\d{1,16})$/)
+    if (!matched) return 'bad-target'
+    const isGroup = matched[1] === 'group'
+    const allowed = isGroup
+      ? normalizeIdList(s?.groupWhitelist).includes(matched[2])
+      : normalizeIdList(s?.whitelist).includes(matched[2])
+    if (!allowed) return 'not-allowlisted'
+    if (proactiveSlotsForDay(task, Date.now(), 0).length === 0) return 'no-times'
+    if (task.mode !== 'ai' && proactiveVariants(task).length === 0) return 'empty-text'
+    return null
+  }
+
+  /** 这个目的地最后一条入站消息是多久以前（毫秒）。没记录过返回 null。 */  function quietForMs(target, at = Date.now()) {
     const key = String(target ?? '')
     if (key === '') return null
     const rows = Array.isArray(state.proactiveLastInbound) ? state.proactiveLastInbound : []
@@ -4675,6 +4698,126 @@ export function apply(ctx, config) {
     const fresh = pool.filter((text) => !recent.includes(text))
     const chosen = fresh.length > 0 ? fresh[0] : pool[pool.length - 1]
     return chosen
+  }
+
+  /** 可选的模型签名：显式配置优先，否则从宿主已配置的提供商里挑第一个。 */
+  function proactiveAiTarget() {
+    const s = readSettings()
+    const explicit = String(s.proactiveAiModel ?? '').trim()
+    if (explicit.includes('/')) {
+      const idx = explicit.indexOf('/')
+      return { provider: explicit.slice(0, idx), model: explicit.slice(idx + 1), explicit: true }
+    }
+    const llm = typeof ctx.get === 'function' ? ctx.get('llm') : undefined
+    if (!llm || typeof llm.listProviders !== 'function') return null
+    try {
+      const providers = llm.listProviders()
+      const first = Array.isArray(providers) && providers.length > 0 ? providers[0] : null
+      if (!first?.id) return null
+      return { provider: String(first.id), model: String(first.defaultModel ?? ''), explicit: false }
+    } catch {
+      return null
+    }
+  }
+
+  /**
+   * 「内容由 AI 现写」。
+   *
+   * 和 `describeImage` 走同一条 `ctx.get('llm')` 路径（宿主公开接口，不需要 agent、
+   * 不需要会话）。关键设计：**只给最少的上下文**——目标是谁、现在几点、上次说话多久以前、
+   * 最近聊了几句（如果拿得到）。不给完整历史，因为那会把每次主动的成本从几分推到十几分。
+   *
+   * 失败时**返回 null 而不是替代文案**：上层会跳过这一次并在台账里写明原因，
+   * 用户能从「台账」看见「AI 这轮没写出来」，而不是收到一句编好的假话。
+   */
+  async function composeProactiveTextWithAi(task, dest, at = Date.now()) {
+    const target = proactiveAiTarget()
+    if (!target) return { ok: false, reason: 'no-llm' }
+    const llm = ctx.get('llm')
+    if (!llm || typeof llm.stream !== 'function') return { ok: false, reason: 'no-llm' }
+
+    const d = new Date(at)
+    const weekday = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'][d.getDay()]
+    const clock = `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
+    const gapMs = quietForMs(task.target, at)
+    const gapText = gapMs === null
+      ? '不知道（还没收到过这个目标的消息）'
+      : gapMs >= 86400000
+        ? `已经 ${Math.floor(gapMs / 86400000)} 天没说话了`
+        : gapMs >= 3600000
+          ? `已经 ${Math.floor(gapMs / 3600000)} 小时没说话了`
+          : `${Math.max(1, Math.floor(gapMs / 60000))} 分钟前刚说过话`
+
+    // 目标最近说过的话：只取这个目的地缓冲里最近几条，**不用会话历史**
+    // （会话历史几十万字，一条主动消息不值这个钱）。
+    const recentLines = (() => {
+      const key = task.target
+      const bucket = Array.isArray(state.buffers[key]) ? state.buffers[key] : []
+      return bucket.slice(-4).map((row) => {
+        const who = String(row?.nickname ?? row?.userId ?? '对方')
+        const text = String(row?.text ?? '').slice(0, 60)
+        return `${who}：${text}`
+      })
+    })()
+
+    const where = dest.kind === 'group' ? 'QQ 群' : '私聊'
+    const name = String(task.label ?? '').trim()
+    const lines = [
+      `你要主动给一个${where}发一条消息。不要写成客服或公告，像平时聊天那样，两三句、口语、不加表情包标记。`,
+      '',
+      `现在是 ${d.getMonth() + 1} 月 ${d.getDate()} 日${weekday} ${clock}。`,
+      name === '' ? '' : `对方：${name}`,
+      `上次说话：${gapText}`,
+      recentLines.length > 0 ? `对方最近说的几句话：\n${recentLines.join('\n')}` : '（还没跟这个目标聊过，你对他几乎一无所知）',
+      String(task.aiStyle ?? '').trim() === '' ? '' : `额外要求：${String(task.aiStyle).trim()}`,
+      '',
+      '直接给要发出去的那条消息正文，不要引号、不要解释、不要「好的」这类回应。',
+    ].filter((line) => line !== '')
+
+    const message = createUserMessage({
+      content: [{ type: 'text', text: lines.join('\n') }],
+      source: injectedMessageSource(legacySettings),
+    })
+
+    let budget = 400
+    let lastReason = '未知原因'
+    for (let attempt = 1; attempt <= 2; attempt += 1) {
+      try {
+        let out = ''
+        let finish = ''
+        for await (const chunk of llm.stream({
+          provider: target.provider,
+          model: target.model,
+          messages: [message],
+          maxTokens: budget,
+        })) {
+          if (chunk.type === 'text-delta') out += chunk.text
+          if (chunk.type === 'finish') {
+            finish = chunk.reason?.kind ?? ''
+            if (finish === 'error' || finish === 'aborted') {
+              throw new Error(`模型返回 ${finish}`)
+            }
+            break
+          }
+        }
+        const text = out.trim()
+        if (text !== '') {
+          // 模型偶尔会把整段用引号包起来、或加「好的，这就发」——剥掉，只留正文。
+          const cleaned = text.replace(/^["“「']|["”」']$/g, '').trim().slice(0, 1500)
+          if (cleaned !== '') return { ok: true, text: cleaned }
+        }
+        // reasoning 模型可能把预算烧在思考上：翻倍再试一次。
+        if (finish === 'length' || finish === 'max-tokens') {
+          budget *= 2
+          lastReason = `模型只输出了思考、正文被截断（预算 ${budget / 2}）`
+          continue
+        }
+        lastReason = `模型没写出正文（finish=${finish || '?'}）`
+      } catch (error) {
+        lastReason = String(error?.message ?? error)
+      }
+    }
+    return { ok: false, reason: lastReason }
   }
 
   /** 占位符替换。取不到的值给「—」，不要留 `{name}` 这种半成品发出去。 */
@@ -4716,6 +4859,13 @@ export function apply(ctx, config) {
     })()
     for (const task of tasks) {
       if (task.enabled !== true) continue
+      // 配置本身就不完整（还没选目标 / 时间点看不懂）：跳过，别在发送那一刻才炸。
+      // 这些行**留**在设置里，卡片上标红等用户修（见 normalizeProactiveTasks 的注释）。
+      const ready = proactiveReady(task, s)
+      if (ready !== null) {
+        result.skipped.push({ id: task.id, reason: ready })
+        continue
+      }
       const slots = proactiveSlotsForDay(task, dayStart, task.jitterMinutes)
       const bucket = proactiveBucket(task.id, at)
       const dest = task.target.startsWith('group:')
@@ -4755,9 +4905,14 @@ export function apply(ctx, config) {
             continue
           }
         }
-        const text = fillProactiveText(task, dest, slot.fireAt)
+        const text = task.mode === 'ai'
+          ? await (async () => {
+              const composed = await composeProactiveTextWithAi(task, dest, slot.fireAt)
+              return composed.ok === true ? composed.text : ''
+            })()
+          : fillProactiveText(task, dest, slot.fireAt)
         if (text === '') {
-          result.skipped.push({ id: task.id, reason: 'empty-text' })
+          result.skipped.push({ id: task.id, reason: task.mode === 'ai' ? 'ai-empty' : 'empty-text' })
           continue
         }
         let sent
@@ -6829,29 +6984,67 @@ export function apply(ctx, config) {
     if (method !== 'POST') {
       return sendJson(res, 405, { ok: false, error: '这个接口只接受 POST。' })
     }
-    const run = async () => {
+    const run = async (body) => {
       const s = readSettings()
-      const tasks = (Array.isArray(s.proactiveTasks) ? s.proactiveTasks : []).filter((t) => t.enabled === true)
-      if (tasks.length === 0) {
-        return { ok: false, error: '还没有启用的主动消息。先在「主动」页加一条并勾上「启用」，保存后再点这里。' }
+      const all = Array.isArray(s.proactiveTasks) ? s.proactiveTasks : []
+      // 按 id 试**指定的那一条**：卡片上每张卡都有自己的「试发这条」，
+      // 发错条比不给按钮更糟（v1.6.0 是取 `enabled[0]`，用户根本没配好就点不到东西）。
+      const wanted = String(body?.id ?? '').trim()
+      let task = wanted === '' ? null : all.find((t) => t.id === wanted) ?? null
+      if (wanted !== '' && task === null) {
+        return { ok: false, error: '找不到这一条配置（可能刚被删了或还没保存）。先点「保存这条」再试。' }
       }
-      const task = tasks[0]
+      if (task === null) {
+        // 没给 id：退化成「第一条能发的」，只为了排障接口好用。
+        task = all.find((t) => proactiveReady(t, s) === null) ?? all[0] ?? null
+      }
+      if (task === null) {
+        return { ok: false, error: '还没有主动消息配置。先在「主动」页加一条并保存。' }
+      }
+      // 试发**不看 enabled**：这是演练，用户很可能还没启用就想先看效果。
+      const ready = proactiveReady(task, s)
+      if (ready !== null) {
+        const why = {
+          'bad-target': '这一条还没选发给谁（或格式不对，要写成 group:群号 / private:QQ号）。',
+          'not-allowlisted': '这个目标不在唤醒白名单里，不会发。先在「哪些群 / 哪些私聊可以叫醒」里加上它。',
+          'no-times': '这一条还没填每天几点发。',
+          'empty-text': '这一条的内容是空的。',
+        }[ready] ?? ready
+        return { ok: false, error: why }
+      }
       const dest = task.target.startsWith('group:')
         ? { kind: 'group', groupId: task.target.slice('group:'.length) }
         : { kind: 'private', userId: task.target.slice('private:'.length) }
-      // 演练只挑文案、不动计数：`pickProactiveText` 会读 recent，但这里不写回。
-      const text = fillProactiveText(task, dest, Date.now())
+      // 演练只生成文案、不动计数（不写 sentAt / count / recent）。
+      let text = ''
+      if (task.mode === 'ai') {
+        const composed = await composeProactiveTextWithAi(task, dest, Date.now())
+        if (composed.ok !== true) {
+          return { ok: false, error: `AI 没写出来：${composed.reason}（这一条一个字都没发）` }
+        }
+        text = composed.text
+      } else {
+        text = fillProactiveText(task, dest, Date.now())
+      }
       if (text === '') {
         return { ok: false, error: '这一条没有可用文案（「发什么」和「文案池」都是空的）。' }
       }
       const sent = await sendToQQ(text, dest, { quoteMessageId: null })
       if (sent?.sent > 0) {
         pushLog({ kind: 'proactive', action: 'sent-manual', target: task.target, text: text.slice(0, 120) })
-        return { ok: true, message: `已发到 ${task.target}：${text.slice(0, 60)}` }
+        return { ok: true, message: `已发到 ${task.target}：${text.slice(0, 80)}` }
       }
       return { ok: false, error: `没发出去：${sent?.reason ?? 'send-failed'}${sent?.error ? `（${sent.error}）` : ''}` }
     }
-    Promise.resolve()
+    readRequestBody(req)
+      .then((raw) => {
+        try {
+          return raw.trim() === '' ? {} : JSON.parse(raw)
+        } catch {
+          return {}
+        }
+      })
+      .catch(() => ({}))
       .then(run)
       .then((payload) => sendJson(res, 200, payload))
       .catch((error) => sendJson(res, 200, { ok: false, error: String(error?.message ?? error) }))
@@ -7548,36 +7741,42 @@ export function formatProactiveTime(minute) {
 /**
  * 主动配置的归一化。
  *
- * 规则（和 `normalizeDestinationProfiles` 同一套思路：能救的救，救不了的整行丢弃）：
- * - `target` 只认 `group:<数字>` / `private:<数字>`，且**必须在该类白名单里** —— 写错号码
- *   不许发到陌生人那里去，这是硬约束；
- * - `times` 一个都解析不出来 → 整行丢弃（没时间点的配置永远不会触发，留着只会让人以为配好了）；
- * - 同一个 target + 同一组时间点视为重复，后者覆盖前者；
- * - `id` 由 `target|时间点` 派生：改时间等于换了一条配置，当天的计数跟着重置（有意为之）。
- * - `times` **回写成人看得懂的 `HH:MM,HH:MM`**，不是内部分钟数 —— 卡片要把这行原样显示回去。
+ * ⚠️ **这里不丢弃任何一行**（v1.6.1 改）。v1.6.0 曾经把「目标不在白名单」「时间点解析不出」
+ * 的行整条丢掉，结果是：用户在卡片上新建一条、还没填目标就点保存，这一行直接从界面上消失
+ * ——他以为保存成功了，其实配置被自己的归一化吃掉了（真实报障：「新建了一个配置项，点击保存，
+ * 这个配置项直接消失了」）。
+ *
+ * 现在改成：**行留下来，问题写在 `problems` 里**。界面按 `problems` 标红、按下的发送按钮拦住。
+ * 判据是「坏配置要能被看见、能被修」，而不是「悄悄消失」。
+ * 真正的硬闸放在发送那一刻（`runProactiveTick`）：白名单不通过就一条都不发。
  *
  * @param {unknown} raw 设置里的原始值。
- * @param {{groupWhitelist?: string[], whitelist?: string[]}} settings 用来判白名单。
- * @returns {Array<object>} 归一化后的配置。
+ * @returns {Array<object>} 归一化后的配置（含 `problems` 数组）。
  */
-export function normalizeProactiveTasks(raw, settings = {}) {
+export function normalizeProactiveTasks(raw) {
   const list = Array.isArray(raw) ? raw : []
-  const groups = new Set(normalizeIdList(settings.groupWhitelist))
-  const privates = new Set(normalizeIdList(settings.whitelist))
+  // 用 Map 而不是 Set + push：同一个 id 再次出现时**后者覆盖前者**
+  // （老配置没有显式 id，两条同目标同时间的行会派生出同一个 id，覆盖才符合直觉）。
   const byId = new Map()
   for (const item of list) {
     if (!item || typeof item !== 'object') continue
     const target = String(item.target ?? '').trim()
-    const matched = target.match(/^(group|private):(\d{1,16})$/)
-    if (!matched) continue
-    const isGroup = matched[1] === 'group'
-    // 白名单是硬闸：没在名单里的目标一律不发。宁可这条配置“看着没生效”，
-    // 也不要半夜给一个陌生群发消息。
-    if (isGroup ? !groups.has(matched[2]) : !privates.has(matched[2])) continue
     const minutes = parseProactiveTimes(item.times).slice(0, PROACTIVE_MAX_TIMES)
-    if (minutes.length === 0) continue
-    const timesKey = minutes.join(',')
-    const id = `${target}|${timesKey}`
+    // id 优先用界面给的（新建时生成，稳定），没有就由 target + 时间点派生。
+    // 派生 id 保留是为了兼容 v1.6.0 存下来的老配置（它们没有显式 id）。
+    const derived = `${target}|${minutes.join(',')}`
+    const id = String(item.id ?? '').trim() || derived || `draft-${byId.size}`
+    const problems = []
+    if (!/^(group|private):\d{1,16}$/.test(target)) {
+      problems.push(target === '' ? '还没选发给谁' : '发给谁要写成 group:群号 或 private:QQ号')
+    }
+    if (minutes.length === 0) problems.push('每天几点发：一个能看懂的时间都还没有（例如 09:00）')
+    const mode = item.mode === 'ai' ? 'ai' : 'fixed'
+    if (mode === 'ai') {
+      // AI 模式下文案由模型现写，所以固定文案/文案池可以空着。
+    } else if (proactiveVariants({ variants: item.variants, text: item.text }).length === 0) {
+      problems.push('发什么：文案和文案池都空着')
+    }
     byId.set(id, {
       id,
       enabled: item.enabled === true,
@@ -7586,11 +7785,14 @@ export function normalizeProactiveTasks(raw, settings = {}) {
       times: minutes.map(formatProactiveTime).join(','),
       window: String(item.window ?? '').trim(),
       jitterMinutes: clampInt(item.jitterMinutes, 0, 180, 30),
+      mode,
       text: String(item.text ?? '').trim().slice(0, 1500),
       variants: String(item.variants ?? '').trim().slice(0, 8000),
+      aiStyle: String(item.aiStyle ?? '').trim().slice(0, 300),
       maxPerDay: clampInt(item.maxPerDay, 1, PROACTIVE_MAX_PER_DAY_CAP, 3),
       onlyIfQuietHours: clampInt(item.onlyIfQuietHours, 0, 168, 0),
       respectQuietHours: item.respectQuietHours !== false,
+      problems,
     })
   }
   return [...byId.values()]

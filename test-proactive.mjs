@@ -53,31 +53,70 @@ check('格式化 540 → 09:00', formatProactiveTime(540) === '09:00')
 check('格式化 1290 → 21:30', formatProactiveTime(1290) === '21:30')
 check('格式化补零 65 → 01:05', formatProactiveTime(65) === '01:05')
 
-// ── 归一化：白名单硬闸 ────────────────────────────────────
+// ── 归一化：**不丢行**，问题写在 problems 里（v1.6.1 语义）──────────
+//
+// 用户报障：「新建了一个配置项，点击保存，这个配置项直接消失了」。
+// 根因就是 v1.6.0 的归一化把「目标不在白名单」「时间点解析不出」的行整条丢掉。
+// 现在的判据是：坏配置要能被看见、能被修；真正的拦截放在发送那一刻。
 {
   const settings = { groupWhitelist: ['12345678'], whitelist: ['100000001'] }
   const ok = normalizeProactiveTasks(
     [{ target: 'group:12345678', times: '09:00', text: '早安', enabled: true }],
     settings,
   )
-  check('白名单内的群保留', ok.length === 1 && ok[0].target === 'group:12345678')
+  check('合法配置保留', ok.length === 1 && ok[0].target === 'group:12345678')
   check('times 回写成 HH:MM', ok[0].times === '09:00', ok[0].times)
-  check('id 由 target + 分钟数派生', ok[0].id === 'group:12345678|540', ok[0].id)
+  check('合法配置没有 problems', ok[0].problems.length === 0, JSON.stringify(ok[0].problems))
+
+  // 关键回归：未填目标 / 未填时间的「草稿行」必须留下来
+  const draft = normalizeProactiveTasks([{ id: 'd1', target: '', times: '', text: '', enabled: false }])
+  check('空草稿行不再被丢掉（保存后不会消失）', draft.length === 1, JSON.stringify(draft))
+  check('空草稿行标出「还没选发给谁」', draft[0].problems.some((p) => p.includes('还没选发给谁')), JSON.stringify(draft[0].problems))
+  check('空草稿行标出时间问题', draft[0].problems.some((p) => p.includes('几点发')), JSON.stringify(draft[0].problems))
 
   const outside = normalizeProactiveTasks([{ target: 'group:99999999', times: '09:00', text: 'x' }], settings)
-  check('不在白名单的群整行丢弃', outside.length === 0)
+  check('白名单外的行也保留（改到名单里就能用）', outside.length === 1, JSON.stringify(outside))
+  check('白名单外的行不报 problems（那是发送时才判的）', outside[0].problems.length === 0, JSON.stringify(outside[0].problems))
 
   const noTimes = normalizeProactiveTasks([{ target: 'group:12345678', times: 'bad', text: 'x' }], settings)
-  check('没时间点的行丢弃（永远不会触发，留着只会误导）', noTimes.length === 0)
+  check('时间解析不出的行保留并标问题', noTimes.length === 1 && noTimes[0].problems.some((p) => p.includes('几点发')))
 
-  const noWhitelist = normalizeProactiveTasks([{ target: 'group:12345678', times: '09:00' }], {})
-  check('白名单为空时什么都不发', noWhitelist.length === 0)
+  const badTarget = normalizeProactiveTasks([{ target: 'group:abc', times: '09:00' }], settings)
+  check('非数字群号保留并标问题', badTarget.length === 1 && badTarget[0].problems.some((p) => p.includes('group:')))
 
-  const badTarget = normalizeProactiveTasks([{ target: 'group:abc', times: '09:00' }], { groupWhitelist: ['abc'] })
-  check('非数字群号丢弃', badTarget.length === 0)
+  const priv = normalizeProactiveTasks([{ target: 'private:100000001', times: '10:00', text: 'x' }], settings)
+  check('私聊目标正常', priv.length === 1 && priv[0].problems.length === 0)
+}
 
-  const priv = normalizeProactiveTasks([{ target: 'private:100000001', times: '10:00' }], settings)
-  check('白名单内的私聊保留', priv.length === 1)
+// ── 归一化：id 语义（显式 id 优先，老配置靠派生）──────────
+{
+  const withId = normalizeProactiveTasks([{ id: 'keep-me', target: 'group:12345678', times: '09:00', text: 'x' }])
+  check('显式 id 优先保留（改时间不会变新配置）', withId[0].id === 'keep-me', withId[0].id)
+
+  const legacy = normalizeProactiveTasks([{ target: 'group:12345678', times: '09:00', text: 'x' }])
+  check('没有 id 时按 target+时间派生（兼容 v1.6.0 老配置）', legacy[0].id === 'group:12345678|540', legacy[0].id)
+
+  const twoSame = normalizeProactiveTasks([
+    { id: 'a', target: 'group:12345678', times: '09:00', text: '一' },
+    { id: 'b', target: 'group:12345678', times: '09:00', text: '二' },
+  ])
+  check('同目标同时间但 id 不同 = 两条独立配置（不再互相覆盖）', twoSame.length === 2, JSON.stringify(twoSame.map((t) => t.id)))
+}
+
+// ── AI 模式 ───────────────────────────────────────────────
+{
+  const ai = normalizeProactiveTasks([{ target: 'group:12345678', times: '09:00', mode: 'ai', text: '' }])
+  check('mode=ai 时允许文案为空（内容由模型现写）', ai[0].problems.length === 0, JSON.stringify(ai[0].problems))
+  check('mode 归一化成 ai', ai[0].mode === 'ai')
+
+  const fixedEmpty = normalizeProactiveTasks([{ target: 'group:12345678', times: '09:00', mode: 'fixed', text: '' }])
+  check('mode=fixed 且没文案 → 标问题', fixedEmpty[0].problems.some((p) => p.includes('文案')), JSON.stringify(fixedEmpty[0].problems))
+
+  const unknown = normalizeProactiveTasks([{ target: 'group:12345678', times: '09:00', mode: '???', text: 'x' }])
+  check('认不出的 mode 回落 fixed', unknown[0].mode === 'fixed')
+
+  const style = normalizeProactiveTasks([{ target: 'group:12345678', times: '09:00', mode: 'ai', aiStyle: '撒娇一点' }])
+  check('aiStyle 保留', style[0].aiStyle === '撒娇一点')
 }
 
 // ── 归一化：数值夹取与默认值 ──────────────────────────────
@@ -116,6 +155,7 @@ check('格式化补零 65 → 01:05', formatProactiveTime(65) === '01:05')
   )
   check('同一个群两个时间点 = 两条配置', two.length === 2)
 
+  // v1.6.1：没有显式 id 时两条会派生出同一个 id，此时才覆盖（视为同一条配置的两次输入）。
   const dup = normalizeProactiveTasks(
     [
       { target: 'group:12345678', times: '09:00', text: '旧的' },
@@ -123,7 +163,7 @@ check('格式化补零 65 → 01:05', formatProactiveTime(65) === '01:05')
     ],
     settings,
   )
-  check('同 target 同时间：后者覆盖', dup.length === 1 && dup[0].text === '新的')
+  check('同 target 同时间且都由 target 派生 id：后者覆盖', dup.length === 1 && dup[0].text === '新的')
 
   const [re] = normalizeProactiveTasks([{ target: 'group:12345678', times: '21:00,09:00' }], settings)
   const [re2] = normalizeProactiveTasks([{ target: 'group:12345678', times: '09:00,21:00' }], settings)
