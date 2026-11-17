@@ -469,6 +469,12 @@ window.__ModuleLoader__.load({
         kind: 'preset',
         hint: '已有会话恢复时用哪套人设。留空 = 沿用那个会话自己记着的。新建会话用上面的「新建会话默认预设」。',
       },
+      {
+        key: 'proactiveTasks',
+        label: '主动发消息',
+        kind: 'proactive',
+        hint: '到点由插件自己把写好的话发出去，**不叫模型、不花钱**。目标必须已经在「哪些群可以叫醒」或「哪些私聊可以叫醒」里，否则这一条不会被发出去。',
+      },
       { key: 'attachRecentChat', label: '把没叫醒时的聊天一并带上', kind: 'boolean', hint: '下次叫醒时，把中间没理的那些话一起附上。' },
       { key: 'recentChatLimit', label: '附带最近几条', kind: 'number', hint: '上面那段最多带最近几条（0–200）。' },
       {
@@ -614,6 +620,12 @@ window.__ModuleLoader__.load({
         ],
       },
       {
+        id: 'proactive',
+        label: '主动',
+        desc: '到点自己发消息：不叫模型、不花钱。目标必须在唤醒白名单里。',
+        keys: ['proactiveTasks'],
+      },
+      {
         id: 'vision',
         label: '看图',
         desc: '看图走哪个提供商和模型。',
@@ -689,7 +701,7 @@ window.__ModuleLoader__.load({
 
     /** 结构化的字段（值是数组/对象，不是一段字符串）。 */
     function isStructured(kind) {
-      return kind === 'model-chain' || kind === 'profiles'
+      return kind === 'model-chain' || kind === 'profiles' || kind === 'proactive'
     }
 
     /**
@@ -1672,6 +1684,12 @@ window.__ModuleLoader__.load({
       const [catalogNote, setCatalogNote] = react.useState('')
       // 已知的 QQ 目的地（群 / 私聊），给「每个群/私聊单独设置」做候选。
       const [targets, setTargets] = react.useState([])
+      // 主动消息的「立刻试发一次」：状态放在 Card 里而不是 renderProactive 内部，
+      // 因为渲染函数每次重渲染都会重跑，放里面的 useState 会把结果冲掉。
+      // ⚠️ 新加的 state 必须排在 `activeGroup`（索引 5）之后 —— 离线测试按索引定位当前页签。
+      const [proactiveBusy, setProactiveBusy] = react.useState(false)
+      const [proactiveNote, setProactiveNote] = react.useState('')
+      const [proactiveOk, setProactiveOk] = react.useState(false)
 
       const current = react.useMemo(() => draftFrom(snap.value), [snap.value])
       const shown = draft ?? current
@@ -2012,6 +2030,48 @@ window.__ModuleLoader__.load({
         setDraft(next)
         setNote('')
         setError('')
+      }
+
+      /**
+       * 主动消息的「立刻试发一次」。
+       *
+       * 必须**先把当前草稿存下去再发**：后端读的是落盘的设置，草稿还在浏览器里。
+       * 所以这里走 `save()` 的同一条路径（逐个 scope.set），再打试发接口 ——
+       * 否则用户改完文案点试发，发出去的是上一次保存的旧文案，比不给按钮更误导。
+       */
+      async function runProactiveOnce() {
+        setProactiveBusy(true)
+        setProactiveNote('')
+        setProactiveOk(false)
+        try {
+          // 先落盘草稿（只写改过的键，和 save() 一致）
+          const writes = []
+          for (const f of FIELDS) {
+            if (same(current[f.key], shown[f.key])) continue
+            if (f.kind === 'secret' && String(shown[f.key] ?? '') === '') continue
+            const next = parse(f, shown[f.key])
+            if (next === undefined) continue
+            writes.push([f.key, next])
+          }
+          for (const [key, value] of writes) await scope.set(key, value)
+          if (writes.length > 0) setDraft(null)
+          if (typeof fetch !== 'function') throw new Error('这个页面没有网络接口，发不了。')
+          const res = await fetch(PROACTIVE_RUN_API, {
+            method: 'POST',
+            credentials: 'include',
+            headers: { 'accept': 'application/json', 'content-type': 'application/json' },
+            body: '{}',
+          })
+          const body = await res.json().catch(() => null)
+          if (!body || typeof body !== 'object') throw new Error('试发没有返回能看懂的结果。')
+          setProactiveOk(body.ok === true)
+          setProactiveNote(String(body.ok === true ? body.message || '已发送。' : body.error || '没发出去。'))
+        } catch (e) {
+          setProactiveOk(false)
+          setProactiveNote(String(e?.message ?? e))
+        } finally {
+          setProactiveBusy(false)
+        }
       }
 
       /**
@@ -2427,6 +2487,281 @@ window.__ModuleLoader__.load({
         )
       }
 
+      /**
+       * 主动发消息的编辑器：一行一条配置。
+       *
+       * 和 `renderProfiles` 是同一套形态（每行一张小卡 + 删一行 + 加一条），差别在字段：
+       * 这里是「几点发 / 发什么 / 最多几条」，都直接决定「会不会发出去」，所以每一格都给了
+       * 一句说明 —— 这个功能出错的代价是**真给群里发了话**，不能让人靠猜。
+       *
+       * 目标只列白名单里的：`targetCandidates` 已经交叉过滤过（见上面的 targets 拉取）。
+       * 这是刻意的硬约束，不是可选项 —— 见 index.js 的 normalizeProactiveTasks。
+       */
+      function renderProactive(field, list) {
+        // 白名单里的目的地（sync 按钮拿不到时为空，此时只能手填）。
+        const allowedGroups = new Set(splitIdText(shown.groupWhitelist ?? '').map(canonicalGroupId).filter((x) => x !== ''))
+        const allowedPrivates = new Set(splitIdText(shown.whitelist ?? ''))
+        const allowed = (row) => {
+          const target = String(row?.target ?? '')
+          const id = target.split(':')[1] ?? ''
+          if (target.startsWith('group:')) return allowedGroups.has(id)
+          if (target.startsWith('private:')) return allowedPrivates.has(id)
+          return false
+        }
+        const update = (index, patch) => {
+          const next = list.map((row, i) => (i === index ? { ...row, ...patch } : row))
+          setStructured(field.key, next)
+        }
+        const blank = {
+          id: '', enabled: false, target: '', label: '', times: '09:00', window: '',
+          jitterMinutes: 30, text: '', variants: '', maxPerDay: 3, onlyIfQuietHours: 0, respectQuietHours: true,
+        }
+        const rows = list.map((row, index) => {
+          const ok = allowed(row)
+          const target = String(row?.target ?? '')
+          const candidates = (Array.isArray(targets) ? targets : []).filter(
+            (t) => t.target === target || !list.some((r) => r?.target === t.target),
+          )
+          return h(
+            'div',
+            { key: `${index}-${target}`, style: S.profileCard },
+            h(
+              'div',
+              { style: S.profileHead },
+              h('span', { style: S.profileName }, targetLabel(row)),
+              // 白名单没通过时明确标出来：否则用户会以为配好了，其实一条都不会发。
+              ok ? null : h('span', { style: S.hintWarn }, '⚠️ 不在唤醒白名单里，不会发'),
+              h(
+                'label',
+                { style: S.check },
+                h('input', {
+                  type: 'checkbox',
+                  checked: row?.enabled === true,
+                  disabled: !snap.writable || busy,
+                  onChange: (event) => update(index, { enabled: event.target.checked }),
+                }),
+                h('span', null, '启用'),
+              ),
+              h(
+                'button',
+                {
+                  type: 'button',
+                  title: '删掉这一条',
+                  ...btnProps(S.miniBtn, busy || !snap.writable),
+                  disabled: busy || !snap.writable,
+                  onClick: () => setStructured(field.key, list.filter((_x, i) => i !== index)),
+                },
+                '✕',
+              ),
+            ),
+            h(
+              'div',
+              { style: S.profileGrid },
+              h('span', { style: S.profileLabel }, '发给谁'),
+              h(
+                'div',
+                null,
+                candidates.length > 0
+                  ? h(
+                      'select',
+                      {
+                        style: S.input,
+                        value: target,
+                        disabled: !snap.writable || busy,
+                        onChange: (event) => update(index, { target: event.target.value }),
+                      },
+                      [
+                        h('option', { style: OPTION_STYLE, key: '(none)', value: '' }, '（选一个群或私聊）'),
+                        ...candidates.map((t) =>
+                          h(
+                            'option', { style: OPTION_STYLE, key: t.target, value: t.target },
+                            `${t.target.startsWith('group:') ? '群' : '私聊'} ${t.target.split(':')[1]}${t.label ? ` · ${t.label}` : ''}`,
+                          ),
+                        ),
+                        ...(target !== '' && !candidates.some((t) => t.target === target)
+                          ? [h('option', { style: OPTION_STYLE, key: '__current', value: target }, `${target}（不在已知列表里）`)]
+                          : []),
+                      ],
+                    )
+                  : h('input', {
+                      type: 'text',
+                      style: S.input,
+                      value: target,
+                      placeholder: 'group:群号 或 private:QQ号',
+                      disabled: !snap.writable || busy,
+                      onChange: (event) => update(index, { target: event.target.value }),
+                      spellCheck: false,
+                    }),
+                h('div', { style: S.hint }, '只能选已在「哪些群 / 哪些私聊可以叫醒」里的目标。'),
+              ),
+              h('span', { style: S.profileLabel }, '每天几点发'),
+              h(
+                'div',
+                null,
+                h('input', {
+                  type: 'text',
+                  style: S.input,
+                  value: String(row?.times ?? ''),
+                  placeholder: '09:00, 21:30',
+                  disabled: !snap.writable || busy,
+                  onChange: (event) => update(index, { times: event.target.value }),
+                  spellCheck: false,
+                }),
+                h('div', { style: S.hint }, '用逗号分开，最多 12 个。到一个点发一条。'),
+              ),
+            ),
+            h(
+              'div',
+              { style: S.profileGrid },
+              h('span', { style: S.profileLabel }, '只在什么时段发'),
+              h(
+                'div',
+                null,
+                h('input', {
+                  type: 'text',
+                  style: S.input,
+                  value: String(row?.window ?? ''),
+                  placeholder: '09:00-23:00（留空 = 全天）',
+                  disabled: !snap.writable || busy,
+                  onChange: (event) => update(index, { window: event.target.value }),
+                  spellCheck: false,
+                }),
+                h('div', { style: S.hint }, '时间点落在这个时段外就不发。跨零点也认。'),
+              ),
+              h('span', { style: S.profileLabel }, '前后浮动几分钟'),
+              h(
+                'div',
+                null,
+                h('input', {
+                  type: 'number',
+                  style: S.input,
+                  value: String(row?.jitterMinutes ?? 30),
+                  disabled: !snap.writable || busy,
+                  onChange: (event) => update(index, { jitterMinutes: Number(event.target.value) || 0 }),
+                }),
+                h('div', { style: S.hint }, '0–180。固定整点发一眼就是机器，默认 30。'),
+              ),
+            ),
+            h(
+              'div',
+              { style: S.profileGrid },
+              h('span', { style: S.profileLabel }, '发什么'),
+              h(
+                'div',
+                null,
+                h('textarea', {
+                  style: S.textarea,
+                  value: String(row?.text ?? ''),
+                  placeholder: '到点了就发这句。可用 {time} {weekday} {name} {gap}',
+                  disabled: !snap.writable || busy,
+                  onChange: (event) => update(index, { text: event.target.value }),
+                  spellCheck: false,
+                }),
+                h('div', { style: S.hint }, '占位符：{time} 当前时间、{weekday} 星期几、{name} 备注名或「大家/你」、{gap} 距上次说话多久。'),
+              ),
+              h('span', { style: S.profileLabel }, '文案池'),
+              h(
+                'div',
+                null,
+                h('textarea', {
+                  style: S.textarea,
+                  value: String(row?.variants ?? ''),
+                  placeholder: '一行一条，每次随机挑一条（避开最近发过的三条）',
+                  disabled: !snap.writable || busy,
+                  onChange: (event) => update(index, { variants: event.target.value }),
+                  spellCheck: false,
+                }),
+                h('div', { style: S.hint }, '填了就优先用它，「发什么」只当兜底。同一句话连发三次很假。'),
+              ),
+            ),
+            h(
+              'div',
+              { style: S.profileGrid },
+              h('span', { style: S.profileLabel }, '一天最多几条'),
+              h(
+                'div',
+                null,
+                h('input', {
+                  type: 'number',
+                  style: S.input,
+                  value: String(row?.maxPerDay ?? 3),
+                  disabled: !snap.writable || busy,
+                  onChange: (event) => update(index, { maxPerDay: Number(event.target.value) || 1 }),
+                }),
+                h('div', { style: S.hint }, '1–48。时间写密了也不会超过这个数。'),
+              ),
+              h('span', { style: S.profileLabel }, '对方安静几小时才发'),
+              h(
+                'div',
+                null,
+                h('input', {
+                  type: 'number',
+                  style: S.input,
+                  value: String(row?.onlyIfQuietHours ?? 0),
+                  disabled: !snap.writable || busy,
+                  onChange: (event) => update(index, { onlyIfQuietHours: Number(event.target.value) || 0 }),
+                }),
+                h('div', { style: S.hint }, '0 = 不限制。设成 6 就是「六小时没人说话才主动」，比硬播报自然得多。'),
+              ),
+            ),
+            h(
+              'div',
+              { style: S.ops },
+              h(
+                'label',
+                { style: S.check },
+                h('input', {
+                  type: 'checkbox',
+                  checked: row?.respectQuietHours !== false,
+                  disabled: !snap.writable || busy,
+                  onChange: (event) => update(index, { respectQuietHours: event.target.checked }),
+                }),
+                h('span', null, '目标设了休眠时段时，休眠期间不发'),
+              ),
+            ),
+          )
+        })
+        return h(
+          'div',
+          { style: S.structBox },
+          rows,
+          h(
+            'div',
+            { style: S.ops },
+            h(
+              'button',
+              {
+                type: 'button',
+                ...btnProps(S.btn, busy || !snap.writable),
+                disabled: busy || !snap.writable,
+                onClick: () => setStructured(field.key, [...list, { ...blank }]),
+              },
+              '加一条主动消息',
+            ),
+            h(
+              'button',
+              {
+                type: 'button',
+                ...btnProps(S.btn, proactiveBusy || !snap.writable),
+                disabled: proactiveBusy || !snap.writable,
+                onClick: runProactiveOnce,
+              },
+              proactiveBusy ? '发送中…' : '立刻试发一次',
+            ),
+            h('span', { style: S.hint }, '新建的默认是「不启用」，看清了再打开。改完记得点下面的保存。'),
+          ),
+          // 试发结果就地显示：这个按钮的意义就是「马上知道对不对」，
+          // 结果写到吸底栏会离得太远。
+          proactiveNote
+            ? h(
+                'div',
+                { style: proactiveOk ? S.noteOk : S.hintWarn },
+                proactiveNote,
+              )
+            : null,
+        )
+      }
+
       async function save() {
         setBusy(true)
         setError('')
@@ -2795,6 +3130,8 @@ window.__ModuleLoader__.load({
           control = renderModelChain(f, Array.isArray(value) ? value : [])
         } else if (f.kind === 'profiles') {
           control = renderProfiles(f, Array.isArray(value) ? value : [])
+        } else if (f.kind === 'proactive') {
+          control = renderProactive(f, Array.isArray(value) ? value : [])
         } else if (f.kind === 'secret') {
           // 口令类：永远不把存着的值回显出来，框里是空的；留空 = 不改。
           control = h('input', {
@@ -3123,6 +3460,13 @@ window.__ModuleLoader__.load({
     const CATALOG_API = '/api/qq-bridge-neko/catalog'
     /** 已知的 QQ 目的地（群 / 私聊），给「单独设置」那栏用。只读。 */
     const PROFILES_API = '/api/qq-bridge-neko/profiles'
+    /**
+     * 主动消息的「立刻试发一次」。POST，按当前设置就地发一条。
+     *
+     * 为什么要有：配的时间点可能几小时后才到，改完文案没法立刻验证；
+     * 后端的这条路径**不记当日计数、不占时间点**，纯粹是演练。
+     */
+    const PROACTIVE_RUN_API = '/api/qq-bridge-neko/proactive/run'
     /** 稳定引用：useSyncExternalStore 的 getSnapshot 每次返回新对象会死循环。 */
     const LOADING_SNAPSHOT = { status: 'loading' }
     const UNAVAILABLE_SNAPSHOT = { status: 'unavailable' }

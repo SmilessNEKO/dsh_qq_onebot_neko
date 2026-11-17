@@ -220,6 +220,31 @@ const DestinationProfile = Schema.object({
   idlePauseMs: Schema.number().default(DEFAULT_LISTEN_IDLE_MS).description('跟随监听期间，这么久没有新消息就自动停听。默认 120000（2 分钟）。'),
 })
 
+/**
+ * 一条「主动发消息」配置。
+ *
+ * 语义：到点由**插件自己的定时器**直接把写好的文案发出去，**不唤醒模型**（0 token）。
+ * 所以 `text` / `variants` 是写死的文字，支持 `{time}` `{weekday}` `{name}` `{gap}` 占位符；
+ * 功能上等价于「定时播报」，不是「让模型自己想起来找你」——那条路要带上下文，另算钱。
+ *
+ * `target` 必须在群/私聊白名单里，否则 `normalizeProactiveTasks` 直接丢这一行。
+ * 理由：主动功能最怕配错号码发到陌生人那里，宁可不发。
+ */
+const ProactiveTask = Schema.object({
+  id: Schema.string().default('').description('内部用的稳定标识，留空会自动生成（改了收发时间会重新生成，当天计数跟着重置，这是有意的）。'),
+  enabled: Schema.boolean().default(false).description('这条配置启不启用。默认关 —— 新建完先看清再打开，别一保存就发出去。'),
+  target: Schema.string().default('').description('发给谁：group:群号 或 private:QQ号。**必须已经在「哪些群/私聊可以叫醒」的白名单里**，否则这一行会被忽略。'),
+  label: Schema.string().default('').description('备注名，只用来在卡片上认人。'),
+  times: Schema.string().default('').description('每天什么时候发，例如 09:00, 21:30。用逗号分隔，最多 12 个。留空 = 不发。'),
+  window: Schema.string().default('').description('只在每天这个时段里发，例如 09:00-23:00。留空 = 全天都能发。跨零点（23:00-02:00）也认。'),
+  jitterMinutes: Schema.number().default(30).description('在每个时间点上随机前后浮动这么多分钟（0–180）。固定整点发一眼就是机器，默认 30。'),
+  text: Schema.string().default('').description('正文。支持占位符 {time} 当前时间、{weekday} 星期几、{name} 对方昵称、{gap} 距上次说话多久。'),
+  variants: Schema.string().default('').description('文案池：一行一条，每次随机挑一条（会避开最近发过的三条）。填了就优先用它，`text` 只当兜底。'),
+  maxPerDay: Schema.number().default(3).description('这条配置一天最多发几条（1–48）。防止时间写成每分钟就把群刷爆。'),
+  onlyIfQuietHours: Schema.number().default(0).description('只在对方安静了这么多小时之后才发（0 = 不限制）。这是让「主动」显得自然的关键：人家刚聊完就别再插一句。'),
+  respectQuietHours: Schema.boolean().default(true).description('目标在「每个群/私聊单独设置」里填了休眠时段时，休眠期间不发。默认开。'),
+})
+
 export const Config = Schema.object({
   targetSessionId: Schema.string().default('').description('接到哪个会话。single 时留空 = 不接到任何会话。perGroup 时可以留空，新建会话用宿主当前的默认模型。'),
   agentPreset: Schema.string().default('').description('人设预设。留空 = 沿用会话自己记着的。'),
@@ -308,6 +333,9 @@ export const Config = Schema.object({
   listenIdleMs: Schema.number().default(DEFAULT_LISTEN_IDLE_MS).description('会话跟随期间，这么久没有新消息就自动停听。默认 120000（2 分钟）。'),
   // ── 每个 QQ 目的地的个性化 ────────────────────────────────────────────────
   destinationProfiles: Schema.array(DestinationProfile).default([]).description('按群 / 私聊分别设置休眠时段、24 小时实时回复、等待合并与停听时间。'),
+  // ── 主动发消息 ────────────────────────────────────────────────────────────
+  // 到点由插件自己的定时器直接发，**不唤醒模型**（0 token）。见 ProactiveTask 的注释。
+  proactiveTasks: Schema.array(ProactiveTask).default([]).description('主动发消息：到点直接给指定群 / 私聊发一条写好的话。不调用模型，不花钱。'),
   // 以下是 settings 命名空间的 composition base（装好的默认值）：
   // 设置界面里的用户层会覆盖它们。
   nicknames: Schema.array(Schema.string()).default(['244']).description('听到这些名字就回应。'),
@@ -427,6 +455,9 @@ const BridgeSettings = Schema.object({
   voiceCacheDir: Schema.string().default('').description('合成好的音频放哪（mp3 / wav）。留空 = $DSH_HOME/qq-bridge-neko-voice。同一段话 + 同引擎同参数只合成一次。'),
   // ── 每个 QQ 目的地的个性化 ────────────────────────────────────────────────
   destinationProfiles: Schema.array(DestinationProfile).default([]).description('按群 / 私聊分别设置休眠时段、24 小时实时回复、等待合并与停听时间。'),
+  // ── 主动发消息 ────────────────────────────────────────────────────────────
+  // 到点由插件自己的定时器直接发，**不唤醒模型**（0 token）。见 ProactiveTask 的注释。
+  proactiveTasks: Schema.array(ProactiveTask).default([]).description('主动发消息：到点直接给指定群 / 私聊发一条写好的话。不调用模型，不花钱。'),
 })
 
 /** OneBot 非文本消息段 → 可读占位符。
@@ -1447,6 +1478,11 @@ export function apply(ctx, config) {
       voiceMaxChars: clampInt(s.voiceMaxChars ?? config.voiceMaxChars, 1, 2000, DEFAULT_VOICE_MAX_CHARS),
       voiceCacheDir: String(s.voiceCacheDir ?? config.voiceCacheDir ?? '').trim(),
       destinationProfiles: normalizeDestinationProfiles(s.destinationProfiles ?? config.destinationProfiles),
+      // 主动发消息：白名单传进去做硬闸（不在名单里的行直接丢）。
+      proactiveTasks: normalizeProactiveTasks(s.proactiveTasks ?? config.proactiveTasks, {
+        groupWhitelist: normalizeIdList(s.groupWhitelist ?? config.groupWhitelist),
+        whitelist: normalizeIdList(s.whitelist ?? config.whitelist),
+      }),
       imageDescribeSafeBytes: Math.max(1, Number(s.imageDescribeSafeBytes ?? config.imageDescribeSafeBytes ?? IMAGE_DESCRIBE_SAFE_BYTES)),
       imageDescribeMaxBytes: Math.max(1, Number(s.imageDescribeMaxBytes ?? config.imageDescribeMaxBytes ?? IMAGE_DESCRIBE_MAX_BYTES)),
       imageWakeTotalBytes: Math.max(1, Number(s.imageWakeTotalBytes ?? config.imageWakeTotalBytes ?? IMAGE_WAKE_TOTAL_BYTES)),
@@ -1878,6 +1914,18 @@ export function apply(ctx, config) {
     listeningByDest: {},
     /** destKey（group:<id> / private:<id>）→ 会话 id。perGroup 时每个群、每个私聊一条。 */
     sessionByDest: {},
+    /**
+     * 主动发消息的当日计数：`taskId` → { day, count, sentAt: number[], recent: string[] }。
+     *
+     * 为什么落盘：插件重载 / DSH 重启后内存计数会清零，那样「今天最多 3 条」就形同虚设，
+     * 一天重启三次能发九条。`recent` 存最近三条文案，用来避开重复。
+     */
+    proactive: {},
+    /**
+     * destKey → 最后一次入站时刻。只给 `onlyIfQuietHours` 用（「对方安静了 N 小时才发」）。
+     * 单独存一份而不是复用 buffers：缓冲会被唤醒清空，这里要的是「最后一次说话」的时间戳。
+     */
+    proactiveLastInbound: [],
   }
   /** 出站闸门按会话一份。perGroup 两路同时跑时，不能共用一套 pending / 回复缓冲。 */
   const gates = new Map()
@@ -1929,6 +1977,26 @@ export function apply(ctx, config) {
           if (typeof key === 'string' && typeof value === 'string' && value.trim() !== '') next[key] = value.trim()
         }
         state.sessionByDest = next
+      }
+      if (raw?.proactive && typeof raw.proactive === 'object') {
+        const next = {}
+        for (const [key, value] of Object.entries(raw.proactive)) {
+          if (typeof key !== 'string' || !value || typeof value !== 'object') continue
+          const day = String(value.day ?? '').trim()
+          if (day === '') continue
+          const sentAt = Array.isArray(value.sentAt)
+            ? value.sentAt.map((n) => Number(n)).filter((n) => Number.isFinite(n))
+            : []
+          const recent = Array.isArray(value.recent) ? value.recent.map((t) => String(t ?? '')).slice(-3) : []
+          next[key] = { day, count: Math.max(0, Number(value.count) || 0), sentAt, recent }
+        }
+        state.proactive = next
+      }
+      if (Array.isArray(raw?.proactiveLastInbound)) {
+        state.proactiveLastInbound = raw.proactiveLastInbound
+          .filter((row) => row && typeof row === 'object' && typeof row.target === 'string' && Number.isFinite(Number(row.at)))
+          .map((row) => ({ target: String(row.target), at: Number(row.at) }))
+          .slice(-200)
       }
     } catch (error) {
       logger.warn(`state load failed: ${error?.message ?? error}`)
@@ -3879,6 +3947,9 @@ export function apply(ctx, config) {
 
     // 目的地无论是否唤醒都要记：这样“只记录”期间的闲聊之后也能被回复到。
     if (d.action !== 'drop') rememberDestination(msg)
+    // 主动发消息的「对方安静了多久」只看这条：**任何非丢弃的入站都算对方在说话**，
+    // 哪怕没叫醒、哪怕在休眠时段里。只有被彻底丢掉的消息（不在白名单）不算。
+    if (d.action !== 'drop') rememberInboundForProactive(msg)
 
     if (d.action === 'drop') return { ...d, delivered: false }
 
@@ -4546,6 +4617,230 @@ export function apply(ctx, config) {
     return { sent: 1, dropped: false, destination: dest }
   }
 
+  // ── 主动发消息（到点直接发，不唤醒模型）────────────────────────────────────
+  //
+  // 走的全是现成的 sendToQQ()：它自己会处理 Markdown、字数上限、表情段、语音块，
+  // 所以这里只需要「决定发不发」和「发哪一句」。
+  //
+  // 三类闸门，顺序不能反：
+  //   1. 硬闸（白名单 / 开关 / 今天发够没有）—— 不过就什么都不做；
+  //   2. 时间闸（窗口 / 抖动后的时刻 / 目标自己的休眠时段）；
+  //   3. 软闸（onlyIfQuietHours：对方刚说完话就跳过，把时间点顺延到下一次）。
+
+  /** 今天（本机时区）的日期串，用于当日计数。 */
+  function proactiveDay(at = Date.now()) {
+    const d = new Date(at)
+    return `${d.getFullYear()}-${d.getMonth() + 1}-${d.getDate()}`
+  }
+
+  /** 取（并按需重置）某条配置今天的计数。跨天自动清零。 */
+  function proactiveBucket(taskId, at = Date.now()) {
+    const day = proactiveDay(at)
+    const cur = state.proactive[taskId]
+    if (!cur || cur.day !== day) {
+      const fresh = { day, count: 0, sentAt: [], recent: [] }
+      state.proactive[taskId] = fresh
+      return fresh
+    }
+    return cur
+  }
+
+  /** 这个目的地最后一条入站消息是多久以前（毫秒）。没记录过返回 null。 */
+  function quietForMs(target, at = Date.now()) {
+    const key = String(target ?? '')
+    if (key === '') return null
+    const rows = Array.isArray(state.proactiveLastInbound) ? state.proactiveLastInbound : []
+    const hit = rows.find((row) => row?.target === key)
+    if (!hit || !Number.isFinite(hit.at)) return null
+    return Math.max(0, at - hit.at)
+  }
+
+  /** 记一条入站时间，给 onlyIfQuietHours 用。每个目的地只留一条。 */
+  function rememberInboundForProactive(msg, at = Date.now()) {
+    const key = destinationKeyOf(msg)
+    if (!key) return
+    if (!Array.isArray(state.proactiveLastInbound)) state.proactiveLastInbound = []
+    const rows = state.proactiveLastInbound.filter((row) => row?.target !== key)
+    rows.push({ target: key, at })
+    // 只保留最近 200 个目的地，状态文件不至于无限长
+    state.proactiveLastInbound = rows.slice(-200)
+  }
+
+  /** 挑一条文案：避开最近发过的三条，再从剩下的里取第一个（确定性，便于测试）。 */
+  function pickProactiveText(task) {
+    const pool = proactiveVariants(task)
+    if (pool.length === 0) return ''
+    const bucket = proactiveBucket(task.id)
+    const recent = Array.isArray(bucket.recent) ? bucket.recent : []
+    const fresh = pool.filter((text) => !recent.includes(text))
+    const chosen = fresh.length > 0 ? fresh[0] : pool[pool.length - 1]
+    return chosen
+  }
+
+  /** 占位符替换。取不到的值给「—」，不要留 `{name}` 这种半成品发出去。 */
+  function fillProactiveText(task, dest, at = Date.now()) {
+    const raw = pickProactiveText(task)
+    if (raw === '') return ''
+    const d = new Date(at)
+    const weekday = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'][d.getDay()]
+    const time = `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
+    const gapMs = quietForMs(task.target, at)
+    const gap = gapMs === null
+      ? '—'
+      : gapMs >= 3600000
+        ? `${Math.floor(gapMs / 3600000)} 小时`
+        : `${Math.max(1, Math.floor(gapMs / 60000))} 分钟`
+    const name = String(task.label ?? '').trim() || (dest.kind === 'group' ? '大家' : '你')
+    return raw
+      .replace(/\{time\}/g, time)
+      .replace(/\{weekday\}/g, weekday)
+      .replace(/\{name\}/g, name)
+      .replace(/\{gap\}/g, gap)
+  }
+
+  /**
+   * 跑一次全部配置：把「现在该发的」都发出去，然后算出下次该在什么时候醒来。
+   *
+   * 返回 `{ sent, skipped, nextAt }`：`nextAt` 是下一次需要被唤醒的时刻（没有配置时 null）。
+   * 调度器只认这个返回值，不自己算时间 —— 这样「什么时候该发」只有一处逻辑。
+   */
+  async function runProactiveTick(at = Date.now()) {
+    const s = readSettings()
+    const tasks = Array.isArray(s.proactiveTasks) ? s.proactiveTasks : []
+    const result = { sent: 0, skipped: [], nextAt: null }
+    if (tasks.length === 0) return result
+    const dayStart = (() => {
+      const d = new Date(at)
+      d.setHours(0, 0, 0, 0)
+      return d.getTime()
+    })()
+    for (const task of tasks) {
+      if (task.enabled !== true) continue
+      const slots = proactiveSlotsForDay(task, dayStart, task.jitterMinutes)
+      const bucket = proactiveBucket(task.id, at)
+      const dest = task.target.startsWith('group:')
+        ? { kind: 'group', groupId: task.target.slice('group:'.length) }
+        : { kind: 'private', userId: task.target.slice('private:'.length) }
+      for (const slot of slots) {
+        // 还没到点 / 已经过了太久（超过 10 分钟的补发窗口就别补了，
+        // 半夜断线早上起来收到「早安」比收不到更糟）
+        const late = at - slot.fireAt
+        if (late < 0) {
+          if (result.nextAt === null || slot.fireAt < result.nextAt) result.nextAt = slot.fireAt
+          continue
+        }
+        if (late > PROACTIVE_CATCHUP_MS) continue
+        if (bucket.sentAt.includes(slot.fireAt)) continue
+        if (bucket.count >= task.maxPerDay) {
+          result.skipped.push({ id: task.id, reason: 'daily-cap' })
+          continue
+        }
+        if (!withinProactiveWindow(task, slot.fireAt)) {
+          result.skipped.push({ id: task.id, reason: 'outside-window' })
+          continue
+        }
+        // 目标自己在「每个群/私聊单独设置」里填了休眠时段：休眠期间闭嘴。
+        if (task.respectQuietHours !== false) {
+          const profile = profileFor(dest, s)
+          if (profile && !profile.alwaysReply && inQuietHours(profile.quietHours, slot.fireAt)) {
+            result.skipped.push({ id: task.id, reason: 'target-quiet-hours' })
+            continue
+          }
+        }
+        // 软闸：对方刚说完话就跳过这一次（不顺延 —— 下个时间点再说更自然）
+        if (task.onlyIfQuietHours > 0) {
+          const quietMs = quietForMs(task.target, slot.fireAt)
+          if (quietMs !== null && quietMs < task.onlyIfQuietHours * 3600000) {
+            result.skipped.push({ id: task.id, reason: 'target-active' })
+            continue
+          }
+        }
+        const text = fillProactiveText(task, dest, slot.fireAt)
+        if (text === '') {
+          result.skipped.push({ id: task.id, reason: 'empty-text' })
+          continue
+        }
+        let sent
+        try {
+          sent = await sendToQQ(text, dest, { quoteMessageId: null })
+        } catch (error) {
+          sent = { sent: 0, dropped: true, reason: 'send-failed', error: String(error?.message ?? error) }
+        }
+        // 无论成没成都要记账：成了防重复，没成也要让用户从台账里看见
+        // （否则「我配了怎么没发」永远查不出原因）。
+        bucket.sentAt.push(slot.fireAt)
+        bucket.sentAt = bucket.sentAt.slice(-PROACTIVE_MAX_PER_DAY_CAP)
+        if (sent?.sent > 0) {
+          bucket.count += 1
+          bucket.recent = [...(Array.isArray(bucket.recent) ? bucket.recent : []), text].slice(-3)
+          result.sent += 1
+          pushLog({ kind: 'proactive', action: 'sent', target: task.target, text: text.slice(0, 120) })
+          logger.info(`主动消息已发：${task.target}`)
+        } else {
+          result.skipped.push({ id: task.id, reason: sent?.reason ?? 'send-failed' })
+          pushLog({ kind: 'proactive', action: 'dropped', target: task.target, reason: sent?.reason ?? 'send-failed' })
+          logger.warn(`主动消息没发出去：${task.target}（${sent?.reason ?? 'send-failed'}）`)
+        }
+      }
+    }
+    saveState()
+    return result
+  }
+
+  // 调度器：只挂一个定时器，每次都重新算「下次什么时候」。这样改配置 / 跨天 / 重启
+  // 都只需要 clearTimeout + 重新排一次，不用维护每条配置的独立计时器。
+  let proactiveTimer = null
+  /** 补发窗口：错过超过这么久就不补了（避免半夜断线、早上起来收到一堆过期问候）。 */
+  const PROACTIVE_CATCHUP_MS = 10 * 60 * 1000
+
+  function proactiveReschedule() {
+    if (proactiveTimer !== null) {
+      clearTimeout(proactiveTimer)
+      proactiveTimer = null
+    }
+    const s = readSettings()
+    const tasks = Array.isArray(s.proactiveTasks) ? s.proactiveTasks : []
+    if (!tasks.some((task) => task.enabled === true)) return
+    // 先跑一次 tick（可能已经过了某个时间点、还在补发窗口里），再按它给的 nextAt 排下一次。
+    // 用 Promise 包一层：tick 里要 await sendToQQ，不能阻塞调用方。
+    Promise.resolve()
+      .then(() => runProactiveTick())
+      .then((result) => {
+        const nextAt = result?.nextAt
+        // 没有任何未来的时间点（今天发完了）→ 明天零点再算一次。
+        const tomorrow = new Date()
+        tomorrow.setHours(24, 0, 1, 0)
+        let fireAt = Number.isFinite(nextAt) ? nextAt : tomorrow.getTime()
+        // 至少 1 秒后再醒，避免 nextAt 恰好是「现在」导致空转
+        const delay = Math.max(1000, fireAt - Date.now())
+        proactiveTimer = setTimeout(() => {
+          proactiveTimer = null
+          proactiveReschedule()
+        }, delay)
+        if (typeof proactiveTimer?.unref === 'function') proactiveTimer.unref()
+      })
+      .catch((error) => {
+        logger.warn(`主动消息调度失败：${error?.message ?? error}`)
+        // 出错也别把调度器停死：一分钟后重试一次
+        proactiveTimer = setTimeout(() => {
+          proactiveTimer = null
+          proactiveReschedule()
+        }, 60 * 1000)
+        if (typeof proactiveTimer?.unref === 'function') proactiveTimer.unref()
+      })
+  }
+
+  // 时区/跨天都靠「每次醒来重算」兜住；这里只在拿到配置时排一次。
+  ctx.effect(() => {
+    proactiveReschedule()
+    return () => {
+      if (proactiveTimer !== null) {
+        clearTimeout(proactiveTimer)
+        proactiveTimer = null
+      }
+    }
+  })
+
   // 传输生命周期：建连、随插件卸载回收；settings 改了地址/token 就重连。
   ctx.effect(() => {
     transport.start()
@@ -4576,6 +4871,10 @@ export function apply(ctx, config) {
       const live = ctx.agents.get(id)
       if (live) mountUsagePrompt(live)
     }
+
+    // 主动发消息：配置一变就重排定时器（改时间、开关、文案都要立刻生效）。
+    // 重排不做节流：`proactiveReschedule` 自己会先 clearTimeout，连改十次也只剩一个定时器。
+    proactiveReschedule()
 
     const key = `${s.onebotUrl}\u0000${s.accessTokenEnv}`
     if (key === lastTransportKey) return
@@ -6517,6 +6816,47 @@ export function apply(ctx, config) {
     return sendJson(res, 200, { ok: true, targets: items, profiles: s.destinationProfiles ?? [] })
   }
 
+  /**
+   * 主动消息的「立刻发一次」。
+   *
+   * 为什么必须有这个接口：配好的时间点可能几小时后才到，用户改完文案没法马上验证；
+   * 只能干等的话，第一道检查又落回人身上。这里按**当前设置**就地跑一次发送，
+   * 但**不记当日计数、不占用时间点**（它是一次演练，不该顶掉真正该发的那条）。
+   */
+  function handleProactiveRunRequest(req, res) {
+    if (rejectLocalRequest(req, res)) return
+    const method = String(req?.method ?? '').toUpperCase()
+    if (method !== 'POST') {
+      return sendJson(res, 405, { ok: false, error: '这个接口只接受 POST。' })
+    }
+    const run = async () => {
+      const s = readSettings()
+      const tasks = (Array.isArray(s.proactiveTasks) ? s.proactiveTasks : []).filter((t) => t.enabled === true)
+      if (tasks.length === 0) {
+        return { ok: false, error: '还没有启用的主动消息。先在「主动」页加一条并勾上「启用」，保存后再点这里。' }
+      }
+      const task = tasks[0]
+      const dest = task.target.startsWith('group:')
+        ? { kind: 'group', groupId: task.target.slice('group:'.length) }
+        : { kind: 'private', userId: task.target.slice('private:'.length) }
+      // 演练只挑文案、不动计数：`pickProactiveText` 会读 recent，但这里不写回。
+      const text = fillProactiveText(task, dest, Date.now())
+      if (text === '') {
+        return { ok: false, error: '这一条没有可用文案（「发什么」和「文案池」都是空的）。' }
+      }
+      const sent = await sendToQQ(text, dest, { quoteMessageId: null })
+      if (sent?.sent > 0) {
+        pushLog({ kind: 'proactive', action: 'sent-manual', target: task.target, text: text.slice(0, 120) })
+        return { ok: true, message: `已发到 ${task.target}：${text.slice(0, 60)}` }
+      }
+      return { ok: false, error: `没发出去：${sent?.reason ?? 'send-failed'}${sent?.error ? `（${sent.error}）` : ''}` }
+    }
+    Promise.resolve()
+      .then(run)
+      .then((payload) => sendJson(res, 200, payload))
+      .catch((error) => sendJson(res, 200, { ok: false, error: String(error?.message ?? error) }))
+  }
+
   // TODO: accessTokenEnv 留空时，可回退读 NapCat 的 onebot11*.json 里的 token（用户说可做可不做）。
   // 可选注入：没有 webServer 服务的部署照常工作（只是卡片上的按钮拿不到地址）。
   if (typeof ctx.inject === 'function') ctx.inject(['webServer'], (scoped) => {
@@ -6554,6 +6894,7 @@ export function apply(ctx, config) {
         ['/api/qq-bridge-neko/voice/preview', handleVoicePreviewRequest],
         ['/api/qq-bridge-neko/catalog', handleCatalogRequest],
         ['/api/qq-bridge-neko/profiles', handleProfilesRequest],
+        ['/api/qq-bridge-neko/proactive/run', handleProactiveRunRequest],
       ]
       for (const [path, handler] of routes) disposes.push(server.register({ kind: 'exact', path, handler }))
       scoped.effect(() => () => {
@@ -7154,6 +7495,176 @@ export function normalizeDestinationProfiles(raw) {
     })
   }
   return [...byTarget.values()]
+}
+
+// ── 主动发消息：纯函数（归一化 + 调度计算），全部导出以便离线测试 ──────────────
+//
+// 设计前提：这条链路**不唤醒模型**，所以这些函数是「什么时候该发、发哪一句」的全部智力。
+// 一旦某条配置能被解析成「今天在这个时刻该发」，插件只做一件事：把 text 填好占位符，交给
+// sendToQQ()。中间不碰会话、不碰 token。
+
+/** 一天最多几条的硬上限（防止时间写成每小时 12 个点 + 抖动重叠后刷屏）。 */
+const PROACTIVE_MAX_PER_DAY_CAP = 48
+/** 一条配置最多几个时间点。12 个够「每两小时一次」，再多就不是「主动」是「骚扰」。 */
+const PROACTIVE_MAX_TIMES = 12
+
+/**
+ * 解析 `09:00, 21:30` 这种时间点列表 → 分钟数数组。
+ *
+ * 认全角冒号、认中文逗号；认不出的项**跳过**而不是整行丢弃 —— 用户写了三个时间、
+ * 其中一个手滑打成 `9.00`，另外两个应该照常发，不该因为他打错一个字就整天不发。
+ *
+ * @param {unknown} raw
+ * @returns {number[]} 去重升序，每项 0–1439。
+ */
+export function parseProactiveTimes(raw) {
+  const text = String(raw ?? '').trim()
+  if (text === '') return []
+  const out = new Set()
+  for (const part of text.split(/[,，;；\s]+/)) {
+    const piece = part.trim()
+    if (piece === '') continue
+    const matched = piece.match(/^(\d{1,2})\s*[:：]\s*(\d{1,2})$/)
+    if (!matched) continue
+    const hour = Number(matched[1])
+    const minute = Number(matched[2])
+    if (!Number.isFinite(hour) || !Number.isFinite(minute)) continue
+    if (hour < 0 || hour > 23 || minute < 0 || minute > 59) continue
+    out.add(hour * 60 + minute)
+  }
+  return [...out].sort((a, b) => a - b)
+}
+
+/**
+ * 分钟数 → `HH:MM`。存回设置时用它，卡片上才显示人看得懂的时间而不是「540」。
+ */
+export function formatProactiveTime(minute) {
+  const value = clampInt(minute, 0, 24 * 60 - 1, 0)
+  const hour = Math.floor(value / 60)
+  const rest = value % 60
+  return `${String(hour).padStart(2, '0')}:${String(rest).padStart(2, '0')}`
+}
+
+/**
+ * 主动配置的归一化。
+ *
+ * 规则（和 `normalizeDestinationProfiles` 同一套思路：能救的救，救不了的整行丢弃）：
+ * - `target` 只认 `group:<数字>` / `private:<数字>`，且**必须在该类白名单里** —— 写错号码
+ *   不许发到陌生人那里去，这是硬约束；
+ * - `times` 一个都解析不出来 → 整行丢弃（没时间点的配置永远不会触发，留着只会让人以为配好了）；
+ * - 同一个 target + 同一组时间点视为重复，后者覆盖前者；
+ * - `id` 由 `target|时间点` 派生：改时间等于换了一条配置，当天的计数跟着重置（有意为之）。
+ * - `times` **回写成人看得懂的 `HH:MM,HH:MM`**，不是内部分钟数 —— 卡片要把这行原样显示回去。
+ *
+ * @param {unknown} raw 设置里的原始值。
+ * @param {{groupWhitelist?: string[], whitelist?: string[]}} settings 用来判白名单。
+ * @returns {Array<object>} 归一化后的配置。
+ */
+export function normalizeProactiveTasks(raw, settings = {}) {
+  const list = Array.isArray(raw) ? raw : []
+  const groups = new Set(normalizeIdList(settings.groupWhitelist))
+  const privates = new Set(normalizeIdList(settings.whitelist))
+  const byId = new Map()
+  for (const item of list) {
+    if (!item || typeof item !== 'object') continue
+    const target = String(item.target ?? '').trim()
+    const matched = target.match(/^(group|private):(\d{1,16})$/)
+    if (!matched) continue
+    const isGroup = matched[1] === 'group'
+    // 白名单是硬闸：没在名单里的目标一律不发。宁可这条配置“看着没生效”，
+    // 也不要半夜给一个陌生群发消息。
+    if (isGroup ? !groups.has(matched[2]) : !privates.has(matched[2])) continue
+    const minutes = parseProactiveTimes(item.times).slice(0, PROACTIVE_MAX_TIMES)
+    if (minutes.length === 0) continue
+    const timesKey = minutes.join(',')
+    const id = `${target}|${timesKey}`
+    byId.set(id, {
+      id,
+      enabled: item.enabled === true,
+      target,
+      label: String(item.label ?? '').trim().slice(0, 60),
+      times: minutes.map(formatProactiveTime).join(','),
+      window: String(item.window ?? '').trim(),
+      jitterMinutes: clampInt(item.jitterMinutes, 0, 180, 30),
+      text: String(item.text ?? '').trim().slice(0, 1500),
+      variants: String(item.variants ?? '').trim().slice(0, 8000),
+      maxPerDay: clampInt(item.maxPerDay, 1, PROACTIVE_MAX_PER_DAY_CAP, 3),
+      onlyIfQuietHours: clampInt(item.onlyIfQuietHours, 0, 168, 0),
+      respectQuietHours: item.respectQuietHours !== false,
+    })
+  }
+  return [...byId.values()]
+}
+
+/**
+ * 文案池 → 数组。一行一条；`text` 当兜底。
+ * 空行、纯空白行丢掉；同一行重复也去重（复制粘贴很容易重复）。
+ */
+export function proactiveVariants(task) {
+  const raw = String(task?.variants ?? '')
+  const out = []
+  const seen = new Set()
+  for (const line of raw.split(/\r?\n/)) {
+    const text = line.trim()
+    if (text === '' || seen.has(text)) continue
+    seen.add(text)
+    out.push(text)
+  }
+  if (out.length === 0) {
+    const fallback = String(task?.text ?? '').trim()
+    if (fallback !== '') out.push(fallback)
+  }
+  return out
+}
+
+/**
+ * 今天这个时间点该不该发、大概是第几分钟。
+ *
+ * `jitterMinutes` 的确定性处理：同一个 (id, 日期, 时间点) 永远得到同一个偏移，
+ * 重启插件不会重新抽一次 —— 否则每重载一次，今天已经发过的时间点就可能再发一遍。
+ * 用字符串哈希取模，不依赖随机数。
+ *
+ * @returns {Array<{minute:number, fireAt:number}>} 今天实际要发的时刻（本机时间戳，升序）。
+ */
+export function proactiveSlotsForDay(task, dayStart, jitterMinutes = 0) {
+  const times = parseProactiveTimes(task?.times)
+  const jitter = clampInt(jitterMinutes ?? task?.jitterMinutes, 0, 180, 0)
+  const base = new Date(dayStart)
+  base.setHours(0, 0, 0, 0)
+  const dayStamp = `${base.getFullYear()}-${base.getMonth() + 1}-${base.getDate()}`
+  const out = []
+  for (const minute of times) {
+    let offset = 0
+    if (jitter > 0) {
+      const seed = `${task?.id ?? task?.target ?? ''}|${dayStamp}|${minute}`
+      let hash = 0
+      for (let i = 0; i < seed.length; i += 1) hash = (hash * 31 + seed.charCodeAt(i)) % 1000003
+      // 映射到 [-jitter, +jitter]，按分钟粒度
+      offset = (hash % (jitter * 2 + 1)) - jitter
+    }
+    const slotMinute = Math.max(0, Math.min(23 * 60 + 59, minute + offset))
+    const fireAt = base.getTime() + slotMinute * 60 * 1000
+    out.push({ minute: slotMinute, fireAt })
+  }
+  return out.sort((a, b) => a.fireAt - b.fireAt)
+}
+
+/**
+ * 这个时刻能不能发（只看时间条件，不看「今天发够没有」）。
+ *
+ * `window` 的语义是「**只在**这个时段里发」，判断「在不在窗口内」和
+ * `inQuietHours()` 完全同构（它判的也是「在不在这个区间里」，跨零点规则也一样）——
+ * 直接复用同一个解析器，避免两套边界逻辑日后跑偏。
+ *
+ * 但**解析失败必须当全天可发**：`inQuietHours('bad')` 返回 false 的语义是
+ * 「不在休眠时段 = 什么时候都行」，如果直接拿它当「不在窗口内」，用户填错一个字符
+ * 就会静默变成一条永远不发的配置 —— 那是最难查的失效。
+ */
+export function withinProactiveWindow(task, at = Date.now()) {
+  const window = String(task?.window ?? '').trim()
+  if (window === '') return true
+  if (parseQuietHours(window) === null) return true
+  return inQuietHours(window, at)
 }
 
 /**
