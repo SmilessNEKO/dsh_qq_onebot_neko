@@ -39,6 +39,8 @@
 - 图片先落盘，叫醒时一律交给识图模型读成一句话。一次唤醒最多识别 3 张，其余留 `[图片#短哈希]` 占位。识图被 token 上限截断会自动翻倍预算重试（最多三次），三次都不行就在正文写「描述失败」。
 - `describeImages` 关掉则完全不识图、只留占位——适合会话模型自己能看图时省调用。
 - 表情包可以用 `qq_bridge_neko_sticker` 收藏群友发的图或 QQ 商城表情，再按情绪 / 哈希发出去。半角方括号里的 `[表情名]` 会变成 QQ 系统表情。
+- 随包收藏了三组鲸鲸表情包（蓝色大肥鱼动态表情 161 张 / DeepSeek 娘梗图 20 张 / 蓝鲸档案精选 43 张），按**分类**放在表情包目录下，用 `list` 时带 `category`、`send` 时也能按 `category` 取。四类分别是 `deepseek-chan-emotes` / `deepseek-chan-meme-pack` / `blue-fish-archive` / `ai-collected`（AI 自己收的）。
+- `stickerDir` 可指定表情包根目录（留空用默认的 state 同级目录），改目录后老图仍找得到。`stickerAutoCollect` 打开后 AI 会按 `stickerCollectTags` 的价值倾向自动收藏群友发的图 —— 多个「词+概率」逗号分隔，如 `可爱0.8, 奶龙0, 萌1`（命中「可爱」80% 概率收、「奶龙」绝不收、「萌」命中就收）；**自动收藏默认关**。
 
 **会话**
 
@@ -231,6 +233,9 @@ DSH 0.2 的卡片把值写进 `$DSH_HOME/qq-bridge-neko-settings.json`。这份�
 | `visionMode` | `auto` | 识图用哪个模型：`auto` 自动找支持图片输入的、`session` 用会话当前模型、`fixed` 用下面两项选的 |
 | `visionProvider` / `visionProviderModel` | 空 | `visionMode=fixed` 时，从 DSH 已配置提供商及其模型里两段联动下拉选；不手写模型名 |
 | `visionModel` | 空 | 旧写法（`provider/model`），只在新选项都没配时兜底 |
+| `stickerDir` | 空 | 表情包根目录（绝对路径）。留空 = state 同级目录；改目录后老图仍找得到 |
+| `stickerAutoCollect` | `false` | AI 是否按价值倾向自动收藏群友发的图。默认关 |
+| `stickerCollectTags` | 空 | 自动收藏的价值倾向，多个「词+概率」用逗号分开，如 `可爱0.8, 奶龙0, 萌1`。命中多个取最低概率，概率 0 命中就放弃 |
 | `rotateEnabled` | `true` | perGroup 下聊得太久 / 上下文快满时自动新建会话接着聊（旧的留着可查） |
 | `rotateMaxTurns` | `300` | 同一目的地聊到这么多轮就换新会话。`0` = 只按上下文压力判断 |
 | `rotatePressureRatio` | `0.75` | 上下文占用达到这个比例就换新会话。`0` = 只按轮数判断 |

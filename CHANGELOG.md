@@ -1,5 +1,17 @@
 # 更新日志
 
+## v1.6.4 — 2026-11-18
+
+表情包功能大扩充：三组现成鲸鲸表情包随包收藏、按**分类**管理，AI 可以按**价值倾向**自动收藏群友发的图。
+
+- **三组表情包预先收藏好、设为常用**：`蓝色大肥鱼·动态表情`（161 张动态 webp，原 500×500 GIF 压到 300px，体积从 569MB 降到 67.6MB）、`DeepSeek娘·梗图`（20 张）、`蓝鲸档案·精选`（43 张）。三组共 224 张，连同原先那条 AI 收藏，登记表共 225 条，已经落进表情包目录 `C:\Users\mina\.dsh\qq-bridge-neko-stickers\` 下按分类分好（图片是收藏到数据目录，不打进插件 tgz）。
+- **四类目录**：`deepseek-chan-emotes` / `deepseek-chan-meme-pack` / `blue-fish-archive` 三组各占一类，AI 自己收的进 `ai-collected`。`qq_bridge_neko_sticker` 的 `list` / `send` / `save` 都加了 `category`：可以按类列、按类发；`save` 默认落进 `ai-collected`。
+- **表情包目录可配置**：新增 `stickerDir` 设置项。留空 = 用默认的 state 同级目录；填了绝对路径就把整个分类库挪过去，`resolveStickerPath` 保证改目录后老条目的图片仍找得到（新格式带分类段、老格式兼容）。
+- **AI 自动收藏（默认关）**：新增开关 `stickerAutoCollect`。打开后，识图描述成功时把图交给价值判定；**默认关，不配置等于什么都不自动收**。
+- **价值倾向用文字配置**：新增 `stickerCollectTags`，多个「词+概率」逗号分隔，如 `可爱0.8, 奶龙0, 萌1` —— 命中「可爱」有 80% 概率收藏、「奶龙」一律不收、「萌」命中就收。命中多个词取最低概率；概率为 0 的词命中直接放弃。判定由 AI 对图的描述文本做大小写不敏感匹配，掷骰用最低命中概率。收藏失败 try/catch 兜住，绝不打断正常回复。
+- **实现细节**：`stickers.js` 新增 `PRESET_CATEGORIES`（三组）/ `AI_CATEGORY` / `parseCollectTags` / `decideCollect` / `resolveStickerPath`，`listStickers` / `findSticker` / `importSticker` 加 `category`（老条目无 category 时归 `ai-collected`）。`index.js` 的 4 处设置体系同步加三个新键，`effectiveStickerDir()` + `stickerFilePath(entry)` 统一路径解析，`maybeAutoCollect()` 做判定与入库，提示词表情包段写清四类与自动收藏默认关。
+- 测试：`test-stickers.mjs` 扩到 70 条（分类过滤/子目录、价值 tag 判定、路径解析三种格式），并同步修正 `test-smoke.mjs` 的 sticker 路径断言（现在带 `ai-collected/` 分类段）。五套回归（stickers / smoke / settings-tabs / feiyu-voice-options / vision-test）+ voice 全过。
+
 ## v1.6.3 — 2026-11-18
 
 看图页加**「测试识图」按钮** —— 选完识图模型，当场就能验它到底认不认得出图里的字，不用再靠群里发一张图碰运气。
