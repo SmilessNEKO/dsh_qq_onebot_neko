@@ -1,5 +1,16 @@
 # 更新日志
 
+## v1.6.3 — 2026-11-18
+
+看图页加**「测试识图」按钮** —— 选完识图模型，当场就能验它到底认不认得出图里的字，不用再靠群里发一张图碰运气。
+
+- **一键测真实链路**：点一下，插件拿一张自带的白底大字图（`assets/vision-test.png`，写有 `VISION TEST / 2026 / ALPHA-7391`）走一遍真正的识图流程 —— 和实际收图时**同一套** `findVisionModel` → `attachments.saveImage` → `createUserMessage` → `llm.stream`（含三次重试与 token 预算翻倍）。测通了就说明这套设置收图时的描述也是通的。
+- **显示识别结果与模型**：成功后把模型实际认出的文字原样贴出来，下方标出**实际用的 provider / model** 与**耗时**。「测的是哪套」一眼可见，不用猜是不是又落到了默认模型。
+- **测当前选中的模型**：`visionMode = fixed` 时把草稿里选中的 `visionProvider` / `visionProviderModel` 强指定给后端（`POST /api/qq-bridge-neko/vision/test` body `{provider, model}`）；`auto` / `session` 档交给后端按设置自动解析，不把下拉里残留的旧 model id 硬塞进去。失败时明确回「没找到支持图片输入的模型」等原因。
+- **只读、本机、不花钱一次调用之外**：接口走和设置接口相同的本机准入（`rejectLocalRequest`）；图是内置的，不涉及用户图片与隐私；一次测试就是一次真实的多模态调用。
+- **实现细节**：`describeImage` 加可选 `forcedModel` 参数（自测时绕过登记表缓存、强指定模型并返回实际 provider/model），不传时行为完全不变，生产收图路径无需改。按 VoicePreview 范式把 `VisionTest` 定义在模块级，避免卡片每 5 秒重渲染把它卸载重建。
+- 测试：新增 `test-vision-test.mjs`（23 条）—— 后端真起 `/vision/test` 路由打回环 POST（GET→405 / 非法 JSON→400 / 强指定模型回显 / 空 body 自动解析 / 内置图确实存进 attachments），前端真渲染卡片切到看图页点按钮（URL、payload、结果/error 渲染）。四套回归（smoke / settings-tabs / feiyu-voice-options / voice）全过。
+
 ## v1.6.2 — 2026-11-17
 
 紧急修复：**插件整个加载失败**（设置页消失、所有 `qq_bridge_neko_*` 工具调不动）。
