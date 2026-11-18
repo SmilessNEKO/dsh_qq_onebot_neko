@@ -30,3 +30,14 @@ Thumbs.db
 
 # Locally built release tarballs (npm pack). Keep them on disk, never commit.
 *.tgz
+
+# Sticker packs are big local binaries. They live in the data dir
+# ($DSH_HOME/qq-bridge-neko-stickers by default), which is outside this repo,
+# and are NEVER bundled into the plugin tgz (package.json `files` whitelist
+# excludes them). Ignore the download/convert staging dirs and any sticker
+# image that might accidentally land in the repo, so they can't be committed.
+_stickers_tmp/
+_stickers/
+stickers-download/
+*.webp
+*.gif

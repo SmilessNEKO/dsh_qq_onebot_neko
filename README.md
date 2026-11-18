@@ -39,7 +39,7 @@
 - 图片先落盘，叫醒时一律交给识图模型读成一句话。一次唤醒最多识别 3 张，其余留 `[图片#短哈希]` 占位。识图被 token 上限截断会自动翻倍预算重试（最多三次），三次都不行就在正文写「描述失败」。
 - `describeImages` 关掉则完全不识图、只留占位——适合会话模型自己能看图时省调用。
 - 表情包可以用 `qq_bridge_neko_sticker` 收藏群友发的图或 QQ 商城表情，再按情绪 / 哈希发出去。半角方括号里的 `[表情名]` 会变成 QQ 系统表情。
-- 随包收藏了三组鲸鲸表情包（蓝色大肥鱼动态表情 161 张 / DeepSeek 娘梗图 20 张 / 蓝鲸档案精选 43 张），按**分类**放在表情包目录下，用 `list` 时带 `category`、`send` 时也能按 `category` 取。四类分别是 `deepseek-chan-emotes` / `deepseek-chan-meme-pack` / `blue-fish-archive` / `ai-collected`（AI 自己收的）。
+- 已预先收藏好三组鲸鲸表情包（蓝色大肥鱼动态表情 161 张 / DeepSeek 娘梗图 20 张 / 蓝鲸档案精选 43 张）——图片收在表情包**数据目录**里，**不进插件 tgz**；按**分类**放好，用 `list` 时带 `category`、`send` 时也能按 `category` 取。四类分别是 `deepseek-chan-emotes` / `deepseek-chan-meme-pack` / `blue-fish-archive` / `ai-collected`（AI 自己收的）。
 - `stickerDir` 可指定表情包根目录（留空用默认的 state 同级目录），改目录后老图仍找得到。`stickerAutoCollect` 打开后 AI 会按 `stickerCollectTags` 的价值倾向自动收藏群友发的图 —— 多个「词+概率」逗号分隔，如 `可爱0.8, 奶龙0, 萌1`（命中「可爱」80% 概率收、「奶龙」绝不收、「萌」命中就收）；**自动收藏默认关**。
 
 **会话**

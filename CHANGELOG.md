@@ -2,7 +2,7 @@
 
 ## v1.6.4 — 2026-11-18
 
-表情包功能大扩充：三组现成鲸鲸表情包随包收藏、按**分类**管理，AI 可以按**价值倾向**自动收藏群友发的图。
+表情包功能大扩充：三组现成鲸鲸表情包预先收藏到数据目录（**不进插件包**）、按**分类**管理，AI 可以按**价值倾向**自动收藏群友发的图。
 
 - **三组表情包预先收藏好、设为常用**：`蓝色大肥鱼·动态表情`（161 张动态 webp，原 500×500 GIF 压到 300px，体积从 569MB 降到 67.6MB）、`DeepSeek娘·梗图`（20 张）、`蓝鲸档案·精选`（43 张）。三组共 224 张，连同原先那条 AI 收藏，登记表共 225 条，已经落进表情包目录 `C:\Users\mina\.dsh\qq-bridge-neko-stickers\` 下按分类分好（图片是收藏到数据目录，不打进插件 tgz）。
 - **四类目录**：`deepseek-chan-emotes` / `deepseek-chan-meme-pack` / `blue-fish-archive` 三组各占一类，AI 自己收的进 `ai-collected`。`qq_bridge_neko_sticker` 的 `list` / `send` / `save` 都加了 `category`：可以按类列、按类发；`save` 默认落进 `ai-collected`。
