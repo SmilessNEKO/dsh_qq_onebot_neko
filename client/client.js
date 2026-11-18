@@ -912,6 +912,8 @@ window.__ModuleLoader__.load({
      * 合成到一半的结果被丢掉（点了试听却听不到声音），肉眼看到的就是面板在闪。
      */
     const VOICE_PREVIEW_API = '/api/qq-bridge-neko/voice/preview'
+    /** 看图自测接口：POST 用内置带字图跑一次真实识图，回识别文字 / 耗时 / 实际模型。 */
+    const VISION_TEST_API = '/api/qq-bridge-neko/vision/test'
     /** 语气预设的中文名，和宿主半的 VOICE_MOOD_PRESETS 一一对应（试听面板显示用）。 */
     const VOICE_MOOD_LABELS = {
       default: '默认（不改）',
@@ -1654,6 +1656,83 @@ window.__ModuleLoader__.load({
           controls: true,
           preload: 'auto',
         }),
+      )
+    }
+
+    /**
+     * 看图自测：拿一张插件自带的带字图跑一次真实识图，看当前这套设置能不能识。
+     *
+     * 和 VoicePreview 一样定义在模块级 —— 不能塞进 Card 里，否则每 5 秒的重渲染
+     * 会把它当成新组件卸载重建，点了测试到一半的结果就没了。
+     * 「当前选中的模型」用草稿里的 visionProvider / visionProviderModel：
+     * 固定档时直接强指定这两个，其余档位交给后端按设置自动解析。
+     */
+    function VisionTest(props) {
+      const shown = props.shown || {}
+      const writable = props.writable !== false
+      const [busy, setBusy] = react.useState(false)
+      const [result, setResult] = react.useState(null)
+      const [error, setError] = react.useState('')
+
+      const run = async () => {
+        if (busy || !writable) return
+        setBusy(true)
+        setResult(null)
+        setError('')
+        try {
+          const payload = {}
+          // 固定档「明确指定」时才强指定模型；auto / session 档交给后端自动解析，
+          // 免得把下拉里残留的旧 model id 硬塞进去反而测错。
+          if (String(shown.visionMode ?? '') === 'fixed' && String(shown.visionProvider ?? '') !== '' && String(shown.visionProviderModel ?? '') !== '') {
+            payload.provider = String(shown.visionProvider)
+            payload.model = String(shown.visionProviderModel)
+          }
+          const res = await fetch(VISION_TEST_API, {
+            method: 'POST',
+            credentials: 'include',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify(payload),
+          })
+          const body = await res.json().catch(() => ({}))
+          if (!res.ok) throw new Error(body?.error || `HTTP ${res.status}`)
+          if (body?.ok === true) setResult(body)
+          else setError(String(body?.error ?? body?.reason ?? '识图失败'))
+        } catch (e) {
+          setError(String(e?.message ?? e))
+        } finally {
+          setBusy(false)
+        }
+      }
+
+      return h(
+        'div',
+        { style: S.preview },
+        h('div', { style: S.previewTitle }, '测试识图'),
+        h('div', { style: S.hint }, '用一张插件自带的带字图，走真实识图链路跑一次。下面显示的文字就是模型实际认出来的内容——认得出字，收图时的描述就是通的。'),
+        h(
+          'div',
+          { style: S.ops },
+          h(
+            'button',
+            {
+              type: 'button',
+              ...btnProps({ ...S.btn, ...S.primary }, busy || !writable),
+              disabled: busy || !writable,
+              onClick: run,
+            },
+            busy ? '识别中…' : '测试识图',
+          ),
+        ),
+        error ? h('div', { style: S.err }, error) : null,
+        result
+          ? h(
+              'div',
+              { style: S.preview },
+              h('div', { style: S.previewTitle }, '识别结果'),
+              h('div', { style: S.hint }, `模型：${String(result.provider ?? '?')} / ${String(result.model ?? '?')} · 耗时 ${Number(result.elapsedMs) || 0} ms`),
+              h('textarea', { style: S.textarea, value: String(result.text ?? ''), readOnly: true, spellCheck: false }),
+            )
+          : null,
       )
     }
 
@@ -3532,6 +3611,9 @@ window.__ModuleLoader__.load({
           })
         : null,
           h('div', { style: S.grid }, rows),
+          activeGroup === 'vision'
+            ? h(VisionTest, { shown, writable: snap.writable })
+            : null,
           activeGroup === 'about' ? updateBox : null,
         ),
         activeGroup === 'napcat' || activeGroup === 'connect' ? napcatOps : null,

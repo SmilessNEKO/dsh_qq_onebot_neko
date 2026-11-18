@@ -89,6 +89,8 @@ import {
 const require = createRequire(import.meta.url)
 /** 当前安装的包版本。设置页和检查更新都读这一处，避免卡片里手写一份。 */
 export const PLUGIN_VERSION = String(require('./package.json').version || '')
+/** 看图自测用的内置带字图（随包发布在 assets/ 下，不依赖用户上传）。 */
+const VISION_TEST_IMAGE = join(dirname(require.resolve('./package.json')), 'assets', 'vision-test.png')
 import {
   configDirCandidates,
   createFetcher,
@@ -3520,11 +3522,14 @@ export function apply(ctx, config) {
    * 这也是登记表的第二个用处 —— 反复出现的图只描述一次。
    * @param {{ path?: string, data?: Buffer, mediaType?: string, name?: string, hash?: string }} cached 缓存图。
    * @param {{provider?:string, model?:string} | null} [sessionModel] 会话当前模型（识图来源选 session 时用）。
-   * @returns {Promise<string | null>}
+   * @param {{provider:string, model:string} | null} [forcedModel] 自测时强制指定模型，绕过缓存与登记表；
+   *        正常收图路径不传，行为完全不变。
+   * @returns {Promise<{ok:boolean, text?:string, reason?:string, provider?:string, model?:string}>}
    */
-  async function describeImage(cached, sessionModel) {
+  async function describeImage(cached, sessionModel, forcedModel) {
     // 命中登记表 = 这张图已经被看过并写好了描述，别再花一次多模态调用。
-    const hit = cached?.hash ? findSticker(loadStickerStore(), { hash: cached.hash }) : null
+    // 自测强制指定模型时跳过登记表 —— 测的是模型本身，不能被缓存结果糊弄过去。
+    const hit = !forcedModel && cached?.hash ? findSticker(loadStickerStore(), { hash: cached.hash }) : null
     if (hit?.description) {
       // 只打短哈希，不打 URL 也不打 token。
       logger.info(`图片 #${shortHash(cached.hash)} 命中表情包登记表，跳过视觉模型`)
@@ -3545,7 +3550,7 @@ export function apply(ctx, config) {
         bytes = readFileSync(cached.path)
       }
       if (!bytes || bytes.byteLength === 0) return { ok: false, reason: '图片数据为空' }
-      const conf = await findVisionModel(sessionModel)
+      const conf = forcedModel ?? await findVisionModel(sessionModel)
       if (!conf) return { ok: false, reason: '没找到支持图片输入的模型' }
       const ref = await attachments.saveImage({
         data: bytes,
@@ -3583,7 +3588,7 @@ export function apply(ctx, config) {
             }
           }
           const text = out.trim()
-          if (text) return { ok: true, text }
+          if (text) return { ok: true, text, provider: conf.provider, model: conf.model }
           // 被 token 上限截断（reasoning 吃光了预算）：下一次翻倍再来。
           // DSH 的 kind 叫 max-tokens；length 是适配器转换前的名字，两个都要认。
           if (finish === 'length' || finish === 'max-tokens') {
@@ -6842,6 +6847,71 @@ export function apply(ctx, config) {
     res.end(bytes)
   }
 
+  /**
+   * 看图自测接口：拿一张内置带字图走真实识图链路，返回识别结果 / 耗时 / 实际模型。
+   *
+   * 与真正收图时走的是同一条 describeImage（同样的 attachments.saveImage →
+   * createUserMessage → llm.stream → 三次重试），所以「这里测通」约等于「实际收图也能识」。
+   * 区别只有两点：① 图是内置白底大字，不花用户流量也不涉及隐私；② 可以强制指定
+   * 草稿里选中的 provider/model —— 测的就是「当前选的这套」能不能识图。
+   *
+   * POST body 可选：{ provider?:string, model?:string }。两个都给了就强制用它，
+   * 否则交给 findVisionModel 按设置自动解析（auto / session 档）。
+   */
+  async function handleVisionTestRequest(req, res) {
+    if (rejectLocalRequest(req, res)) return
+    const method = String(req?.method ?? '').toUpperCase()
+    if (method !== 'POST') {
+      return sendJson(res, 405, { ok: false, error: '这个接口只接受 POST。' })
+    }
+    if (!existsSync(VISION_TEST_IMAGE)) {
+      return sendJson(res, 200, { ok: false, error: '内置测试图找不到（安装包可能不完整）。' })
+    }
+    const llm = ctx.get('llm')
+    const attachments = ctx.get('attachments')
+    if (!llm || !attachments) {
+      return sendJson(res, 200, { ok: false, error: '这个宿主没有 llm / attachments 服务，没法自测识图。' })
+    }
+
+    let payload = {}
+    const raw = await readRequestBody(req)
+    if (raw && String(raw).trim() !== '') {
+      try {
+        payload = JSON.parse(raw)
+      } catch (error) {
+        return sendJson(res, 400, { ok: false, error: `请求体不是合法 JSON（${error?.message ?? error}）。` })
+      }
+    }
+    // 只认白名单里的字符串，空串当没给 —— 不替调用方猜模型。
+    const pick = (key) => {
+      const v = payload?.[key]
+      return typeof v === 'string' && v.trim() !== '' ? v.trim() : ''
+    }
+    const provider = pick('provider')
+    const model = pick('model')
+    const forced = provider !== '' && model !== '' ? { provider, model } : null
+
+    const started = Date.now()
+    try {
+      const result = await describeImage(
+        { path: VISION_TEST_IMAGE, mediaType: 'image/png', name: 'vision-test.png' },
+        undefined,
+        forced,
+      )
+      return sendJson(res, 200, {
+        ...result,
+        elapsedMs: Date.now() - started,
+        ...(forced ? { requested: forced } : {}),
+      })
+    } catch (error) {
+      return sendJson(res, 200, {
+        ok: false,
+        error: String(error?.message ?? error),
+        elapsedMs: Date.now() - started,
+      })
+    }
+  }
+
   async function handleCatalogRequest(req, res) {
     if (rejectLocalRequest(req, res)) return
     const method = String(req?.method ?? '').toUpperCase()
@@ -7085,6 +7155,7 @@ export function apply(ctx, config) {
         ['/api/qq-bridge-neko/update', handleUpdateRequest],
         ['/api/qq-bridge-neko/groups', handleGroupMetaRequest],
         ['/api/qq-bridge-neko/voice/preview', handleVoicePreviewRequest],
+        ['/api/qq-bridge-neko/vision/test', handleVisionTestRequest],
         ['/api/qq-bridge-neko/catalog', handleCatalogRequest],
         ['/api/qq-bridge-neko/profiles', handleProfilesRequest],
         ['/api/qq-bridge-neko/proactive/run', handleProactiveRunRequest],
