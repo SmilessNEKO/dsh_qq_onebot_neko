@@ -413,6 +413,24 @@ window.__ModuleLoader__.load({
         hint: '打开时叫一个能看图的模型把图描述出来，正文里就能看到图里是什么。关掉只留图片位置标记。',
       },
       {
+        key: 'stickerDir',
+        label: '表情包目录',
+        kind: 'text',
+        hint: '表情包本体放哪个目录。留空 = 默认目录（$DSH_HOME/qq-bridge-neko-stickers）。里面按分类建子目录：三组自带图各一个，AI 自己收藏的进 ai-collected。已登记图片的路径不会因改这里而变。',
+      },
+      {
+        key: 'stickerAutoCollect',
+        label: 'AI 自动收藏表情包',
+        kind: 'boolean',
+        hint: '打开后，看图时若图片描述命中下面的价值倾向词，就按概率自动把这张图存进 ai-collected 分类。默认关 —— 开着会多花一点多模态判断。',
+      },
+      {
+        key: 'stickerCollectTags',
+        label: '自动收藏的价值倾向',
+        kind: 'text',
+        hint: '多个「词+概率」用逗号分开。例：可爱0.8, 奶龙0, 萌1 —— 可爱命中时 80% 概率收藏，奶龙相关一律不收，萌命中就收。命中多个词取最低概率；出现概率为 0 的词命中就直接放弃。留空 = 不自动收任何图。',
+      },
+      {
         key: 'replyMode',
         label: '群里发出去的是哪一段',
         kind: 'select',
@@ -636,6 +654,12 @@ window.__ModuleLoader__.load({
         label: '看图',
         desc: '看图走哪个提供商和模型。',
         keys: ['describeImages', 'visionMode', 'visionProvider', 'visionProviderModel'],
+      },
+      {
+        id: 'sticker',
+        label: '表情包',
+        desc: '表情包放在哪个目录，AI 要不要、按什么价值倾向自动收藏群友发的图。',
+        keys: ['stickerDir', 'stickerAutoCollect', 'stickerCollectTags'],
       },
       {
         id: 'model',

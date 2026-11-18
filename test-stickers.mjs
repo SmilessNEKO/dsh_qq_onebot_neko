@@ -6,6 +6,8 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 import {
+  AI_CATEGORY,
+  decideCollect,
   findSticker,
   hashOfBuffer,
   importSticker,
@@ -14,6 +16,9 @@ import {
   loadStickers,
   mfaceSendData,
   normalizeMface,
+  parseCollectTags,
+  PRESET_CATEGORIES,
+  resolveStickerPath,
   saveStickers,
   shortHash,
   stickerKind,
@@ -172,6 +177,61 @@ const H2 = hashOfBuffer(PNG2)
     const e2 = importSticker({ store, srcPath: src2, destDir, mood: '开心', description: '无扩展名' })
     return e2.ext === 'png' && e2.file === `qq-bridge-neko-stickers/${H2}.png`
   })())
+}
+
+// 6) 分类：预设四类齐全 / list 按 category 过滤 / find 按 category
+{
+  const cats = Object.keys(PRESET_CATEGORIES)
+  check('预设分类有三组（外加 AI 收藏类共四类）', cats.length === 3 && cats.includes('deepseek-chan-emotes') && cats.includes('deepseek-chan-meme-pack') && cats.includes('blue-fish-archive') && !cats.includes('ai-collected'), cats.join(','))
+  check('AI_CATEGORY 常量 = ai-collected（独立于预设三组）', AI_CATEGORY === 'ai-collected')
+  const store = { version: 1, stickers: {} }
+  const s1 = join(dir, 'cat1.png')
+  writeFileSync(s1, PNG)
+  writeFileSync(join(dir, 'cat2.png'), PNG2)
+  importSticker({ store, srcPath: s1, destDir, category: 'deepseek-chan-emotes', mood: '鲸鲸', description: '动态表情A' })
+  importSticker({ store, srcPath: join(dir, 'cat2.png'), destDir, category: AI_CATEGORY, mood: '无语', description: 'AI收的B' })
+  check('importSticker：带 category 落进分类子目录', existsSync(join(destDir, 'deepseek-chan-emotes', `${H1}.png`)) && existsSync(join(destDir, AI_CATEGORY, `${H2}.png`)))
+  check('importSticker：file 带分类段', store.stickers[H1].file === `qq-bridge-neko-stickers/deepseek-chan-emotes/${H1}.png`, store.stickers[H1].file)
+  check('list：按 category 过滤只回该类', listStickers(store, { category: 'deepseek-chan-emotes' }).length === 1 && listStickers(store, { category: 'deepseek-chan-emotes' })[0].hash === H1)
+  check('list：category=all 回全部', listStickers(store, { category: 'all' }).length === 2)
+  check('list：category + mood 同时过滤', listStickers(store, { category: AI_CATEGORY, mood: '无语' }).length === 1 && listStickers(store, { category: AI_CATEGORY, mood: '鲸鲸' }).length === 0)
+  check('find：按 category 取最近一条', findSticker(store, { category: 'deepseek-chan-emotes' })?.hash === H1)
+  check('老条目无 category 时 list 归到 ai-collected（默认）', (() => {
+    const legacy = { version: 1, stickers: { abcdef0123456789: { hash: 'abcdef0123456789', mood: 'x', addedAt: 5 } } }
+    return listStickers(legacy, { category: AI_CATEGORY }).length === 1
+  })())
+}
+
+// 7) 价值倾向 tag 判定
+{
+  const p = parseCollectTags('可爱0.8, 奶龙0, 萌1')
+  check('parseCollectTags：解析出三条规则', p.rules.length === 3 && p.rules[0].word === '可爱' && p.rules[0].p === 0.8 && p.rules[1].p === 0 && p.rules[2].p === 1, JSON.stringify(p.rules))
+  check('parseCollectTags：中文逗号/换行/顿号也能分', parseCollectTags('可爱0.5\n萌0.3、帅1').rules.length === 3)
+  check('parseCollectTags：只写词没写数字 → p=1', parseCollectTags('可爱, 萌').rules.every((r) => r.p === 1))
+  check('parseCollectTags：概率 clamp 到 0..1', parseCollectTags('a2.5, b-1, c0.5').rules.map((r) => r.p).join(',') === '1,0,0.5')
+  check('parseCollectTags：空串 → 无规则', parseCollectTags('').rules.length === 0 && parseCollectTags(undefined).rules.length === 0)
+  check('decideCollect：命中概率0的词 → reject', decideCollect(p, '一只奶龙在卖萌') === 'reject')
+  check('decideCollect：只命中 p=1 的词 → accept', decideCollect(p, '好萌的一只猫') === 'accept')
+  check('decideCollect：只命中 0<p<1 的词 → roll', decideCollect(p, '这只猫好可爱') === 'roll')
+  check('decideCollect：命中多个取最低（含0则 reject）', decideCollect(p, '又可爱又奶龙') === 'reject')
+  check('decideCollect：无命中 → null', decideCollect(p, '一只普通的水母') === null)
+  check('decideCollect：无规则 → null', decideCollect(parseCollectTags(''), '可爱') === null)
+  check('decideCollect：大小写不敏感（英文词）', decideCollect(parseCollectTags('CUTE0.7'), '好 CUTE 呀') === 'roll')
+}
+
+// 8) 路径解析：新分类格式 / 老格式 / 绝对路径 / 改了 stickerDir
+{
+  const stateDir = join(dir, 'state')
+  const rootDefault = join(stateDir, 'qq-bridge-neko-stickers')
+  const rootCustom = join(dir, 'my-stickers')
+  const newEntry = { file: `qq-bridge-neko-stickers/${AI_CATEGORY}/${H1}.webp` }
+  const oldEntry = { file: `qq-bridge-neko-stickers/${H2}.gif` }
+  check('resolve：新格式 + 默认 root', resolveStickerPath(newEntry, { stateDir, stickerRoot: rootDefault }) === join(rootDefault, AI_CATEGORY, `${H1}.webp`))
+  check('resolve：新格式 + 自定义 root（改目录后仍找得到）', resolveStickerPath(newEntry, { stateDir, stickerRoot: rootCustom }) === join(rootCustom, AI_CATEGORY, `${H1}.webp`))
+  check('resolve：老格式 + 默认 root', resolveStickerPath(oldEntry, { stateDir, stickerRoot: rootDefault }) === join(rootDefault, `${H2}.gif`))
+  check('resolve：无 stickerRoot 时相对 stateDir', resolveStickerPath(oldEntry, { stateDir }) === join(stateDir, `qq-bridge-neko-stickers/${H2}.gif`))
+  check('resolve：绝对路径原样返回', resolveStickerPath({ file: 'C:\\x\\y.png' }, { stateDir }) === 'C:\\x\\y.png')
+  check('resolve：空 file → 空串', resolveStickerPath({}, { stateDir }) === '')
 }
 
 rmSync(dir, { recursive: true, force: true })

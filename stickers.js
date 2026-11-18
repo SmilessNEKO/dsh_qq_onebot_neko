@@ -25,6 +25,96 @@ export const HASH_LEN = 16
 export const SHORT_HASH_LEN = 6
 
 /**
+ * 预设分类（随包发布的三组表情包，各自占一个 category 子目录）。
+ * 键是分类 id（落盘目录名），值是给人看的中文名。
+ */
+export const PRESET_CATEGORIES = {
+  'deepseek-chan-emotes': '蓝色大肥鱼·动态表情',
+  'deepseek-chan-meme-pack': 'DeepSeek娘·梗图',
+  'blue-fish-archive': '蓝鲸档案·精选',
+}
+/** AI 自己收藏的表情包落在哪个分类子目录。 */
+export const AI_CATEGORY = 'ai-collected'
+
+/**
+ * 解析价值倾向 tag，得到"这个 tag 词该不该收"的判定器。
+ *
+ * 规则（由主人配置、AI 取舍）：
+ *   - 每行一个 tag，形如 `可爱0.8` / `奶龙0` / `萌1` / `表情包-0.5`。
+ *   - 末尾的数字是"命中该词时收藏的概率"（0..1）；0 = 绝不收藏。
+ *   - 词在前、数字在后，中间可有可无空格；允许中文/英文/数字/emoji 以外的普通字符。
+ *   - 概率值缺省（只写词没写数字）按 1（命中即收）。
+ *   - 判定一张图时：对每个**命中**（图的 mood/description/正文里出现该词）的 tag，
+ *     取其中"拒绝优先"—— 任何一个命中 tag 的概率是 0，直接判拒；
+ *     否则取命中 tag 里的最低概率作为这次的收藏概率（保守），交给调用方按概率决定。
+ *
+ * 返回 `{ rules: [{word, p}], decide: (text) => 'reject'|'accept'|'roll' }`：
+ *   - `reject`：命中了概率为 0 的词，必拒；
+ *   - `accept`：命中词且概率 >= 1，必收；
+ *   - `roll`：命中词但概率在 (0,1)，调用方按 Math.random() < p 决定；
+ *   - `null`（decide 返回）：没有任何词命中，调用方按默认策略（通常是不收）。
+ */
+export function parseCollectTags(raw) {
+  const rules = []
+  const text = String(raw ?? '')
+  // 支持逗号 / 分号 / 换行 / 中文标点分隔
+  for (const part of text.split(/[\n,，;；、]+/)) {
+    const s = part.trim()
+    if (s === '') continue
+    // 末尾的数字（含小数）当概率；没有数字时 p=1
+    const m = s.match(/^(.*?)\s*(-?\d+(?:\.\d+)?)\s*$/)
+    let word, p
+    if (m && m[1].trim() !== '') {
+      word = m[1].trim().toLowerCase()
+      p = Number(m[2])
+      if (!Number.isFinite(p)) p = 1
+      p = Math.max(0, Math.min(1, p))
+    } else {
+      word = s.toLowerCase()
+      p = 1
+    }
+    if (word !== '') rules.push({ word, p })
+  }
+  return { rules }
+}
+
+/** 判定一段文本（通常是 mood+description+正文）命中的价值 tag。见 parseCollectTags。 */
+export function decideCollect(parsed, text) {
+  const s = String(text ?? '').toLowerCase()
+  if (!parsed || !Array.isArray(parsed.rules) || parsed.rules.length === 0) return null
+  const hits = parsed.rules.filter((r) => r.word !== '' && s.includes(r.word))
+  if (hits.length === 0) return null
+  if (hits.some((r) => r.p <= 0)) return 'reject'
+  const p = Math.min(...hits.map((r) => r.p))
+  return p >= 1 ? 'accept' : 'roll'
+}
+
+/**
+ * 把登记项的 `file` 解析成绝对路径。
+ * 兼容三种历史/新格式：
+ *   - 老：`<dirname>/<hash>.<ext>`（相对 statePath 目录，dirname=STICKERS_DIR）
+ *   - 新：`qq-bridge-neko-stickers/<category>/<hash>.<ext>`（相对 stickerRoot）
+ *   - 绝对：以路径分隔符开头，原样返回
+ * `stateDir` = statePath 所在目录，`stickerRoot` = 可配置的 stickerDir 根。
+ */
+export function resolveStickerPath(entry, { stateDir, stickerRoot } = {}) {
+  const file = String(entry?.file ?? '')
+  if (file === '') return ''
+  if (file.startsWith('/') || /^[A-Za-z]:[\\/]/.test(file)) return file
+  const parts = file.split(/[\\/]/)
+  const first = parts[0]
+  const rootName = stickerRoot ? basename(String(stickerRoot)) : STICKERS_DIR
+  // file 第一段是 stickerDir 的目录名（新存的就是它），或老默认的 qq-bridge-neko-stickers
+  // ——都剥掉第一段、改用当前 stickerRoot 拼剩余，这样改了 stickerDir 后老图也能找到。
+  if ((stickerRoot && first === rootName) || first === STICKERS_DIR) {
+    const rest = parts.slice(1)
+    return stickerRoot ? join(String(stickerRoot), ...rest) : join(String(stateDir ?? ''), file)
+  }
+  // 其它：相对 stateDir（原插件约定）
+  return join(String(stateDir ?? ''), file)
+}
+
+/**
  * 把入站段或登记项上的商城表情字段收成一份干净对象。
  * 只有 summary（普通图片也会带简介）不算商城表情，返回 null。
  * `emoji_package_id` 收成非负整数；带不来的字段直接不写。
@@ -156,12 +246,14 @@ export function upsertSticker(store, entry) {
   return next
 }
 
-/** 列出登记项（可只列某个 mood）。按登记时间**从新到旧**排序，`limit` 为 0 时返回空数组。 */
-export function listStickers(store, { mood, limit } = {}) {
+/** 列出登记项（可只列某个 mood / 某个 category）。按登记时间**从新到旧**排序，`limit` 为 0 时返回空数组。 */
+export function listStickers(store, { mood, category, limit } = {}) {
   const s = normalizeStore(store)
   const m = String(mood ?? '').trim()
+  const cat = String(category ?? '').trim()
   let items = Object.values(s.stickers).filter((e) => e && typeof e === 'object')
   if (m !== '') items = items.filter((e) => String(e.mood ?? '') === m)
+  if (cat !== '' && cat !== 'all') items = items.filter((e) => String(e.category ?? AI_CATEGORY) === cat)
   items.sort((a, b) => Number(b.addedAt ?? 0) - Number(a.addedAt ?? 0))
   const n = Number(limit)
   return Number.isFinite(n) && n >= 0 ? items.slice(0, n) : items
@@ -171,7 +263,7 @@ export function listStickers(store, { mood, limit } = {}) {
  * 查一条。`hash` 可以是短哈希或全哈希（按前缀匹配）；只给 `mood` 时返回该情绪里最近登记的一条。
  * 查不到返回 null。
  */
-export function findSticker(store, { hash, mood } = {}) {
+export function findSticker(store, { hash, mood, category } = {}) {
   const s = normalizeStore(store)
   const want = String(hash ?? '')
     .trim()
@@ -184,8 +276,9 @@ export function findSticker(store, { hash, mood } = {}) {
     return null
   }
   const m = String(mood ?? '').trim()
-  if (m === '') return null
-  return listStickers(s, { mood: m, limit: 1 })[0] ?? null
+  const cat = String(category ?? '').trim()
+  if (m === '' && cat === '') return null
+  return listStickers(s, { mood: m, category: cat, limit: 1 })[0] ?? null
 }
 
 /**
@@ -195,7 +288,7 @@ export function findSticker(store, { hash, mood } = {}) {
  * （宿主半统一 `saveStickers`），这样本函数保持“输入进、条目出”的纯形状。
  * `mface` 可选：有商城表情字段就合并进条目；这次没给就留着上次的。
  */
-export function importSticker({ store, srcPath, destDir, mood, description, source, mface }) {
+export function importSticker({ store, srcPath, destDir, mood, description, source, mface, category }) {
   const data = readFileSync(srcPath)
   const hash = hashOfBuffer(data)
   const rawExt = extname(String(srcPath ?? ''))
@@ -203,8 +296,11 @@ export function importSticker({ store, srcPath, destDir, mood, description, sour
     .toLowerCase()
   const ext = rawExt === '' ? 'png' : rawExt
   const name = `${hash}.${ext}`
-  const destPath = join(destDir, name)
-  mkdirSync(destDir, { recursive: true })
+  const cat = String(category ?? '').trim()
+  // 有 category 时落进 destDir/<category>/ 子目录；没有就沿用老布局 destDir/<hash>.<ext>。
+  const finalDir = cat === '' ? destDir : join(destDir, cat)
+  const destPath = join(finalDir, name)
+  mkdirSync(finalDir, { recursive: true })
   if (!existsSync(destPath)) copyFileSync(srcPath, destPath)
 
   const prev = findSticker(store, { hash })
@@ -226,9 +322,11 @@ export function importSticker({ store, srcPath, destDir, mood, description, sour
     mood: String(mood ?? '').trim(),
     description: String(description ?? '').trim(),
     // file 相对 statePath 所在目录 —— 宿主的出站按它读回图片本体。
-    file: `${basename(destDir)}/${name}`,
+    // 有 category 时是 `<dir>/<category>/<hash>.<ext>`，否则老格式 `<dir>/<hash>.<ext>`。
+    file: cat === '' ? `${basename(destDir)}/${name}` : `${basename(destDir)}/${cat}/${name}`,
     ext,
     source: String(source ?? '').trim(),
+    ...(cat !== '' ? { category: cat } : {}),
     // 新条目给全字段；已登记的图只换 mood / 描述，保留累计次数与首次登记时间。
     ...(prev ? {} : { addedAt: Date.now(), sentCount: 0, lastSentAt: null }),
     ...(merged ? { mface: merged } : {}),

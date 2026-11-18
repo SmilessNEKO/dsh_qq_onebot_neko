@@ -28,6 +28,8 @@ import { defineTool } from '@deepseek-ai/dsh-tools'
 
 import { createOneBotTransport } from './onebot.js'
 import {
+  AI_CATEGORY,
+  decideCollect,
   findSticker,
   hashOfBuffer,
   importSticker,
@@ -35,6 +37,9 @@ import {
   loadStickers,
   mfaceSendData,
   normalizeMface,
+  parseCollectTags,
+  PRESET_CATEGORIES,
+  resolveStickerPath,
   saveStickers,
   shortHash,
   stickerKind,
@@ -334,6 +339,10 @@ export const Config = Schema.object({
   feiyuIdleStopMinutes: Schema.number().default(DEFAULT_FEIYU_IDLE_STOP_MINUTES).description('肥鱼服务空闲多少分钟就自动停掉、释放显存。默认 10；填 0 = 一直开着。'),
   voiceMaxChars: Schema.number().default(DEFAULT_VOICE_MAX_CHARS).description('单条语音最多多少字。超过就不合成，直接回失败原因。默认 120。'),
   voiceCacheDir: Schema.string().default('').description('合成好的音频放哪（mp3 / wav）。留空 = $DSH_HOME/qq-bridge-neko-voice。同一段话 + 同引擎同参数只合成一次。'),
+  // ── 表情包 ────────────────────────────────────────────────────────────────
+  stickerDir: Schema.string().default('').description('表情包本体放哪个目录。留空 = $DSH_HOME/qq-bridge-neko-stickers。里面按分类建子目录：deepseek-chan-emotes / deepseek-chan-meme-pack / blue-fish-archive / ai-collected。改这里只影响"之后新存"的图；已登记条目的 file 路径不变。'),
+  stickerAutoCollect: Schema.boolean().default(false).description('AI 看到群友发的图时，是否按价值倾向自动收藏（存进 ai-collected 分类）。默认关 —— 开着会消耗多模态调用判断图的内容。只有命中下面价值倾向且概率通过时才收。'),
+  stickerCollectTags: Schema.string().default('').description('AI 自动收藏的价值倾向，每行一个「词+概率」，用逗号或换行分开。例：可爱0.8 表示命中"可爱"时有 80% 概率收藏；奶龙0 表示奶龙相关一律不收；萌1 表示命中就收。命中多个词时取最低概率；出现概率为 0 的词命中则直接放弃。留空 = 不自动收任何图。'),
   listenIdleMs: Schema.number().default(DEFAULT_LISTEN_IDLE_MS).description('会话跟随期间，这么久没有新消息就自动停听。默认 120000（2 分钟）。'),
   // ── 每个 QQ 目的地的个性化 ────────────────────────────────────────────────
   destinationProfiles: Schema.array(DestinationProfile).default([]).description('按群 / 私聊分别设置休眠时段、24 小时实时回复、等待合并与停听时间。'),
@@ -458,6 +467,10 @@ const BridgeSettings = Schema.object({
   feiyuIdleStopMinutes: Schema.number().default(DEFAULT_FEIYU_IDLE_STOP_MINUTES).description('肥鱼服务空闲多少分钟就自动停掉、释放显存。默认 10；填 0 = 一直开着。'),
   voiceMaxChars: Schema.number().default(DEFAULT_VOICE_MAX_CHARS).description('单条语音最多多少字。超过就不合成，直接回失败原因。默认 120。'),
   voiceCacheDir: Schema.string().default('').description('合成好的音频放哪（mp3 / wav）。留空 = $DSH_HOME/qq-bridge-neko-voice。同一段话 + 同引擎同参数只合成一次。'),
+  // ── 表情包 ────────────────────────────────────────────────────────────────
+  stickerDir: Schema.string().default('').description('表情包本体放哪个目录。留空 = $DSH_HOME/qq-bridge-neko-stickers。里面按分类建子目录：deepseek-chan-emotes / deepseek-chan-meme-pack / blue-fish-archive / ai-collected。改这里只影响"之后新存"的图；已登记条目的 file 路径不变。'),
+  stickerAutoCollect: Schema.boolean().default(false).description('AI 看到群友发的图时，是否按价值倾向自动收藏（存进 ai-collected 分类）。默认关 —— 开着会消耗多模态调用判断图的内容。只有命中下面价值倾向且概率通过时才收。'),
+  stickerCollectTags: Schema.string().default('').description('AI 自动收藏的价值倾向，每行一个「词+概率」，用逗号或换行分开。例：可爱0.8 表示命中"可爱"时有 80% 概率收藏；奶龙0 表示奶龙相关一律不收；萌1 表示命中就收。命中多个词时取最低概率；出现概率为 0 的词命中则直接放弃。留空 = 不自动收任何图。'),
   // ── 每个 QQ 目的地的个性化 ────────────────────────────────────────────────
   destinationProfiles: Schema.array(DestinationProfile).default([]).description('按群 / 私聊分别设置休眠时段、24 小时实时回复、等待合并与停听时间。'),
   // ── 主动发消息 ────────────────────────────────────────────────────────────
@@ -1381,6 +1394,9 @@ export function apply(ctx, config) {
         voiceSpeedFactor: config.voiceSpeedFactor ?? DEFAULT_VOICE_SPEED_FACTOR,
         voiceMaxChars: config.voiceMaxChars ?? DEFAULT_VOICE_MAX_CHARS,
         voiceCacheDir: config.voiceCacheDir ?? '',
+        stickerDir: config.stickerDir ?? '',
+        stickerAutoCollect: config.stickerAutoCollect === true,
+        stickerCollectTags: config.stickerCollectTags ?? '',
       },
         applies: 'live',
     })
@@ -1483,6 +1499,9 @@ export function apply(ctx, config) {
       })(),
       voiceMaxChars: clampInt(s.voiceMaxChars ?? config.voiceMaxChars, 1, 2000, DEFAULT_VOICE_MAX_CHARS),
       voiceCacheDir: String(s.voiceCacheDir ?? config.voiceCacheDir ?? '').trim(),
+      stickerDir: String(s.stickerDir ?? config.stickerDir ?? '').trim(),
+      stickerAutoCollect: (s.stickerAutoCollect ?? config.stickerAutoCollect) === true,
+      stickerCollectTags: String(s.stickerCollectTags ?? config.stickerCollectTags ?? '').trim(),
       destinationProfiles: normalizeDestinationProfiles(s.destinationProfiles ?? config.destinationProfiles),
       // 主动发消息：这里**只归一化，不按白名单筛**（筛会在发送那一刻做，见 runProactiveTick）。
       // 否则用户在卡片上新建一条、还没填目标就保存，这一行会被自己的归一化吃掉、直接消失。
@@ -2166,7 +2185,13 @@ export function apply(ctx, config) {
   // 登记表 = 图片本体目录（qq-bridge-neko-stickers/）+ 元数据文件（qq-bridge-neko-stickers.json）。
   // 内存里只留一份，改完立即落盘（saveStickers 是原子写）。
   const stickersPath = join(dirname(statePath), STICKERS_FILE)
-  const stickersDir = join(dirname(statePath), STICKERS_DIR)
+  // stickerDir 可配置：留空时用默认（statePath 同目录下的 qq-bridge-neko-stickers）。
+  // 每次要用时从当前设置读，改了设置下次就生效，不必重启。
+  function effectiveStickerDir() {
+    const configured = String(readSettings().stickerDir ?? '').trim()
+    return configured === '' ? join(dirname(statePath), STICKERS_DIR) : configured
+  }
+  const stickersDir = join(dirname(statePath), STICKERS_DIR) // 兼容旧引用；新代码用 effectiveStickerDir()
   let stickerStore = null
 
   function loadStickerStore() {
@@ -4070,6 +4095,8 @@ export function apply(ctx, config) {
       }
       const r = await describeImage(img, visionSessionModel)
       described += 1
+      // AI 自动收藏：识图成功才判断（失败的图没有内容可评估价值）。
+      if (r.ok && r.text) maybeAutoCollect(img, r.text, s)
       noteById.set(img, { text: r.ok ? r.text : `（描述失败：${r.reason}）`, hash: img.hash })
     }
 
@@ -5816,12 +5843,61 @@ export function apply(ctx, config) {
   // 登记项四字段齐全（emoji_id / emoji_package_id / key / summary）时发 OneBot mface；
   // 否则图片本体用 **base64** 送，不送本地路径（NapCat 的 `enableLocalFile2Url` 是 false）。
 
+  /** 登记项的图片本体绝对路径（走可配置 stickerDir + 分类子目录）。 */
+  function stickerFilePath(entry) {
+    return resolveStickerPath(entry, { stateDir: dirname(statePath), stickerRoot: effectiveStickerDir() })
+  }
+
   /** 登记项的图片本体大小（读不到就是 null，不抛）。 */
   function stickerBytes(entry) {
     try {
-      return statSync(join(dirname(statePath), String(entry?.file ?? ''))).size
+      return statSync(stickerFilePath(entry)).size
     } catch {
       return null
+    }
+  }
+
+  /** 价值倾向 tag 的解析结果缓存：同一串配置只解析一次。 */
+  let collectTagsCache = { raw: null, parsed: null }
+  /**
+   * AI 自动收藏：识图成功后，按价值倾向 tag 判定这张图值不值得收。
+   * 命中概率为 0 的词 → 必不收；命中多个词取最低概率；roll 时按概率掷骰。
+   * 通过就存进 stickerDir/<ai-collected>/，记一条登记表。默认关、无 tag 不收。
+   */
+  function maybeAutoCollect(img, description, s) {
+    try {
+      if (!s || s.stickerAutoCollect !== true) return
+      const raw = String(s.stickerCollectTags ?? '').trim()
+      if (raw === '') return // 没有价值倾向配置 = 什么都不自动收
+      if (collectTagsCache.raw !== raw) collectTagsCache = { raw, parsed: parseCollectTags(raw) }
+      const verdict = decideCollect(collectTagsCache.parsed, String(description ?? ''))
+      if (!verdict || verdict === 'reject') return
+      if (verdict === 'roll') {
+        // 命中多个词取最低概率；掷骰没过就不收。
+        const low = String(description ?? '').toLowerCase()
+        const rules = (collectTagsCache.parsed?.rules ?? []).filter((r) => r.word && low.includes(r.word))
+        const p = rules.length ? Math.min(...rules.map((r) => r.p)) : 1
+        if (!(p > 0) || Math.random() >= p) return
+      }
+      const srcPath = String(img?.path ?? '')
+      if (srcPath === '' || !existsSync(srcPath)) return
+      const store = loadStickerStore()
+      const entry = importSticker({
+        store,
+        srcPath,
+        destDir: effectiveStickerDir(),
+        category: AI_CATEGORY,
+        mood: '自动收藏',
+        description: truncateText(String(description ?? ''), MAX_STICKER_DESC),
+        source: 'auto-collect',
+      })
+      if (entry) {
+        saveStickerStore()
+        logger.info(`AI 自动收藏表情包 #${shortHash(entry.hash)}（${verdict}）`)
+      }
+    } catch (error) {
+      // 自动收藏是锦上添花，失败绝不打断正常回复。
+      logger.warn(`AI 自动收藏失败：${error?.message ?? error}`)
     }
   }
 
@@ -5889,10 +5965,10 @@ export function apply(ctx, config) {
     name: 'qq_bridge_neko_sticker',
     description:
       '表情包：收藏群友发的图或商城表情，按情绪或哈希发出去。' +
-      'action:"list" 看已登记的有哪些（可按 mood 过滤；kind 为 mface 的是 QQ 原生表情包，image 的是普通图片）；' +
-      'action:"save" 把某张图存下来（给 hash，或 fromLast:true 取缓冲区里最近一张；mood 与 description 必填）。' +
+      'action:"list" 看已登记的有哪些（可按 mood 或 category 过滤；category 有 deepseek-chan-emotes / deepseek-chan-meme-pack / blue-fish-archive / ai-collected 四类；kind 为 mface 的是 QQ 原生表情包，image 的是普通图片）；' +
+      'action:"save" 把某张图存下来（给 hash，或 fromLast:true 取缓冲区里最近一张；mood 与 description 必填；category 可指定分类，默认 ai-collected）。' +
       '入站若带了商城表情字段，save 会一并记下；' +
-      'action:"send" 发一张（给 hash 精确发，或只给 mood 在该情绪里随机挑一张）。' +
+      'action:"send" 发一张（给 hash 精确发，或只给 mood / category 在该范围里随机挑一张）。' +
       '四字段齐全（emoji_id、emoji_package_id、key、summary）时发 QQ 原生表情包（mface）；缺了就按图片 base64 发，图还是图。' +
       '发送与 qq_bridge_neko_send 共用同一道来源闸门：不是 QQ 唤醒的那一轮，第一次调用只会回一句确认。' +
       '显式 groupId / userId 还必须在对应白名单里，否则不会发出去。',
@@ -5901,6 +5977,7 @@ export function apply(ctx, config) {
       hash: { type: 'string', description: '短哈希或完整哈希；入站正文里的 [图片#xxxxxx] 或 [表情包#xxxxxx] 就是它。' },
       fromLast: { type: 'boolean', description: 'save 时 true = 取缓冲区里最近一张图。' },
       mood: { type: 'string', description: '情绪分类，如 无语 / 开心 / 震惊。save 必填；send 只给 mood 时随机挑一张。' },
+      category: { type: 'string', description: '所属表情包分类。list 用来过滤、save 用来指定存进哪一类（默认 ai-collected）、send 用来在该类里随机挑。预设四类：deepseek-chan-emotes / deepseek-chan-meme-pack / blue-fish-archive / ai-collected。' },
       description: { type: 'string', description: '这张图是什么。save 必填，之后识图与发送都用它。' },
       groupId: { type: 'string', description: '发到哪个群；与 userId 二选一，都不给则用这一轮钉住的目的地。' },
       userId: { type: 'string', description: '发到哪个私聊 QQ 号。' },
@@ -5911,11 +5988,12 @@ export function apply(ctx, config) {
       const action = String(args.action ?? 'list')
       try {
         if (action === 'list') {
-          const items = listStickers(store, { mood: args.mood, limit: MAX_STICKER_LIST })
+          const items = listStickers(store, { mood: args.mood, category: args.category, limit: MAX_STICKER_LIST })
           if (items.length === 0) {
             return JSON.stringify({
               count: 0,
               mood: args.mood ?? null,
+              category: args.category ?? null,
               note:
                 String(args.mood ?? '').trim() === ''
                   ? '还没有登记任何表情包：让群友发一张图，再用 action:"save" 存下来。'
@@ -5927,6 +6005,7 @@ export function apply(ctx, config) {
             stickers: items.map((e) => ({
               hash: shortHash(e.hash),
               mood: e.mood ?? '',
+              category: e.category ?? AI_CATEGORY,
               description: truncateText(e.description ?? '', MAX_STICKER_DESC),
               kind: stickerKind(e),
               summary: truncateText(e.mface?.summary ?? '', MAX_STICKER_DESC),
@@ -5959,10 +6038,13 @@ export function apply(ctx, config) {
                 '或用 action:"list" 看已登记的哈希；fromLast: true 取的是缓冲区里最近一张图。',
             }, null, 2)
           }
+          // 手动/自动收藏都落进"自己收藏"分类；三组预设图在落盘时就带好了各自的 category。
+          const cat = String(args.category ?? '').trim() || AI_CATEGORY
           const entry = importSticker({
             store,
             srcPath: src.image.path,
-            destDir: stickersDir,
+            destDir: effectiveStickerDir(),
+            category: cat,
             mood,
             description,
             source: sourceLabelOf(src.item),
@@ -6003,11 +6085,11 @@ export function apply(ctx, config) {
           let entry = null
           if (String(args.hash ?? '').trim() !== '') {
             entry = findSticker(store, { hash: args.hash })
-          } else if (String(args.mood ?? '').trim() !== '') {
-            const pool = listStickers(store, { mood: args.mood })
+          } else if (String(args.mood ?? '').trim() !== '' || String(args.category ?? '').trim() !== '') {
+            const pool = listStickers(store, { mood: args.mood, category: args.category })
             entry = pool.length > 0 ? pool[Math.floor(Math.random() * pool.length)] : null
           } else {
-            return JSON.stringify({ ok: false, error: 'send 需要 hash 或 mood 至少一个。' }, null, 2)
+            return JSON.stringify({ ok: false, error: 'send 需要 hash、mood 或 category 至少一个。' }, null, 2)
           }
           if (!entry) {
             return JSON.stringify({
@@ -6034,7 +6116,7 @@ export function apply(ctx, config) {
             message = [{ type: 'mface', data: native }]
             sentAs = 'mface'
           } else {
-            const filePath = join(dirname(statePath), String(entry.file ?? ''))
+            const filePath = stickerFilePath(entry)
             if (!entry.file || !existsSync(filePath)) {
               return JSON.stringify({ ok: false, error: `登记表里的图片文件不存在：${entry.file ?? '(空)'}` }, null, 2)
             }
@@ -8015,10 +8097,13 @@ export function buildUsagePrompt(s = {}) {
     '- 发到群里的字 = 群里每个人都会看到的话。QQ 是聊天，不是工作台。',
     '',
     '【表情包】',
-    '- 想发表情包就调 `qq_bridge_neko_sticker`：用 `list` 看已登记的有哪些，用 `send` 按情绪（mood）或哈希发一张。',
+    '- 想发表情包就调 `qq_bridge_neko_sticker`：用 `list` 看已登记的有哪些（可按 mood 或 category 过滤），用 `send` 按情绪（mood）、分类（category）或哈希发一张。',
     '  `kind` 为 mface 的会发成 QQ 原生表情包；`kind` 为 image 的普通图片发出去仍是图片。',
-    '- 想收藏群友发的图或商城表情，把正文里 `[图片#…]` 或 `[表情包#…]` 的短哈希交给 `save`，再给它 mood 与 description。',
+    '- 表情包分四类：deepseek-chan-emotes（蓝色大肥鱼动态表情）、deepseek-chan-meme-pack（DeepSeek娘梗图）、blue-fish-archive（蓝鲸档案）、ai-collected（你自己收藏的）。' +
+      '想发某类就传那个 category，比如聊得开心时从 emotes 里挑一张。',
+    '- 想收藏群友发的图或商城表情，把正文里 `[图片#…]` 或 `[表情包#…]` 的短哈希交给 `save`，再给它 mood 与 description；category 不填就存进 ai-collected。',
     '  存过之后这张图直接命中登记表，识图不再花多模态调用。',
+    `- 自动收藏：只有主人在设置里打开了「AI 自动收藏」才生效。看图时若描述命中主人设的价值倾向词（如"可爱0.8"、"奶龙0"），会按概率自动存进 ai-collected；默认关。`,
     '- 发了表情包**不要解释**它是什么意思（除非有人问）：人自己看得懂，解释反而奇怪。',
     '',
     '【群聊礼仪】',

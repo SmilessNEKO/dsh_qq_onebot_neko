@@ -3118,8 +3118,8 @@ function sawSentText(s) {
   {
     const out = JSON.parse(await stickerTool.execute({ action: 'save', fromLast: true, mood: '无语', description: '一只无语的猫' }))
     check('save：fromLast 登记成功', out.ok === true && out.hash === shortHash(hash), JSON.stringify(out))
-    check('save：图片本体复制进 qq-bridge-neko-stickers/', existsSync(join(dir, 'qq-bridge-neko-stickers', `${hash}.png`)))
-    check('save：file 是相对 statePath 的路径', out.file === `qq-bridge-neko-stickers/${hash}.png`, String(out.file))
+    check('save：图片本体复制进 ai-collected 分类子目录', existsSync(join(dir, 'qq-bridge-neko-stickers', 'ai-collected', `${hash}.png`)))
+    check('save：file 是相对 statePath 的路径（带分类段）', out.file === `qq-bridge-neko-stickers/ai-collected/${hash}.png`, String(out.file))
     const onDisk = loadStickers(join(dir, 'qq-bridge-neko-stickers.json'))
     check(
       'save：登记表已落盘（source 记了群号）',
