@@ -108,7 +108,9 @@ function createMockOneBot() {
             ? { user_id: 10001, nickname: 'test-bot' }
             : msg.action === 'get_group_info'
               ? { group_id: msg.params?.group_id, group_name: '测试群' }
-              : { message_id: 9001 }
+              : msg.action === 'get_group_member_info'
+                ? { user_id: msg.params?.user_id, card: '群名片' + msg.params?.user_id, nickname: '昵称' + msg.params?.user_id }
+                : { message_id: 9001 }
         socket.write(encodeFrame(JSON.stringify({ status: 'ok', retcode: 0, data, echo: msg.echo })))
       }
     })
@@ -365,7 +367,28 @@ await sleep(600)
   check('纯图片消息没被丢掉（占位符兜底）', String(lastLog?.text ?? '').includes('图片'), JSON.stringify(lastLog))
 }
 
+// 5.8) 戳一戳（notice 事件）：戳我必唤醒，且文案带反查到的群名片名字（2026-11-25 用户要求）
+{
+  const beforeN = state.followups.length
+  mock.actions.length = 0
+  mock.sendEvent({
+    post_type: 'notice',
+    notice_type: 'notify',
+    sub_type: 'poke',
+    user_id: 1001,
+    target_id: 10001,
+    self_id: 10001,
+    group_id: 2001,
+  })
+  await waitFor(() => state.followups.length > beforeN)
+  check('戳一戳（notice）→ 唤醒', state.followups.length > beforeN, `followups ${beforeN} -> ${state.followups.length}`)
+  check('戳一戳 → 反查了 get_group_member_info', mock.actions.some((a) => a.action === 'get_group_member_info' && String(a.params?.user_id) === '1001'))
+  const pokeWake = textOf(state.followups[state.followups.length - 1])
+  check('戳一戳 → 注入文本带戳人者名字、不再写「戳的是我」', pokeWake.includes('群名片1001 戳了你') && !pokeWake.includes('戳的是我'), pokeWake.slice(0, 100))
+}
+
 // 6) 概率 0 的非昵称 → 只记录
+const beforeRecord = state.followups.length
 mock.sendEvent({
   post_type: 'message',
   message_type: 'private',
@@ -377,7 +400,7 @@ mock.sendEvent({
 })
 const buffered = await waitFor(async () => JSON.parse(await statusTool.execute({})).bufferedUnwoken >= 1)
 check('非昵称 → 只记录（进缓冲，零模型调用）', buffered)
-check('记录不改动唤醒次数', state.followups.length === 2)
+check('记录不改动唤醒次数', state.followups.length === beforeRecord, `followups ${beforeRecord} -> ${state.followups.length}`)
 
 // 7) 出站：目标会话回复 → 发回最后一次入站目的地
 const onSessionEvent = state.listeners.get('session/event')

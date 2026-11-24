@@ -736,7 +736,20 @@ export function planImageBudget(items, options = {}) {
  * 只有**戳我**才算“叫我一声”（`atSelf: true`，与 @ 同级必唤醒）；戳别人照样进策略、但只记录。
  * 返回 null = 不是戳一戳 / 自己戳自己（防回环）/ 不是 notice。
  */
-export function mapOneBotNotice(event, selfId) {
+/**
+ * 戳一戳的展示文案。昵称来自 notice 自带的 sender，或异步反查到的群名片；
+ * 拿不到名字时退回旧文案，保证老行为/老测试不变（fail-open）。
+ */
+export function pokeNoticeText({ pokedMe, operatorName, targetName } = {}) {
+  const who = String(operatorName || '').trim()
+  const whom = String(targetName || '').trim()
+  if (pokedMe) return who ? `[戳一戳]（${who} 戳了你）` : '[戳一戳]（戳的是我）'
+  if (who && whom) return `[戳一戳]（${who} 戳了 ${whom}）`
+  if (who) return `[戳一戳]（${who} 戳了人）`
+  return '[戳一戳]'
+}
+
+export function mapOneBotNotice(event, selfId, names = {}) {
   if (!event || event.post_type !== 'notice') return null
   const type = String(event.notice_type ?? '')
   const sub = String(event.sub_type ?? '')
@@ -749,12 +762,15 @@ export function mapOneBotNotice(event, selfId) {
   if (me !== '' && operator === me) return null // 自己戳自己：忽略
   const pokedMe = me !== '' && target === me
   const sender = event.sender ?? {}
+  // 昵称优先级：异步反查的群名片 > 事件自带的 sender > 没有（留空，渲染层退回 QQ 号）。
+  const operatorName = String(names.operatorName || sender.card || sender.nickname || '').trim()
+  const targetName = String(names.targetName || '').trim()
   return {
     userId: operator || null,
-    nickname: sender.card || sender.nickname || null,
+    nickname: operatorName || null,
     groupId: event.group_id === undefined || event.group_id === null ? null : String(event.group_id),
     groupName: null,
-    text: pokedMe ? '[戳一戳]（戳的是我）' : '[戳一戳]',
+    text: pokeNoticeText({ pokedMe, operatorName, targetName }),
     atSelf: pokedMe,
     poke: true,
     images: [],
@@ -4254,6 +4270,7 @@ export function apply(ctx, config) {
   }
 
   const groupNames = new Map() // groupId -> 群名（懒加载缓存）
+  const memberNames = new Map() // "groupId:userId" -> 群名片（戳一戳反查缓存）
   /** 设置卡片用的群列表缓存。和 groupNames 分开：这边有过期时间，过期或没连上就只显示群号。 */
   const groupMetaCache = { at: 0, triedAt: 0, ok: false, byId: new Map(), info: new Map() }
 
@@ -4333,11 +4350,22 @@ export function apply(ctx, config) {
 
   async function handleNotice(event) {
     const selfId = selfIdForEvent(event)
-    const inbound = mapOneBotNotice(event, selfId)
-    if (!inbound) {
+    // 先不加名字映射一遍：只为拿到 userId / groupId / atSelf（是否戳我），
+    // 再据此反查群名片，回填名字后重算文案。
+    const probe = mapOneBotNotice(event, selfId)
+    if (!probe) {
       logger.info(`未适配的 notice：notice_type=${event.notice_type ?? '?'} sub_type=${event.sub_type ?? '?'}`)
       return
     }
+    const names = {}
+    if (transport.isOpen() && probe.groupId) {
+      names.operatorName = await loadMemberName(probe.groupId, probe.userId, '戳人者')
+      // 戳的是我时，“被戳的人”就是机器人自己，群名片里查不到；只查戳别人事件的 targets。
+      if (probe.atSelf !== true) {
+        names.targetName = await loadMemberName(probe.groupId, String(event.target_id ?? ''), '被戳者')
+      }
+    }
+    const inbound = mapOneBotNotice(event, selfId, names)
     if (inbound.groupId) {
       inbound.groupName = groupNames.has(inbound.groupId)
         ? groupNames.get(inbound.groupId)
@@ -4347,6 +4375,26 @@ export function apply(ctx, config) {
     await handleInbound(inbound)
   }
 
+  /** 反查群名片：没连上时不查；缓存命中直接用，失败退回空（渲染层显示 QQ 号）。 */
+  async function loadMemberName(groupId, userId, role) {
+    const uid = String(userId || '').trim()
+    if (!groupId || !uid) return null
+    const key = `${groupId}:${uid}`
+    if (memberNames.has(key)) return memberNames.get(key)
+    try {
+      const info = await withTimeout(
+        transport.call('get_group_member_info', { group_id: groupId, user_id: uid, no_cache: false }),
+        GROUP_META_CALL_MS,
+      )
+      const name = String(info?.card || info?.nickname || '').trim()
+      const finalName = name || uid // 没群名片就用 QQ 号，总比空着强
+      memberNames.set(key, finalName)
+      return finalName
+    } catch (error) {
+      logger.warn(`get_group_member_info(${groupId}:${uid}) failed (${role}): ${error?.message ?? error}`)
+      return null
+    }
+  }
 
   /** 懒加载群名（拿不到就返回 null，不影响策略）。 */
   async function loadGroupName(groupId) {

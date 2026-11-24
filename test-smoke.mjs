@@ -7,7 +7,7 @@ import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import vm from 'node:vm'
-import { apply, buildUsagePrompt, extractQQReply, FACE_NAME_TO_ID, groupAvatarUrl, hasLegacySettings, inQuietHours, inject as pluginInject, injectedMessageSource, inlineImageNotes, labelForSegment, mapOneBotMessage, mapOneBotNotice, normalizeAutoStartDelayMs, normalizeDelivery, normalizeDestinationProfiles, normalizeGroupId, normalizeMaxRecentTurns, normalizeModelChain, normalizeReplyMode, normalizeSessionScope, normalizeVisionMode, NS, parseQuietHours, parseWhitelistCommand, PLUGIN_VERSION, resolveGroupMetas, splitModelRef, textToOneBotSegments, truncateText } from './index.js'
+import { apply, buildUsagePrompt, extractQQReply, FACE_NAME_TO_ID, groupAvatarUrl, hasLegacySettings, inQuietHours, inject as pluginInject, injectedMessageSource, inlineImageNotes, labelForSegment, mapOneBotMessage, mapOneBotNotice, normalizeAutoStartDelayMs, normalizeDelivery, normalizeDestinationProfiles, normalizeGroupId, normalizeMaxRecentTurns, normalizeModelChain, normalizeReplyMode, normalizeSessionScope, normalizeVisionMode, NS, parseQuietHours, parseWhitelistCommand, PLUGIN_VERSION, pokeNoticeText, resolveGroupMetas, splitModelRef, textToOneBotSegments, truncateText } from './index.js'
 import { hashOfBuffer, isCompleteMface, loadStickers, mfaceSendData, normalizeMface, saveStickers, shortHash, upsertSticker } from './stickers.js'
 
 // 状态文件必须每次从零开始：这个会话的 $env:TEMP 是固定的，
@@ -2102,6 +2102,23 @@ function sawSentText(s) {
   check('别的 notice 不误判', mapOneBotNotice({ post_type: 'notice', notice_type: 'group_recall' }, me) === null)
   check('非 notice 一律不接', mapOneBotNotice({ post_type: 'message' }, me) === null)
   check('兼容 group_poke / friend_poke 写法', !!mapOneBotNotice({ post_type: 'notice', notice_type: 'group_poke', user_id: '1', target_id: me, group_id: 2 }, me))
+  // 昵称显示（2026-11-25 用户要求）：反查到群名片后文案带名字，且不再写「戳的是我」这种没主语的占位符。
+  check('戳我 + 有昵称 → 文案带名字、「戳了你」', pokeNoticeText({ pokedMe: true, operatorName: '小明' }) === '[戳一戳]（小明 戳了你）')
+  check('戳我 + 无昵称 → 退回旧占位符（fail-open）', pokeNoticeText({ pokedMe: true, operatorName: '' }) === '[戳一戳]（戳的是我）')
+  check('群友互戳 + 双方昵称 → A 戳了 B', pokeNoticeText({ pokedMe: false, operatorName: '小明', targetName: '小红' }) === '[戳一戳]（小明 戳了 小红）')
+  check('群友互戳 + 只有戳人者 → A 戳了人', pokeNoticeText({ pokedMe: false, operatorName: '小明' }) === '[戳一戳]（小明 戳了人）')
+  check('群友互戳 + 都没名字 → 退回 [戳一戳]', pokeNoticeText({ pokedMe: false }) === '[戳一戳]')
+  const pokeNamed = mapOneBotNotice(
+    { post_type: 'notice', notice_type: 'notify', sub_type: 'poke', user_id: 10000002, target_id: 10000001, group_id: 12345678 },
+    me,
+    { operatorName: '小明', targetName: '' },
+  )
+  check('mapOneBotNotice 第三参传名字 → 文案/昵称都回填', pokeNamed.text === '[戳一戳]（小明 戳了你）' && pokeNamed.nickname === '小明', JSON.stringify(pokeNamed))
+  const pokeSender = mapOneBotNotice(
+    { post_type: 'notice', notice_type: 'notify', sub_type: 'poke', user_id: 10000002, target_id: 10000001, group_id: 12345678, sender: { card: '群名片小明' } },
+    me,
+  )
+  check('事件自带 sender.card → 也用于文案', pokeSender.text === '[戳一戳]（群名片小明 戳了你）', JSON.stringify(pokeSender.text))
 }
 
 // 回归（2026-10-01 桌面端真机）：DSH 0.2.0 的 settings 服务**没有 register/get**（#677），

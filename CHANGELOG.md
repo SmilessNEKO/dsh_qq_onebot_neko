@@ -1,5 +1,15 @@
 # 更新日志
 
+## v1.6.5 — 2026-11-25
+
+修复戳一戳只显示一串 QQ 号、认不出是谁戳的问题。
+
+- **戳一戳带名字了**：以前 notice 事件不带昵称，`mapOneBotNotice` 只拿到 `user_id`，文案写死「戳的是我」，所以我这边只见一串号码——把老群友当成新号就是这么来的。现在拿到戳人者 QQ 号后会调 `get_group_member_info` 反查群名片，注入文案变成 `[戳一戳]（小明 戳了你）`；群友互戳显示 `A 戳了 B`。
+- **反查有缓存、有兜底**：新增 `memberNames` 缓存（仿 `groupNames`），4 秒超时；查不到群名片就退回昵称，再不行退回 QQ 号，反查失败绝不打断唤醒（fail-open）。戳我时不查被戳者（那是机器人自己）。
+- **兼容不回退**：notice 自带 `sender.card/nickname` 时优先用；名字全缺时文案退回旧占位符，老行为不变。
+- **实现细节**：新增 `pokeNoticeText()` 统一拼文案，`mapOneBotNotice(event, selfId, names)` 加第三参，`handleNotice` 先 probe 拿 id 再反查回填。
+- 测试：`test-smoke.mjs` 加 8 条文案/回填断言、`test-onebot.mjs` 加端到端用例（WS 推 notice → 确认调了 `get_group_member_info` → 名字进注入文本），两套全过。
+
 ## v1.6.4 — 2026-11-18
 
 表情包功能大扩充：三组现成鲸鲸表情包预先收藏到数据目录（**不进插件包**）、按**分类**管理，AI 可以按**价值倾向**自动收藏群友发的图。
